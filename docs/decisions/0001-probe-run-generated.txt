@@ -1,0 +1,40 @@
+== foreground snapshot (hwnd 0x5058a)
+50032 "Immersive DUNE Ambience for Work and Deep Focus | 3 Hours | No Ads - YouTube – Helium" @2932,106,1837,1175
+  50033 "" @2940,106,1821,1167
+  50033 "Immersive DUNE Ambience for Work and Deep Focus | 3 Hours | No Ads - YouTube – Helium" @2940,106,1821,1167
+  50033 "" @2940,106,1821,1167
+  50033 "" @2940,106,1821,1167
+  50033 "" @4624,107,137,34
+  50000 "Réduire" @4624,107,45,34
+  50000 "Agrandir" @4669,107,46,34
+  50000 "Fermer" @4715,107,46,34
+  ... (element lines trimmed)
+A accès à ce site" @4378,110,28,28
+A accès à ce site" @4408,110,28,28
+A accès à ce site" @4438,110,28,28
+A accès à ce site" @4468,110,28,28
+
+Subscribe 👉 " @3169,858,424,58
+You lose yourself when your direction disappears.
+
+When there is no inner vector, every desire starts to seem important.
+Every emotion demands your attention.
+Anyone can alter your course.
+
+That is why strength is not about constant tension.
+Strength is the ability to maintain one line amid a thousand movements." @3209,1085,445,178
+== 738 elements
+output \\.\DISPLAY1 on NVIDIA GeForce RTX 4070 Ti SUPER: desktop 0,0 2560x1440 rotation=1
+output \\.\DISPLAY2 on NVIDIA GeForce RTX 4070 Ti SUPER: desktop 2560,0 2560x1440 rotation=1
+output \\.\DISPLAY1: 100/100 frames copied as BGRA 2560x1440
+output \\.\DISPLAY2: 100/100 frames copied as BGRA 2560x1440
+snapshot taskbar: 34 elements, p50 24157 us, p95 27462 us over 200 samples
+closed targets: 100/100 returned error.ElementNotAvailable; second half: handles 579 -> 577, private 149260 -> 149456 KB
+leak 2000: private 150116 KB, handles 570
+leak 4000: private 150860 KB, handles 570
+leak 6000: private 151376 KB, handles 566
+leak 8000: private 152164 KB, handles 568
+leak 10000: private 152616 KB, handles 568
+leak: 10000 iterations (9964 new frames), private bytes drift 3016 KB, handle drift -5
+RESULT {"foreground_elements":738,"outputs":2,"outputs_with_all_frames":2,"frames_per_output":100,"snapshot_target":"taskbar","snapshot_elements":34,"snapshot_p50_us":24157,"snapshot_p95_us":27462,"closed_targets":100,"closed_typed_errors":100,"closed_handle_drift":-2,"leak_iterations":10000,"leak_frames":9964,"private_drift_bytes":3088384,"handle_drift":-5}
+exit=0

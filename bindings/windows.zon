@@ -1,0 +1,55 @@
+// Win32 and COM APIs used by neo-compute. tools/winmdgen generates exactly
+// these and what they reference into win32.zig at build time. A trailing *
+// matches every function with that prefix.
+.{
+    .package = "Microsoft.Windows.SDK.Win32Metadata 71.0.37-preview",
+    .sha256 = "fdc95c25641c6d69e9766408b328f9e4c3d1e63a0a319277bcdb9e4550496e45",
+    // API sets without a mingw import library, mapped to the DLL exporting them.
+    .dll_aliases = .{.{ "api-ms-win-shcore-scaling-l1-1-1", "shcore" }},
+    .apis = .{
+        // COM runtime and OLE automation
+        "CoInitializeEx",                      "CoUninitialize",                     "CoCreateInstance",                           "COINIT_MULTITHREADED",           "CLSCTX_INPROC_SERVER",
+        "SysAllocString",                      "SysFreeString",                      "SysStringLen",                               "VariantClear",                   "SafeArray*",
+        "S_OK",                                "S_FALSE",                            "RPC_E_CHANGED_MODE",                         "VARIANT",                        "SAFEARRAY",
+
+        // UI Automation
+        "CUIAutomation",                       "IUIAutomation",                      "IUIAutomation2",                             "IUIAutomationElement",           "IUIAutomationElementArray",
+        "IUIAutomationCacheRequest",           "IUIAutomationCondition",             "IUIAutomationTreeWalker",                    "IUIAutomationInvokePattern",     "IUIAutomationValuePattern",
+        "IUIAutomationTogglePattern",          "IUIAutomationExpandCollapsePattern", "IUIAutomationSelectionItemPattern",          "IUIAutomationScrollItemPattern", "UIA_NamePropertyId",
+        "UIA_ControlTypePropertyId",           "UIA_BoundingRectanglePropertyId",    "UIA_ButtonControlTypeId",                    "TreeScope_Descendants",          "UIA_E_ELEMENTNOTAVAILABLE",
+
+        // DXGI and Direct3D 11
+        "CreateDXGIFactory1",                  "IDXGIFactory1",                      "IDXGIAdapter1",                              "IDXGIOutput1",                   "IDXGIOutput5",
+        "IDXGIOutputDuplication",              "IDXGIResource",                      "DXGI_OUTDUPL_FRAME_INFO",                    "DXGI_OUTDUPL_MOVE_RECT",         "DXGI_FORMAT_B8G8R8A8_UNORM",
+        "DXGI_ERROR_NOT_FOUND",                "DXGI_ERROR_UNSUPPORTED",             "DXGI_ERROR_ACCESS_LOST",                     "DXGI_ERROR_WAIT_TIMEOUT",        "D3D11CreateDevice",
+        "ID3D11Device",                        "ID3D11DeviceContext",                "ID3D11Texture2D",                            "D3D11_SDK_VERSION",              "D3D11_USAGE_STAGING",
+        "D3D11_CPU_ACCESS_READ",               "D3D11_MAP_READ",                     "D3D_DRIVER_TYPE_UNKNOWN",
+
+        // Input and DPI
+                           "SendInput",                      "INPUT",
+        "MOUSEINPUT",                          "KEYBDINPUT",                         "HARDWAREINPUT",                              "GetCursorPos",                   "SetCursorPos",
+        "SetProcessDpiAwarenessContext",       "GetDpiForMonitor",                   "DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2", "MonitorFromPoint",               "MonitorFromWindow",
+        "GetMonitorInfoW",                     "MONITORINFO",                        "MDT_EFFECTIVE_DPI",                          "MONITOR_DEFAULTTONEAREST",       "GetSystemMetrics",
+        "SM_XVIRTUALSCREEN",                   "SM_YVIRTUALSCREEN",                  "SM_CXVIRTUALSCREEN",                         "SM_CYVIRTUALSCREEN",             "MOUSEEVENTF_MOVE",
+        "MOUSEEVENTF_ABSOLUTE",                "MOUSEEVENTF_VIRTUALDESK",            "MOUSEEVENTF_LEFTDOWN",                       "MOUSEEVENTF_LEFTUP",             "KEYEVENTF_UNICODE",
+        "KEYEVENTF_KEYUP",                     "INPUT_MOUSE",                        "INPUT_KEYBOARD",                             "GetLastError",                   "ERROR_ACCESS_DENIED",
+        "GetAwarenessFromDpiAwarenessContext", "GetThreadDpiAwarenessContext",       "DPI_AWARENESS_PER_MONITOR_AWARE",
+
+        // Process counters, timing
+                   "GetCurrentProcess",              "K32GetProcessMemoryInfo",
+        "GetProcessHandleCount",               "PROCESS_MEMORY_COUNTERS_EX",         "GetModuleHandleW",                           "GetCurrentThreadId",             "QueryPerformanceCounter",
+        "QueryPerformanceFrequency",           "Sleep",
+
+        // Windows and painting (probe and selftest fixtures)
+                                     "RegisterClassExW",                           "CreateWindowExW",                "DefWindowProcW",
+        "GetMessageW",                         "PeekMessageW",                       "TranslateMessage",                           "DispatchMessageW",               "PostMessageW",
+        "PostThreadMessageW",                  "PostQuitMessage",                    "DestroyWindow",                              "ShowWindow",                     "IsWindow",
+        "SetTimer",                            "InvalidateRect",                     "UpdateWindow",                               "BeginPaint",                     "EndPaint",
+        "FillRect",                            "CreateSolidBrush",                   "DeleteObject",                               "GetForegroundWindow",            "SetForegroundWindow",
+        "FindWindowW",                         "GetWindowRect",                      "GetClientRect",                              "ClientToScreen",                 "WS_POPUP",
+        "WS_CHILD",                            "WS_VISIBLE",                         "WS_OVERLAPPEDWINDOW",                        "WS_EX_TOPMOST",                  "WS_EX_TOOLWINDOW",
+        "WS_EX_NOACTIVATE",                    "SW_SHOWNOACTIVATE",                  "SW_SHOW",                                    "WM_DESTROY",                     "WM_CLOSE",
+        "WM_QUIT",                             "WM_PAINT",                           "WM_TIMER",                                   "WM_LBUTTONDOWN",                 "WM_CHAR",
+        "PM_REMOVE",
+    },
+}

@@ -1,0 +1,17 @@
+.{
+    .name = .neo_compute,
+    .version = "0.0.0",
+    .fingerprint = 0x3ce717f03bed425a,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "probe",
+        "bench",
+        "tests",
+        "tools",
+        "bindings",
+    },
+}

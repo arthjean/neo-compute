@@ -1,0 +1,26 @@
+== foreground snapshot (hwnd 0x503ae)
+50032 "" @349,116,1863,1160
+  50037 "" @0,0,0,0
+  50010 "Système" @357,124,22,22
+  50011 "Système" @357,124,22,22
+  50000 "Réduire" @0,0,0,0
+  50000 "Agrandir" @0,0,0,0
+  50000 "Fermer" @0,0,0,0
+  50000 "Space Default" @365,159,105,22
+  50000 "Customize sidebar" @604,159,22,22
+  ... (element lines trimmed)
+== 66 elements
+output \\.\DISPLAY1 on NVIDIA GeForce RTX 4070 Ti SUPER: desktop 0,0 2560x1440 rotation=1
+output \\.\DISPLAY2 on NVIDIA GeForce RTX 4070 Ti SUPER: desktop 2560,0 2560x1440 rotation=1
+output \\.\DISPLAY1: 100/100 frames copied as BGRA 2560x1440
+output \\.\DISPLAY2: 100/100 frames copied as BGRA 2560x1440
+snapshot taskbar: 34 elements, p50 23782 us, p95 26563 us over 200 samples
+closed targets: 100/100 returned error.ElementNotAvailable; second half: handles 581 -> 579, private 148116 -> 148192 KB
+leak 2000: private 149092 KB, handles 574
+leak 4000: private 149712 KB, handles 572
+leak 6000: private 150264 KB, handles 570
+leak 8000: private 151056 KB, handles 570
+leak 10000: private 151540 KB, handles 570
+leak: 10000 iterations (9965 new frames), private bytes drift 3176 KB, handle drift -5
+RESULT {"foreground_elements":66,"outputs":2,"outputs_with_all_frames":2,"frames_per_output":100,"snapshot_target":"taskbar","snapshot_elements":34,"snapshot_p50_us":23782,"snapshot_p95_us":26563,"closed_targets":100,"closed_typed_errors":100,"closed_handle_drift":-2,"leak_iterations":10000,"leak_frames":9965,"private_drift_bytes":3252224,"handle_drift":-5}
+exit=0

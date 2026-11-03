@@ -1,0 +1,56 @@
+{
+  "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool, tables 'Available actions' and 'Tool parameters', read 2026-11-03",
+  "note": "Names, parameter names, optionality, the scroll_direction enum, repeat 1..100 and duration up to 300 s come from the documentation. JSON types, the coordinate/region array shapes, duration minimum 0 and scroll_amount 1..100 are not stated there and are neo-compute choices.",
+  "tools": [
+    { "name": "screenshot", "inputSchema": { "type": "object", "properties": {} } },
+    { "name": "zoom", "inputSchema": { "type": "object", "properties": {
+      "region": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 } },
+      "required": ["region"] } },
+    { "name": "left_click", "inputSchema": { "type": "object", "properties": {
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } } } },
+    { "name": "right_click", "inputSchema": { "type": "object", "properties": {
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } } } },
+    { "name": "middle_click", "inputSchema": { "type": "object", "properties": {
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } } } },
+    { "name": "double_click", "inputSchema": { "type": "object", "properties": {
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } } } },
+    { "name": "triple_click", "inputSchema": { "type": "object", "properties": {
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } } } },
+    { "name": "left_click_drag", "inputSchema": { "type": "object", "properties": {
+      "start_coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } },
+      "required": ["start_coordinate", "coordinate"] } },
+    { "name": "mouse_move", "inputSchema": { "type": "object", "properties": {
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 } },
+      "required": ["coordinate"] } },
+    { "name": "left_mouse_down", "inputSchema": { "type": "object", "properties": {} } },
+    { "name": "left_mouse_up", "inputSchema": { "type": "object", "properties": {} } },
+    { "name": "cursor_position", "inputSchema": { "type": "object", "properties": {} } },
+    { "name": "scroll", "inputSchema": { "type": "object", "properties": {
+      "scroll_direction": { "type": "string", "enum": ["up", "down", "left", "right"] },
+      "scroll_amount": { "type": "integer", "minimum": 1, "maximum": 100 },
+      "coordinate": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+      "text": { "type": "string" } },
+      "required": ["scroll_direction", "scroll_amount"] } },
+    { "name": "type", "inputSchema": { "type": "object", "properties": {
+      "text": { "type": "string" } },
+      "required": ["text"] } },
+    { "name": "key", "inputSchema": { "type": "object", "properties": {
+      "text": { "type": "string" },
+      "repeat": { "type": "integer", "minimum": 1, "maximum": 100 } },
+      "required": ["text"] } },
+    { "name": "hold_key", "inputSchema": { "type": "object", "properties": {
+      "text": { "type": "string" },
+      "duration": { "type": "number", "minimum": 0, "maximum": 300 } },
+      "required": ["text", "duration"] } },
+    { "name": "wait", "inputSchema": { "type": "object", "properties": {
+      "duration": { "type": "number", "minimum": 0, "maximum": 300 } },
+      "required": ["duration"] } }
+  ]
+}

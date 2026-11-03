@@ -1,0 +1,19 @@
+{
+  "reference_p95_us": {
+    "transport": {
+      "parse": 58.9,
+      "dispatch": 35.2,
+      "serialize": 8.9,
+      "write": 1.3,
+      "total": 69
+    },
+    "capture": {
+      "capture": 696.5,
+      "total": 696.5
+    },
+    "snapshot": {
+      "accessibility": 23990.2,
+      "total": 23990.2
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "text_bytes_per_token": 2.444376152427781,
+  "calibrated": true,
+  "method": "claude -p input-token delta (Claude Code subscription)",
+  "model": "claude-opus-5-5",
+  "corpus": [
+    ".\\tests\\fixtures\\toolset_20260801.json"
+  ],
+  "corpus_bytes": 3977,
+  "corpus_tokens": 1627
+}

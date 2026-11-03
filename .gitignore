@@ -1,0 +1,4 @@
+.zig-cache/
+zig-out/
+# Windows SDK license: downloaded by build.zig, never committed.
+bindings/vendor/

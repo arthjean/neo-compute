@@ -1,0 +1,7 @@
+// A list naming an API absent from the metadata: generation must fail and
+// name the closest existing API. Same pinned package as bindings/windows.zon.
+.{
+    .package = "Microsoft.Windows.SDK.Win32Metadata 71.0.37-preview",
+    .sha256 = "fdc95c25641c6d69e9766408b328f9e4c3d1e63a0a319277bcdb9e4550496e45",
+    .apis = .{"CoInitializeExx"},
+}
