@@ -41,7 +41,7 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | Command | Checks |
 |---|---|
 | `zig fmt --check .` | Formatting (`zig fmt <path>` fixes it) |
-| `zig build` | Server and probes. The first run downloads the pinned win32metadata nupkg from nuget.org with `curl`, then serves it from the cache |
+| `zig build` | Server and probes. The first run downloads the pinned win32metadata nupkg from nuget.org with `curl` and fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`, then serves both from the cache |
 | `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, compile-time budget errors, generated bindings and struct layouts, generator failure message, process lifecycle. Omit the filter for the full gate |
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig` |

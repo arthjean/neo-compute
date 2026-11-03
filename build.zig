@@ -159,11 +159,95 @@ fn serverModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     mod.addOptions("build_options", buildOptions(b, fake_backend));
     if (win32) |m| mod.addImport("win32", m);
+    addJpeg(b, mod, target);
     return mod;
 }
+
+/// libjpeg-turbo (pinned in build.zig.zon) plus the C shim of
+/// src/core/jpeg, as a static library, and the shim's header through
+/// translate-c. The C code is always optimized: a Debug libjpeg is ten
+/// times slower and trips UBSan on its documented shifts.
+fn addJpeg(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const upstream = b.dependency("libjpeg_turbo", .{});
+    const version = "3.1.4.1";
+    // The archive keeps its top-level directory.
+    const src = upstream.path("libjpeg-turbo-" ++ version ++ "/src");
+    const jconfig = b.addConfigHeader(.{ .style = .{ .cmake = src.path(b, "jconfig.h.in") }, .include_path = "jconfig.h" }, .{
+        .JPEG_LIB_VERSION = 62,
+        .VERSION = version,
+        .LIBJPEG_TURBO_VERSION_NUMBER = 3001004,
+        .C_ARITH_CODING_SUPPORTED = null,
+        .D_ARITH_CODING_SUPPORTED = null,
+        .WITH_SIMD = null,
+        .RIGHT_SHIFT_IS_UNSIGNED = null,
+    });
+    const jconfigint = b.addConfigHeader(.{ .style = .{ .cmake = src.path(b, "jconfigint.h.in") }, .include_path = "jconfigint.h" }, .{
+        .BUILD = "neo-compute",
+        .CMAKE_PROJECT_NAME = "libjpeg-turbo",
+        .VERSION = version,
+        .SIZE_T = @as(i64, @intCast(target.result.ptrBitWidth() / 8)),
+        .HAVE_BUILTIN_CTZL = true,
+        .HAVE_INTRIN_H = null,
+        .C_ARITH_CODING_SUPPORTED = null,
+        .D_ARITH_CODING_SUPPORTED = null,
+        .WITH_SIMD = null,
+    });
+    jconfigint.addIdent("HIDDEN", "__attribute__((visibility(\"hidden\")))");
+    jconfigint.addIdent("INLINE", "__inline__ __attribute__((always_inline))");
+    jconfigint.addIdent("THREAD_LOCAL", "_Thread_local");
+    const jversion = b.addConfigHeader(.{ .style = .{ .cmake = src.path(b, "jversion.h.in") }, .include_path = "jversion.h" }, .{
+        .COPYRIGHT_YEAR = "1991-2026",
+    });
+
+    const lib = b.addLibrary(.{
+        .name = "jpeg",
+        .linkage = .static,
+        .root_module = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true }),
+    });
+    lib.root_module.addConfigHeader(jconfig);
+    lib.root_module.addConfigHeader(jconfigint);
+    lib.root_module.addConfigHeader(jversion);
+    lib.root_module.addIncludePath(src);
+    lib.root_module.addCSourceFiles(.{ .root = src, .files = jpeg_sources, .flags = &.{"-std=gnu11"} });
+    lib.root_module.addCSourceFile(.{ .file = b.path("src/core/jpeg/neo_jpeg.c"), .flags = &.{"-std=gnu11"} });
+    mod.linkLibrary(lib);
+
+    const header = b.addTranslateC(.{ .root_source_file = b.path("src/core/jpeg/neo_jpeg.h"), .target = target, .optimize = .ReleaseFast });
+    mod.addImport("neo_jpeg", header.createModule());
+}
+
+/// JPEG_SOURCES of libjpeg-turbo's CMakeLists.txt, without arithmetic coding.
+const jpeg_sources: []const []const u8 = &.{
+    "jcapimin.c",            "wrapper/jcapistd-8.c",  "wrapper/jcapistd-12.c", "wrapper/jcapistd-16.c",
+    "wrapper/jccoefct-8.c",  "wrapper/jccoefct-12.c", "wrapper/jccolor-8.c",   "wrapper/jccolor-12.c",
+    "wrapper/jccolor-16.c",  "wrapper/jcdctmgr-8.c",  "wrapper/jcdctmgr-12.c", "wrapper/jcdiffct-8.c",
+    "wrapper/jcdiffct-12.c", "wrapper/jcdiffct-16.c", "jchuff.c",              "jcicc.c",
+    "jcinit.c",              "jclhuff.c",             "wrapper/jclossls-8.c",  "wrapper/jclossls-12.c",
+    "wrapper/jclossls-16.c", "wrapper/jcmainct-8.c",  "wrapper/jcmainct-12.c", "wrapper/jcmainct-16.c",
+    "jcmarker.c",            "jcmaster.c",            "jcomapi.c",             "jcparam.c",
+    "jcphuff.c",             "wrapper/jcprepct-8.c",  "wrapper/jcprepct-12.c", "wrapper/jcprepct-16.c",
+    "wrapper/jcsample-8.c",  "wrapper/jcsample-12.c", "wrapper/jcsample-16.c", "jctrans.c",
+    "jdapimin.c",            "wrapper/jdapistd-8.c",  "wrapper/jdapistd-12.c", "wrapper/jdapistd-16.c",
+    "jdatadst.c",            "jdatasrc.c",            "wrapper/jdcoefct-8.c",  "wrapper/jdcoefct-12.c",
+    "wrapper/jdcolor-8.c",   "wrapper/jdcolor-12.c",  "wrapper/jdcolor-16.c",  "wrapper/jddctmgr-8.c",
+    "wrapper/jddctmgr-12.c", "wrapper/jddiffct-8.c",  "wrapper/jddiffct-12.c", "wrapper/jddiffct-16.c",
+    "jdhuff.c",              "jdicc.c",               "jdinput.c",             "jdlhuff.c",
+    "wrapper/jdlossls-8.c",  "wrapper/jdlossls-12.c", "wrapper/jdlossls-16.c", "wrapper/jdmainct-8.c",
+    "wrapper/jdmainct-12.c", "wrapper/jdmainct-16.c", "jdmarker.c",            "jdmaster.c",
+    "wrapper/jdmerge-8.c",   "wrapper/jdmerge-12.c",  "jdphuff.c",             "wrapper/jdpostct-8.c",
+    "wrapper/jdpostct-12.c", "wrapper/jdpostct-16.c", "wrapper/jdsample-8.c",  "wrapper/jdsample-12.c",
+    "wrapper/jdsample-16.c", "jdtrans.c",             "jerror.c",              "jfdctflt.c",
+    "wrapper/jfdctfst-8.c",  "wrapper/jfdctfst-12.c", "wrapper/jfdctint-8.c",  "wrapper/jfdctint-12.c",
+    "wrapper/jidctflt-8.c",  "wrapper/jidctflt-12.c", "wrapper/jidctfst-8.c",  "wrapper/jidctfst-12.c",
+    "wrapper/jidctint-8.c",  "wrapper/jidctint-12.c", "wrapper/jidctred-8.c",  "wrapper/jidctred-12.c",
+    "jmemmgr.c",             "jmemnobs.c",            "jpeg_nbits.c",          "wrapper/jquant1-8.c",
+    "wrapper/jquant1-12.c",  "wrapper/jquant2-8.c",   "wrapper/jquant2-12.c",  "wrapper/jutils-8.c",
+    "wrapper/jutils-12.c",   "wrapper/jutils-16.c",
+};
 
 fn addServer(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, fake_backend: bool, win32: ?*std.Build.Module) *std.Build.Step.Compile {
     return b.addExecutable(.{

@@ -1,0 +1,64 @@
+//! State kept across requests: the display whose screenshot defines the
+//! coordinate space (FR-03), the mapping of every captured display, and the
+//! buffers of the image pipeline.
+
+const std = @import("std");
+const display = @import("display.zig");
+const image = @import("image.zig");
+const jpeg = @import("jpeg.zig");
+const Mapping = display.Mapping;
+
+pub const Session = struct {
+    gpa: std.mem.Allocator,
+    long_side: u32 = display.default_long_side,
+    /// Display of the latest screenshot; incoming coordinates refer to it.
+    current: ?usize = null,
+    /// Mapping of the latest screenshot of each display.
+    shots: [display.max_displays]?Mapping = @splat(null),
+    reducer: image.Reducer = .{},
+    encoder: jpeg.Encoder = .{},
+
+    pub fn init(gpa: std.mem.Allocator, long_side: u32) Session {
+        return .{ .gpa = gpa, .long_side = long_side };
+    }
+
+    pub fn deinit(self: *Session) void {
+        self.reducer.deinit(self.gpa);
+        self.encoder.deinit(self.gpa);
+    }
+
+    pub const Resolved = union(enum) { ok: Mapping, err: []const u8 };
+
+    /// Mapping of display `index` among `displays`. A display whose geometry
+    /// changed since its last screenshot (resolution, removal) is reported
+    /// instead of silently remapping the model's coordinates.
+    pub fn resolve(self: *Session, arena: std.mem.Allocator, displays: []const display.Display, index: usize) Resolved {
+        if (displays.len == 0) return .{ .err = "Aucun écran détecté : vérifie qu'un écran est allumé, puis refais un screenshot." };
+        if (index >= displays.len or index >= display.max_displays) {
+            if (self.shots[@min(index, display.max_displays - 1)] != null)
+                return .{ .err = fmt(arena, "Écran {d} déconnecté : refais un screenshot.", .{index}) };
+            return .{ .err = fmt(arena, "Écran {d} inexistant : écrans valides 0..{d}.", .{ index, displays.len - 1 }) };
+        }
+        const now = Mapping.of(index, displays[index].rect, self.long_side);
+        if (self.shots[index]) |shot| if (!shot.rect.eql(now.rect))
+            return .{ .err = fmt(arena, "Écran {d} modifié (résolution ou position) : refais un screenshot.", .{index}) };
+        return .{ .ok = now };
+    }
+
+    /// Records a screenshot of `m.display`: its space becomes the one of
+    /// incoming coordinates.
+    pub fn recordShot(self: *Session, m: Mapping) void {
+        self.shots[m.display] = m;
+        self.current = m.display;
+    }
+
+    /// Forgets the mapping of a display whose geometry changed, so the next
+    /// screenshot re-establishes it.
+    pub fn forget(self: *Session, index: usize) void {
+        if (index < display.max_displays) self.shots[index] = null;
+    }
+};
+
+pub fn fmt(arena: std.mem.Allocator, comptime f: []const u8, args: anytype) []const u8 {
+    return std.fmt.allocPrint(arena, f, args) catch "Mémoire insuffisante : réessaie.";
+}

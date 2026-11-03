@@ -27,7 +27,7 @@ test "transport scenario records parse/dispatch/serialize/write timings and no s
 test "a backend without platform scenarios reports them unsupported without failing the run" {
     const results = try bench.run(Fake, testing.allocator, testing.io, "all", 50);
     defer testing.allocator.free(results);
-    try testing.expectEqual(@as(usize, 4), results.len);
+    try testing.expectEqual(bench.scenario_names.len, results.len);
     try testing.expect(results[0].outcome == .ok);
     for (results[1..]) |r| try testing.expect(r.outcome == .unsupported);
 }

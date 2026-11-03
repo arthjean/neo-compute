@@ -6,7 +6,7 @@ const std = @import("std");
 const Io = std.Io;
 const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 
-pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, serialize, write };
+pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, windows, serialize, write };
 pub const stage_count = @typeInfo(Stage).@"enum".field_names.len;
 
 pub fn now(io: Io) i96 {

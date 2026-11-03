@@ -51,5 +51,27 @@
         "WS_EX_NOACTIVATE",                    "SW_SHOWNOACTIVATE",                  "SW_SHOW",                                    "WM_DESTROY",                     "WM_CLOSE",
         "WM_QUIT",                             "WM_PAINT",                           "WM_TIMER",                                   "WM_LBUTTONDOWN",                 "WM_CHAR",
         "PM_REMOVE",
+
+        // Capture state: secure desktop detection, recreation after loss
+                                  "OpenInputDesktop",                   "CloseDesktop",                               "GetUserObjectInformationW",      "UOI_NAME",
+        "DESKTOP_READOBJECTS",                 "E_ACCESSDENIED",                     "DXGI_ERROR_SESSION_DISCONNECTED",            "DXGI_ERROR_DEVICE_REMOVED",      "DXGI_ERROR_INVALID_CALL",
+        "DXGI_OUTDUPL_DESC",
+
+        // Injection target checks (UIPI) and keyboard layout
+                          "WindowFromPoint",                    "GetAncestor",                                "GA_ROOT",                        "GetWindowThreadProcessId",
+        "OpenProcess",                         "PROCESS_QUERY_LIMITED_INFORMATION",  "OpenProcessToken",                           "TOKEN_QUERY",                    "GetTokenInformation",
+        "TokenIntegrityLevel",                 "TOKEN_MANDATORY_LABEL",              "GetSidSubAuthority",                         "GetSidSubAuthorityCount",        "CloseHandle",
+        "GetCurrentProcessId",                 "WHEEL_DELTA",                        "VkKeyScanExW",                               "GetKeyboardLayout",              "MapVirtualKeyExW",
+        "MAPVK_VK_TO_VSC_EX",                  "KEYEVENTF_EXTENDEDKEY",              "VIRTUAL_KEY",                                "GetAsyncKeyState",               "GetKeyState",
+        "GetKeyboardLayoutList",               "ActivateKeyboardLayout",
+
+        // Window list and focus
+                    "EnumWindows",                                "IsWindowVisible",                "GetWindowTextW",
+        "GetWindowLongPtrW",                   "GWL_EXSTYLE",                        "WS_EX_APPWINDOW",                            "IsIconic",                       "DwmGetWindowAttribute",
+        "DWMWA_CLOAKED",                       "DWMWA_EXTENDED_FRAME_BOUNDS",        "QueryFullProcessImageNameW",                 "PROCESS_NAME_WIN32",             "SW_RESTORE",
+        "SW_MINIMIZE",                         "BringWindowToTop",                   "AttachThreadInput",                          "SetWindowPos",                   "SWP_NOSIZE",
+        "SWP_NOZORDER",                        "SWP_NOACTIVATE",                     "GetModuleFileNameW",                         "WM_KEYDOWN",                     "WM_MOUSEWHEEL",
+        "WM_RBUTTONDOWN",                      "WM_APP",                             "SetWindowTextW",                             "SetThreadDpiAwarenessContext",   "DPI_AWARENESS_CONTEXT_UNAWARE",
+        "ClientToScreen",
     },
 }

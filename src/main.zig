@@ -7,6 +7,7 @@ const build_options = @import("build_options");
 const mcp = @import("core/mcp.zig");
 const tools = @import("core/tools.zig");
 const bench = @import("core/bench.zig");
+const display = @import("core/display.zig");
 
 pub const Backend = if (builtin.os.tag == .windows and !build_options.fake_backend)
     @import("backend/windows.zig").Windows
@@ -16,8 +17,8 @@ else
 pub const Server = mcp.Server(Backend, tools.all);
 
 const usage =
-    \\usage: neo-compute [serve] [--trace]
-    \\       neo-compute bench <all|transport|capture|snapshot|screenshot> [--iterations N]
+    \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920]
+    \\       neo-compute bench <all|transport|capture|snapshot|screenshot|window_list> [--iterations N]
     \\                         [--check BASELINE.json] [--write-baseline FILE]
     \\       neo-compute selftest
     \\       neo-compute --version
@@ -31,12 +32,21 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest")) return selftestCommand(init);
 
     var trace = false;
+    var screenshot_size: u32 = display.default_long_side;
     var i: usize = 1;
     if (i < args.len and std.mem.eql(u8, args[i], "serve")) i += 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
         if (std.mem.eql(u8, a, "--trace")) {
             trace = true;
+        } else if (std.mem.eql(u8, a, "--screenshot-size")) {
+            const v = if (i + 1 < args.len) args[i + 1] else "";
+            screenshot_size = std.fmt.parseInt(u32, v, 10) catch 0;
+            if (screenshot_size < display.min_long_side or screenshot_size > display.max_long_side) {
+                std.debug.print("neo-compute: --screenshot-size needs a long side from {d} to {d} pixels\n", .{ display.min_long_side, display.max_long_side });
+                return 2;
+            }
+            i += 1;
         } else if (std.mem.eql(u8, a, "--version")) {
             std.debug.print("{s} {s}\n", .{ mcp.server_name, mcp.server_version });
             return 0;
@@ -45,10 +55,10 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         }
     }
-    return serve(init, trace);
+    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size });
 }
 
-fn serve(init: std.process.Init, trace: bool) !u8 {
+fn serve(init: std.process.Init, options: mcp.Options) !u8 {
     // Longest accepted line; longer lines are answered with -32700.
     const in_buf = try init.gpa.alloc(u8, 1024 * 1024);
     defer init.gpa.free(in_buf);
@@ -56,8 +66,9 @@ fn serve(init: std.process.Init, trace: bool) !u8 {
     var stdin = std.Io.File.stdin().readerStreaming(init.io, in_buf);
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &out_buf);
 
-    var backend: Backend = .{};
-    var server: Server = .init(init.gpa, init.io, &backend, .{ .trace = trace });
+    var backend: Backend = if (@hasDecl(Backend, "init")) .init(init.gpa) else .{};
+    defer if (@hasDecl(Backend, "deinit")) backend.deinit();
+    var server: Server = .init(init.gpa, init.io, &backend, options);
     defer server.deinit();
     try server.serve(&stdin.interface, &stdout.interface);
     return 0;
@@ -140,7 +151,7 @@ fn selftestCommand(init: std.process.Init) !u8 {
         try stderr.interface.print("selftest: platform FAILED: this build has no platform backend\n", .{});
         return 1;
     }
-    const failed = try Backend.selftest(init.gpa, &stderr.interface);
+    const failed = try Backend.selftest(init.gpa, init.io, &stderr.interface);
     if (failed) |name| {
         try stderr.interface.print("selftest: FAILED ({s})\n", .{name});
         return 1;
@@ -154,4 +165,9 @@ test {
     _ = @import("core/registry_test.zig");
     _ = @import("core/bench_test.zig");
     _ = @import("core/tokens.zig");
+    _ = @import("core/display.zig");
+    _ = @import("core/image.zig");
+    _ = @import("core/jpeg.zig");
+    _ = @import("core/keys.zig");
+    _ = @import("core/tools_test.zig");
 }

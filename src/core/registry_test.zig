@@ -71,9 +71,17 @@ fn toolMap(arena: std.mem.Allocator) !std.StringArrayHashMapUnmanaged(std.json.V
 fn expectSameContract(name: []const u8, want: std.json.Value, got: std.json.Value) !void {
     const wp = want.object.get("properties").?.object;
     const gp = got.object.get("properties").?.object;
-    if (wp.count() != gp.count()) {
-        std.debug.print("{s}: {d} properties expected, {d} generated\n", .{ name, wp.count(), gp.count() });
-        return error.TestExpectedEqual;
+    // Properties absent from the fixture are neo-compute extensions and
+    // must be optional (FR-01).
+    var extra = gp.iterator();
+    while (extra.next()) |e| {
+        if (wp.get(e.key_ptr.*) != null) continue;
+        if (got.object.get("required")) |req| for (req.array.items) |r| {
+            if (std.mem.eql(u8, r.string, e.key_ptr.*)) {
+                std.debug.print("{s}: extension `{s}` must be optional\n", .{ name, e.key_ptr.* });
+                return error.TestExpectedEqual;
+            }
+        };
     }
     var it = wp.iterator();
     while (it.next()) |e| {
@@ -177,7 +185,9 @@ const recorder = struct {
 fn callRecorder(arena: std.mem.Allocator, backend: *Fake, args_json: []const u8) !mcp.Result {
     var cancel: std.atomic.Value(bool) = .init(false);
     var timings: timing.Timings = .{};
-    var ctx: mcp.Ctx(Fake) = .{ .arena = arena, .io = testing.io, .backend = backend, .cancel = &cancel, .timings = &timings };
+    var session: mcp.Session = .init(testing.allocator, 1280);
+    defer session.deinit();
+    var ctx: mcp.Ctx(Fake) = .{ .arena = arena, .io = testing.io, .backend = backend, .cancel = &cancel, .timings = &timings, .session = &session };
     const v = try parse(arena, args_json);
     return registry.Registry(.{recorder}).call(&ctx, "recorder", v).?;
 }
@@ -220,7 +230,9 @@ test "toolset validation errors through tools/call name the field (repeat 0, dia
     var cancel: std.atomic.Value(bool) = .init(false);
     var timings: timing.Timings = .{};
     var backend: Fake = .{};
-    var ctx: mcp.Ctx(Fake) = .{ .arena = a, .io = testing.io, .backend = &backend, .cancel = &cancel, .timings = &timings };
+    var session: mcp.Session = .init(testing.allocator, 1280);
+    defer session.deinit();
+    var ctx: mcp.Ctx(Fake) = .{ .arena = a, .io = testing.io, .backend = &backend, .cancel = &cancel, .timings = &timings, .session = &session };
     const cases = [_]struct { tool: []const u8, args: []const u8, field: []const u8 }{
         .{ .tool = "key", .args = "{\"text\":\"a\",\"repeat\":0}", .field = "repeat" },
         .{ .tool = "scroll", .args = "{\"scroll_direction\":\"diagonal\",\"scroll_amount\":1}", .field = "scroll_direction" },

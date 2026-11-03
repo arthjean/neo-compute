@@ -1,40 +1,102 @@
-//! DXGI Desktop Duplication, one duplication per output, created on the
-//! adapter that owns the output. Frames are copied to a BGRA buffer at the
-//! output's physical resolution.
+//! DXGI Desktop Duplication, one persistent duplication per output, created
+//! on the adapter that owns the output. Frames are copied in desktop
+//! orientation (rotation undone) into a BGRA buffer at the output's physical
+//! resolution, and kept: an unchanged screen is served from that buffer.
 
 const std = @import("std");
 const w = @import("win32");
 const com = @import("com.zig");
+const display = @import("../../core/display.zig");
+const image = @import("../../core/image.zig");
 const check = com.check;
 const release = com.release;
 
-pub const Error = com.Error || error{ NoOutputs, UnexpectedFrameFormat, OutOfMemory };
+pub const Error = com.Error || error{ NoOutputs, UnexpectedFrameFormat, OutOfMemory, AccessLost, Unsupported };
 
 pub const Output = struct {
     desc: w.DXGI_OUTPUT_DESC,
+    output1: *w.IDXGIOutput1,
     device: *w.ID3D11Device,
     context: *w.ID3D11DeviceContext,
-    dup: *w.IDXGIOutputDuplication,
+    dup: ?*w.IDXGIOutputDuplication = null,
+    /// HRESULT of the last failed DuplicateOutput, when `dup` is null.
+    dup_hr: w.HRESULT = 0,
+    rotation: image.Rotation = .identity,
     staging: ?*w.ID3D11Texture2D = null,
+    panel_w: u32 = 0,
+    panel_h: u32 = 0,
+    /// Latest frame, desktop orientation, tightly packed.
     pixels: []u8 = &.{},
     width: u32 = 0,
     height: u32 = 0,
     has_frame: bool = false,
+    name_buf: [96]u8 = undefined,
+    name_len: usize = 0,
+    adapter_buf: [128]u8 = undefined,
+    adapter_len: usize = 0,
+    /// Regions updated since the last `beginCapture`, desktop coordinates.
+    dirty: std.ArrayList(display.Rect) = .empty,
+    moved: std.ArrayList(display.Rect) = .empty,
+    meta: []u8 = &.{},
 
     pub fn rect(self: *const Output) w.RECT {
         return self.desc.DesktopCoordinates;
     }
 
-    /// Acquires a new frame if one is ready within `timeout_ms` and copies it
-    /// into `pixels`. Returns false when the screen did not change (the
-    /// previous frame stays valid).
+    pub fn name(self: *const Output) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+
+    pub fn adapterName(self: *const Output) []const u8 {
+        return self.adapter_buf[0..self.adapter_len];
+    }
+
+    /// (Re)creates the duplication. A failure leaves `dup` null and the
+    /// HRESULT in `dup_hr`.
+    pub fn duplicate(self: *Output) Error!void {
+        if (self.dup) |d| release(d);
+        self.dup = null;
+        var dup: ?*w.IDXGIOutputDuplication = null;
+        const hr = self.output1.vtable.DuplicateOutput(self.output1, @ptrCast(self.device), &dup);
+        if (hr < 0) {
+            self.dup_hr = hr;
+            com.last_hr = hr;
+            if (hr == w.DXGI_ERROR_UNSUPPORTED) return error.Unsupported;
+            return error.ComCallFailed;
+        }
+        self.dup = dup.?;
+        var dd: w.DXGI_OUTDUPL_DESC = undefined;
+        dup.?.vtable.GetDesc(dup.?, &dd);
+        self.rotation = switch (dd.Rotation) {
+            w.DXGI_MODE_ROTATION_ROTATE90 => .rotate90,
+            w.DXGI_MODE_ROTATION_ROTATE180 => .rotate180,
+            w.DXGI_MODE_ROTATION_ROTATE270 => .rotate270,
+            else => .identity,
+        };
+        self.has_frame = false;
+    }
+
+    pub fn beginCapture(self: *Output) void {
+        self.dirty.clearRetainingCapacity();
+        self.moved.clearRetainingCapacity();
+    }
+
+    /// Acquires a new frame if one is ready within `timeout_ms` and copies
+    /// it into `pixels`. Returns false when the screen did not change (the
+    /// previous frame stays valid). `error.AccessLost` means the duplication
+    /// was invalidated (mode change, UAC, exclusive full screen).
     pub fn acquire(self: *Output, gpa: std.mem.Allocator, timeout_ms: u32) Error!bool {
+        const dup = self.dup orelse return error.AccessLost;
         var info: w.DXGI_OUTDUPL_FRAME_INFO = undefined;
         var resource: ?*w.IDXGIResource = null;
-        const code = self.dup.vtable.AcquireNextFrame(self.dup, timeout_ms, &info, &resource);
+        const code = dup.vtable.AcquireNextFrame(dup, timeout_ms, &info, &resource);
         if (code == w.DXGI_ERROR_WAIT_TIMEOUT) return false;
+        if (code == w.DXGI_ERROR_ACCESS_LOST) {
+            com.last_hr = code;
+            return error.AccessLost;
+        }
         try check(code);
-        defer _ = self.dup.vtable.ReleaseFrame(self.dup);
+        defer _ = dup.vtable.ReleaseFrame(dup);
         defer release(resource.?);
         if (info.LastPresentTime == 0 and self.has_frame) return false; // pointer-only update
 
@@ -46,7 +108,10 @@ pub const Output = struct {
         tex.vtable.GetDesc(tex, &desc);
         if (desc.Format != w.DXGI_FORMAT_B8G8R8A8_UNORM) return error.UnexpectedFrameFormat;
 
-        if (self.staging == null or self.width != desc.Width or self.height != desc.Height) {
+        const r = self.rect();
+        const dw: u32 = @intCast(r.right - r.left);
+        const dh: u32 = @intCast(r.bottom - r.top);
+        if (self.staging == null or self.panel_w != desc.Width or self.panel_h != desc.Height or self.width != dw or self.height != dh) {
             if (self.staging) |s| release(s);
             self.staging = null;
             gpa.free(self.pixels);
@@ -60,64 +125,103 @@ pub const Output = struct {
             sd.CPUAccessFlags = @bitCast(w.D3D11_CPU_ACCESS_READ);
             sd.MiscFlags = 0;
             try check(self.device.vtable.CreateTexture2D(self.device, &sd, null, &self.staging));
-            self.pixels = try gpa.alloc(u8, @as(usize, desc.Width) * desc.Height * 4);
-            self.width = desc.Width;
-            self.height = desc.Height;
+            self.pixels = try gpa.alloc(u8, @as(usize, dw) * dh * 4);
+            self.panel_w = desc.Width;
+            self.panel_h = desc.Height;
+            self.width = dw;
+            self.height = dh;
         }
+        if (info.TotalMetadataBufferSize > 0) try self.readRects(gpa, dup, info.TotalMetadataBufferSize);
+        if (!self.has_frame) try self.dirty.append(gpa, .{ .x = r.left, .y = r.top, .w = @intCast(dw), .h = @intCast(dh) });
         self.context.vtable.CopyResource(self.context, @ptrCast(self.staging.?), @ptrCast(tex));
         try self.readback();
         self.has_frame = true;
         return true;
     }
 
-    /// Copies the staging texture (the latest frame) into `pixels`.
+    /// Dirty and move rects of the acquired frame, turned from panel to
+    /// desktop coordinates and appended to the accumulated lists.
+    fn readRects(self: *Output, gpa: std.mem.Allocator, dup: *w.IDXGIOutputDuplication, size: u32) Error!void {
+        if (self.meta.len < size) {
+            gpa.free(self.meta);
+            self.meta = &.{};
+            self.meta = try gpa.alloc(u8, size);
+        }
+        const r = self.rect();
+        const dw = r.right - r.left;
+        const dh = r.bottom - r.top;
+        var used: u32 = 0;
+        const moves: [*]w.DXGI_OUTDUPL_MOVE_RECT = @ptrCast(@alignCast(self.meta.ptr));
+        try check(dup.vtable.GetFrameMoveRects(dup, size, @ptrCast(moves), &used));
+        for (moves[0 .. used / @sizeOf(w.DXGI_OUTDUPL_MOVE_RECT)]) |m| {
+            const d = image.panelRectToDesktop(self.rotation, dw, dh, fromRect(m.DestinationRect));
+            try self.moved.append(gpa, .{ .x = d.x + r.left, .y = d.y + r.top, .w = d.w, .h = d.h });
+        }
+        const rest = size - used;
+        const rects: [*]w.RECT = @ptrCast(@alignCast(self.meta.ptr + used));
+        var dirty_used: u32 = 0;
+        try check(dup.vtable.GetFrameDirtyRects(dup, rest, @ptrCast(rects), &dirty_used));
+        for (rects[0 .. dirty_used / @sizeOf(w.RECT)]) |pr| {
+            const d = image.panelRectToDesktop(self.rotation, dw, dh, fromRect(pr));
+            try self.dirty.append(gpa, .{ .x = d.x + r.left, .y = d.y + r.top, .w = d.w, .h = d.h });
+        }
+    }
+
+    /// Copies the staging texture (the latest frame) into `pixels` in
+    /// desktop orientation.
     pub fn readback(self: *Output) Error!void {
         const staging = self.staging orelse return;
         var mapped: w.D3D11_MAPPED_SUBRESOURCE = undefined;
         try check(self.context.vtable.Map(self.context, @ptrCast(staging), 0, w.D3D11_MAP_READ, 0, &mapped));
         defer self.context.vtable.Unmap(self.context, @ptrCast(staging), 0);
-        const src: [*]const u8 = @ptrCast(mapped.pData.?);
-        const row = @as(usize, self.width) * 4;
-        for (0..self.height) |y| @memcpy(self.pixels[y * row ..][0..row], src[y * mapped.RowPitch ..][0..row]);
-    }
-
-    /// BGRA pixel at desktop coordinates, if inside this output.
-    pub fn pixelAt(self: *const Output, x: i32, y: i32) ?[4]u8 {
-        const r = self.rect();
-        if (x < r.left or y < r.top or x >= r.right or y >= r.bottom or self.pixels.len == 0) return null;
-        const px: usize = @intCast(x - r.left);
-        const py: usize = @intCast(y - r.top);
-        const i = (py * self.width + px) * 4;
-        return self.pixels[i..][0..4].*;
+        image.copyRotated(self.rotation, self.pixels, self.width, self.height, @ptrCast(mapped.pData.?), mapped.RowPitch);
     }
 
     pub fn deinit(self: *Output, gpa: std.mem.Allocator) void {
         if (self.staging) |s| release(s);
         gpa.free(self.pixels);
-        release(self.dup);
+        gpa.free(self.meta);
+        self.dirty.deinit(gpa);
+        self.moved.deinit(gpa);
+        if (self.dup) |d| release(d);
+        release(self.output1);
         release(self.context);
         release(self.device);
     }
 };
 
+fn fromRect(r: w.RECT) display.Rect {
+    return .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
+}
+
+fn utf8Into(buf: []u8, wide: []const u16) usize {
+    const end = std.mem.indexOfScalar(u16, wide, 0) orelse wide.len;
+    return std.unicode.wtf16LeToWtf8(buf, wide[0..@min(end, buf.len / 3)]);
+}
+
 pub const Capture = struct {
+    factory: *w.IDXGIFactory1,
+    /// Primary output first, then by position.
     outputs: std.ArrayList(Output) = .empty,
 
+    /// Enumerates every output attached to the desktop and duplicates it on
+    /// its own adapter. An output whose duplication fails is kept, with the
+    /// failure recorded, so it can be named in errors.
     pub fn init(gpa: std.mem.Allocator) Error!Capture {
-        var self: Capture = .{};
-        errdefer self.deinit(gpa);
         var raw: ?*anyopaque = null;
         try check(w.CreateDXGIFactory1(&w.IDXGIFactory1.iid, &raw));
-        const factory: *w.IDXGIFactory1 = @ptrCast(@alignCast(raw.?));
-        defer release(factory);
+        var self: Capture = .{ .factory = @ptrCast(@alignCast(raw.?)) };
+        errdefer self.deinit(gpa);
 
         var ai: u32 = 0;
         while (true) : (ai += 1) {
             var adapter: ?*w.IDXGIAdapter1 = null;
-            const ahr = factory.vtable.EnumAdapters1(factory, ai, &adapter);
+            const ahr = self.factory.vtable.EnumAdapters1(self.factory, ai, &adapter);
             if (ahr == w.DXGI_ERROR_NOT_FOUND) break;
             try check(ahr);
             defer release(adapter.?);
+            var adesc: w.DXGI_ADAPTER_DESC1 = undefined;
+            try check(adapter.?.vtable.GetDesc1(adapter.?, &adesc));
             var oi: u32 = 0;
             while (true) : (oi += 1) {
                 var out: ?*w.IDXGIOutput = null;
@@ -128,37 +232,66 @@ pub const Capture = struct {
                 var o1raw: ?*anyopaque = null;
                 try check(out.?.vtable.QueryInterface(out.?, &w.IDXGIOutput1.iid, &o1raw));
                 const output1: *w.IDXGIOutput1 = @ptrCast(@alignCast(o1raw.?));
-                defer release(output1);
                 var desc: w.DXGI_OUTPUT_DESC = undefined;
-                try check(output1.vtable.GetDesc(output1, &desc));
-                if (desc.AttachedToDesktop == 0) continue;
+                check(output1.vtable.GetDesc(output1, &desc)) catch |e| {
+                    release(output1);
+                    return e;
+                };
+                if (desc.AttachedToDesktop == 0) {
+                    release(output1);
+                    continue;
+                }
                 var device: ?*w.ID3D11Device = null;
                 var context: ?*w.ID3D11DeviceContext = null;
-                try check(w.D3D11CreateDevice(@ptrCast(adapter.?), w.D3D_DRIVER_TYPE_UNKNOWN, null, 0, null, 0, w.D3D11_SDK_VERSION, &device, null, &context));
-                errdefer {
-                    release(context.?);
-                    release(device.?);
-                }
-                var dup: ?*w.IDXGIOutputDuplication = null;
-                try check(output1.vtable.DuplicateOutput(output1, @ptrCast(device.?), &dup));
-                try self.outputs.append(gpa, .{ .desc = desc, .device = device.?, .context = context.?, .dup = dup.? });
+                check(w.D3D11CreateDevice(@ptrCast(adapter.?), w.D3D_DRIVER_TYPE_UNKNOWN, null, 0, null, 0, w.D3D11_SDK_VERSION, &device, null, &context)) catch |e| {
+                    release(output1);
+                    return e;
+                };
+                var o: Output = .{ .desc = desc, .output1 = output1, .device = device.?, .context = context.? };
+                o.name_len = utf8Into(&o.name_buf, &desc.DeviceName);
+                o.adapter_len = utf8Into(&o.adapter_buf, &adesc.Description);
+                o.duplicate() catch {}; // recorded in dup_hr
+                self.outputs.append(gpa, o) catch |e| {
+                    o.deinit(gpa);
+                    return e;
+                };
             }
         }
         if (self.outputs.items.len == 0) return error.NoOutputs;
+        std.mem.sort(Output, self.outputs.items, {}, struct {
+            fn lt(_: void, a: Output, b: Output) bool {
+                const ap = a.desc.DesktopCoordinates.left == 0 and a.desc.DesktopCoordinates.top == 0;
+                const bp = b.desc.DesktopCoordinates.left == 0 and b.desc.DesktopCoordinates.top == 0;
+                if (ap != bp) return ap;
+                if (a.desc.DesktopCoordinates.left != b.desc.DesktopCoordinates.left) return a.desc.DesktopCoordinates.left < b.desc.DesktopCoordinates.left;
+                return a.desc.DesktopCoordinates.top < b.desc.DesktopCoordinates.top;
+            }
+        }.lt);
         return self;
     }
 
-    /// Output whose desktop rectangle contains the point.
-    pub fn outputAt(self: *Capture, x: i32, y: i32) ?*Output {
-        for (self.outputs.items) |*o| {
-            const r = o.rect();
-            if (x >= r.left and y >= r.top and x < r.right and y < r.bottom) return o;
-        }
-        return null;
+    /// False once the set of adapters or outputs changed (display plugged,
+    /// unplugged or reconfigured): the caller re-enumerates.
+    pub fn isCurrent(self: *Capture) bool {
+        return self.factory.vtable.IsCurrent(self.factory) != 0;
     }
 
     pub fn deinit(self: *Capture, gpa: std.mem.Allocator) void {
         for (self.outputs.items) |*o| o.deinit(gpa);
         self.outputs.deinit(gpa);
+        release(self.factory);
     }
 };
+
+/// True when the input desktop is not the user's default desktop: UAC
+/// prompt, Ctrl+Alt+Del screen or lock screen. A non-system process cannot
+/// even open the secure desktop.
+pub fn secureDesktopActive() bool {
+    const desk = w.OpenInputDesktop(0, 0, w.DESKTOP_READOBJECTS) orelse return true;
+    defer _ = w.CloseDesktop(desk);
+    var name: [64]u16 = undefined;
+    var needed: u32 = 0;
+    if (w.GetUserObjectInformationW(desk, w.UOI_NAME, &name, @sizeOf(@TypeOf(name)), &needed) == 0) return false;
+    const len = std.mem.indexOfScalar(u16, &name, 0) orelse name.len;
+    return !std.mem.eql(u16, name[0..len], std.unicode.utf8ToUtf16LeStringLiteral("Default"));
+}

@@ -2,3 +2,5 @@
 zig-out/
 # Windows SDK license: downloaded by build.zig, never committed.
 bindings/vendor/
+# Packages fetched by the Zig build (build.zig.zon).
+zig-pkg/

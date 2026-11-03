@@ -14,6 +14,24 @@
     "snapshot": {
       "accessibility": 23990.2,
       "total": 23990.2
+    },
+    "screenshot": {
+      "parse": 5,
+      "dispatch": 19810.4,
+      "capture": 2241.9,
+      "reduce": 7989.3,
+      "encode": 11292.1,
+      "serialize": 1076,
+      "write": 0.3,
+      "total": 19807.3
+    },
+    "window_list": {
+      "parse": 2.1,
+      "dispatch": 392,
+      "windows": 376.8,
+      "serialize": 8.2,
+      "write": 0.1,
+      "total": 385.3
     }
   }
 }

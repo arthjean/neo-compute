@@ -3,7 +3,14 @@
     .version = "0.0.0",
     .fingerprint = 0x3ce717f03bed425a,
     .minimum_zig_version = "0.17.0",
-    .dependencies = .{},
+    .dependencies = .{
+        // JPEG encoder of the screenshot pipeline (US-007), compiled by
+        // build.zig without SIMD (no NASM).
+        .libjpeg_turbo = .{
+            .url = "https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.1.4.1.tar.gz",
+            .hash = "N-V-__8AAGEjlwAuFcV7FYX4l2qoSol64Bg7hBxuAUzmAu_6",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

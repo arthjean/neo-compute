@@ -10,6 +10,7 @@ const std = @import("std");
 const Io = std.Io;
 const registry = @import("registry.zig");
 const timing = @import("timing.zig");
+pub const Session = @import("session.zig").Session;
 
 pub const server_name = "neo-compute";
 pub const server_version = "0.1.0";
@@ -76,6 +77,11 @@ pub fn Ctx(comptime Backend: type) type {
         backend: *Backend,
         cancel: *std.atomic.Value(bool),
         timings: *timing.Timings,
+        session: *Session,
+        /// stdout, for `notifications/progress` (null outside the server).
+        out: ?*Io.Writer = null,
+        /// `params._meta.progressToken` of the request, if any.
+        progress_token: ?std.json.Value = null,
 
         pub fn cancelled(self: *const Self) bool {
             return self.cancel.load(.acquire);
@@ -90,6 +96,31 @@ pub fn Ctx(comptime Backend: type) type {
                 const step = @min(left, 10 * std.time.ns_per_ms);
                 self.io.sleep(.fromNanoseconds(step), .awake) catch return false;
                 left -= step;
+            }
+            return !self.cancelled();
+        }
+
+        /// Emits `notifications/progress` when the request carries a
+        /// progress token. Runs on the dispatcher, the only stdout writer.
+        pub fn progress(self: *const Self, done: f64, total: f64) void {
+            const out = self.out orelse return;
+            const token = self.progress_token orelse return;
+            out.writeAll("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":") catch return;
+            std.json.Stringify.value(token, .{}, out) catch return;
+            out.print(",\"progress\":{d},\"total\":{d}}}}}\n", .{ done, total }) catch return;
+            out.flush() catch {};
+        }
+
+        /// Sleeps `seconds`, reporting progress every second. Returns false
+        /// when cancelled.
+        pub fn sleepReporting(self: *const Self, seconds: f64) bool {
+            const total_ns: u64 = @intFromFloat(seconds * std.time.ns_per_s);
+            var done: u64 = 0;
+            while (done < total_ns) {
+                const step = @min(total_ns - done, std.time.ns_per_s);
+                if (!self.sleep(step)) return false;
+                done += step;
+                self.progress(@as(f64, @floatFromInt(done)) / std.time.ns_per_s, seconds);
             }
             return !self.cancelled();
         }
@@ -129,6 +160,8 @@ pub const Options = struct {
     arena_retain: usize = 4 * 1024 * 1024,
     /// Adds a token estimate to each tool result (`--trace`).
     trace: bool = false,
+    /// Long side of screenshots in pixels (`--screenshot-size`).
+    screenshot_size: u32 = @import("display.zig").default_long_side,
 };
 
 pub fn Server(comptime Backend: type, comptime tools: anytype) type {
@@ -154,15 +187,17 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
         cancelled_ids: [slot_count]IdText = @splat(.{}),
         cancelled_next: usize = 0,
         timings: timing.Timings = .{},
+        session: Session,
         /// Called after each handled message (bench and tests).
         on_message: ?*const fn (*Self) void = null,
 
         pub fn init(gpa: std.mem.Allocator, io: Io, backend: *Backend, options: Options) Self {
-            return .{ .gpa = gpa, .io = io, .backend = backend, .options = options, .arena = .init(gpa) };
+            return .{ .gpa = gpa, .io = io, .backend = backend, .options = options, .arena = .init(gpa), .session = .init(gpa, options.screenshot_size) };
         }
 
         pub fn deinit(self: *Self) void {
             for (&self.slots) |*s| s.buf.deinit(self.gpa);
+            self.session.deinit();
             self.arena.deinit();
         }
 
@@ -332,9 +367,25 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             // The client is gone: queued tool calls are dropped unanswered.
             if (self.eof.load(.acquire)) return;
             if (!self.beginRequest(id)) return;
-            var ctx: ToolCtx = .{ .arena = a, .io = self.io, .backend = self.backend, .cancel = &self.cancel, .timings = &self.timings };
+            var ctx: ToolCtx = .{
+                .arena = a,
+                .io = self.io,
+                .backend = self.backend,
+                .cancel = &self.cancel,
+                .timings = &self.timings,
+                .session = &self.session,
+                .out = out,
+                .progress_token = progressToken(p),
+            };
             var result = Reg.call(&ctx, name, p.object.get("arguments")).?;
-            if (!self.endRequest()) return; // cancelled: no response for this id
+            if (!self.endRequest()) {
+                // Cancelled: no response for this id. Held inputs go now;
+                // at end of stdin, serve releases them on its way out.
+                if (!self.eof.load(.acquire)) self.backend.releaseAllInputs();
+                return;
+            }
+            // FR-07: an error never leaves a key or button held.
+            if (result.is_error) self.backend.releaseAllInputs();
             if (self.options.trace) result.token_estimate = estimateResultTokens(&result);
             try self.writeToolResult(out, id, &result);
         }
@@ -426,6 +477,16 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             try endResponse(out);
             t.stop(self.io, .write);
         }
+    };
+}
+
+fn progressToken(params: std.json.Value) ?std.json.Value {
+    const meta = params.object.get("_meta") orelse return null;
+    if (meta != .object) return null;
+    const token = meta.object.get("progressToken") orelse return null;
+    return switch (token) {
+        .string, .integer => token,
+        else => null,
     };
 }
 

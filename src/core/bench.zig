@@ -33,8 +33,10 @@ pub const Result = struct { name: []const u8, outcome: Outcome };
 
 /// Absolute p95 budgets on a scenario's total (PRD Quality Gates).
 pub const budgets = [_]struct { scenario: []const u8, ms: f64 }{
+    .{ .scenario = "capture", .ms = 8 },
     .{ .scenario = "screenshot", .ms = 30 },
     .{ .scenario = "snapshot", .ms = 50 },
+    .{ .scenario = "window_list", .ms = 5 },
 };
 
 fn percentile(sorted: []const u64, p: f64) u64 {
@@ -279,7 +281,7 @@ pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
     try w.writeByte('\n');
 }
 
-pub const scenario_names = [_][]const u8{ "transport", "capture", "snapshot", "screenshot" };
+pub const scenario_names = [_][]const u8{ "transport", "capture", "snapshot", "screenshot", "window_list" };
 
 /// Runs `which` ("all" or one scenario name). Platform scenarios come from
 /// `Backend.benchScenario`; a backend without them reports them unsupported.
