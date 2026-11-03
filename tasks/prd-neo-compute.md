@@ -574,7 +574,7 @@ Frame as questions for engineering input, not mandates:
 - **Q1 :** quelles différences entre le protocole MCP 2026-07-28 (runtime v2 de Claude Code) et 2025-11-25 ? À vérifier pendant US-002, avant de figer la négociation de version.
 - **Q2 :** Claude Code supporte-t-il l'elicitation MCP, ce qui permettrait un niveau de politique `confirm` (confirmation humaine par action) ? Non documenté. À vérifier par Arthur avant EP-004 ; cela décide si US-017 ajoute ce niveau.
 - **Q3 :** faut-il viser l'inscription Windows ODR (agent connectors), avec signature de code et packaging ? Décision d'Arthur après la v1.
-- **Q4 :** publication open source et licence ? Décision d'Arthur avant toute publication du dépôt.
+- **Q4 :** publication open source et licence ? Décidé le 2026-11-03 : dépôt public (https://github.com/arthjean/neo-compute) sous GPL-3.0-or-later, comme Paneflow. Toute contribution externe passera par un CLA pour préserver une éventuelle double licence.
 - **Q5 :** quel budget en tokens pour les campagnes d'évals (20 tâches × 3 répétitions × 3 configurations = 180 exécutions) ? Décision d'Arthur avant US-016.
 [/PRD]
 
