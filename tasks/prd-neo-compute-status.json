@@ -17,10 +17,10 @@
     {
       "id": "EP-002",
       "title": "Perception et action Windows",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 5,
-      "stories_done": 0
+      "stories_done": 5
     },
     {
       "id": "EP-003",
@@ -112,72 +112,72 @@
       "id": "US-006",
       "title": "Capture DXGI Desktop Duplication persistante",
       "epic": "EP-002",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": [
         "US-005"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-03",
+      "reviewed_at": "2026-11-03"
     },
     {
       "id": "US-007",
       "title": "Réduction SIMD, encodage JPEG et outils screenshot/zoom",
       "epic": "EP-002",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": [
         "US-003",
         "US-006"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-03",
+      "reviewed_at": "2026-11-03"
     },
     {
       "id": "US-008",
       "title": "Souris, mapping de coordonnées et DPI Per-Monitor V2",
       "epic": "EP-002",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-007"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-03",
+      "reviewed_at": "2026-11-03"
     },
     {
       "id": "US-009",
       "title": "Clavier, saisie Unicode et relâchement garanti des entrées",
       "epic": "EP-002",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-008"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-03",
+      "reviewed_at": "2026-11-03"
     },
     {
       "id": "US-010",
       "title": "Outils window_list et window_focus",
       "epic": "EP-002",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": [
         "US-008"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-03",
+      "reviewed_at": "2026-11-03"
     },
     {
       "id": "US-011",
