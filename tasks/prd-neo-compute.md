@@ -309,7 +309,7 @@ Capturer l'écran et injecter les entrées avec un mapping de coordonnées exact
 
 Remplacer le screenshot systématique par un arbre UIA élagué, des IDs stables, des deltas, des actions par élément et une stabilisation gérée côté serveur.
 
-**Definition of Done:** `ui_tree` p95 < 50 ms (≤ 400 nœuds, apps natives) ; delta médian ≤ 150 tokens ; sur la suite de référence, -30 % d'allers-retours face au mode vision sans baisse du taux de réussite.
+**Definition of Done:** `ui_tree` p95 < 50 ms (≤ 400 nœuds, apps natives) ; delta médian ≤ 150 tokens ; sur la suite de référence, pas de baisse du taux de réussite face au mode vision, allers-retours mesurés et consignés (cible de -30 % reportée après le PRD, décision 0006).
 
 #### US-011: Snapshot UIA borné et sérialisation compacte
 **Description:** En tant que Claude Code, je veux un arbre UIA élagué de la fenêtre active en une ligne par élément afin de comprendre l'interface pour quelques centaines de tokens.
