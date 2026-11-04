@@ -25,10 +25,10 @@
     {
       "id": "EP-003",
       "title": "Observation accessibilité d'abord (Windows)",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 6,
-      "stories_done": 0
+      "stories_done": 6
     },
     {
       "id": "EP-004",
@@ -183,64 +183,64 @@
       "id": "US-011",
       "title": "Snapshot UIA borné et sérialisation compacte",
       "epic": "EP-003",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": [
         "US-005",
         "US-007"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-04",
+      "reviewed_at": "2026-11-04"
     },
     {
       "id": "US-012",
       "title": "IDs stables et observations différentielles",
       "epic": "EP-003",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": [
         "US-011"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-04",
+      "reviewed_at": "2026-11-04"
     },
     {
       "id": "US-013",
       "title": "Actions par élément ui_act et recherche ui_find",
       "epic": "EP-003",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-012"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-04",
+      "reviewed_at": "2026-11-04"
     },
     {
       "id": "US-014",
       "title": "Apps Chromium, Electron et grands arbres",
       "epic": "EP-003",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": [
         "US-012"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-04",
+      "reviewed_at": "2026-11-04"
     },
     {
       "id": "US-015",
       "title": "Stabilisation côté serveur et observation post-action",
       "epic": "EP-003",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
@@ -248,24 +248,24 @@
         "US-009",
         "US-012"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-04",
+      "reviewed_at": "2026-11-04"
     },
     {
       "id": "US-016",
       "title": "Suite de tâches agentiques et A/B vision contre accessibilité",
       "epic": "EP-003",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": [
         "US-013",
         "US-015"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-03",
+      "completed_at": "2026-11-04",
+      "reviewed_at": "2026-11-04"
     },
     {
       "id": "US-017",
