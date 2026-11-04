@@ -76,7 +76,9 @@ int main(int argc, char **argv) {
     HRESULT hr;
 
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    hwnd = strcmp(target, "foreground") == 0 ? GetForegroundWindow() : FindWindowW(L"Shell_TrayWnd", NULL);
+    /* "foreground", "taskbar", or a window handle such as 0x1a2b. */
+    if (strncmp(target, "0x", 2) == 0) hwnd = (HWND)(uintptr_t)strtoull(target + 2, NULL, 16);
+    else hwnd = strcmp(target, "foreground") == 0 ? GetForegroundWindow() : FindWindowW(L"Shell_TrayWnd", NULL);
     if (samples < 1 || !hwnd) return 2;
     lat = calloc((size_t)samples, sizeof(*lat));
     QueryPerformanceFrequency(&freq);

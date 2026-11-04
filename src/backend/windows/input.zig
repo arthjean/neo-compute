@@ -216,7 +216,8 @@ pub fn keyCombo(held: *Held, combo: keys.Combo, action: core_input.KeyAction) In
 }
 
 /// Types UTF-16 units as Unicode key presses: two events per unit, at most
-/// `core_input.type_batch_units` units (64 events) per SendInput call.
+/// `core_input.type_batch_units` units (64 events) per SendInput call. The
+/// core sends one character per call, `type_pace_ns` apart.
 pub fn typeText(units: []const u16) InputError!void {
     std.debug.assert(units.len <= core_input.type_batch_units);
     var buf: [core_input.type_batch_units * 2]w.INPUT = undefined;

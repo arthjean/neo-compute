@@ -1,5 +1,6 @@
-//! `neo-compute selftest`: checks capture, mouse, keyboard, accessibility,
-//! DPI mapping, windows and input release against a window the test creates
+//! `neo-compute selftest`: checks capture, mouse, keyboard, accessibility
+//! (UIA worker, ui_tree, ui_find, ui_act, provider timeout), settling, DPI
+//! mapping, windows and input release against a window the test creates
 //! itself. Tool checks go through the real dispatcher (`tools/call` JSON in,
 //! JSON-RPC line out). Prints one line per subtest and returns the name of
 //! the first failing one.
@@ -7,7 +8,7 @@
 const std = @import("std");
 const w = @import("win32");
 const com = @import("com.zig");
-const Uia = @import("uia.zig").Uia;
+const uitree = @import("../../core/uitree.zig");
 const TestWindow = @import("test_window.zig").TestWindow;
 const test_window = @import("test_window.zig");
 const Windows = @import("../windows.zig").Windows;
@@ -243,27 +244,21 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
         if (!r.is_error and r.image_mime != null and std.mem.indexOf(u8, r.text, want) != null) report.ok("screenshot", "{s}", .{r.text}) else report.fail("screenshot", "error={} text `{s}`", .{ r.is_error, r.text });
     }
 
-    // accessibility: UIA finds the button with the same rectangle Win32 reports.
-    var uia = Uia.init() catch |err| {
-        report.fail("accessibility", "CUIAutomation unavailable: {t} hr=0x{x}", .{ err, com.lastHr() });
+    // accessibility: the UIA worker reads the button with the rectangle
+    // Win32 reports.
+    const snap = backend.uiSnapshot(arena, @intFromPtr(tw.window()));
+    if (snap == .err) {
+        report.fail("accessibility", "snapshot failed: {s}", .{snap.err});
         return report.failed;
+    }
+    var found: ?display.Rect = null;
+    for (snap.ok.elements) |e| if (e.role == .button and std.mem.eql(u8, e.name, test_window.button_label)) {
+        found = e.rect;
     };
-    defer uia.deinit();
-    const Finder = struct {
-        found: ?w.RECT = null,
-        pub fn element(self: *@This(), e: @import("uia.zig").Element) void {
-            if (e.control_type == w.UIA_ButtonControlTypeId and std.mem.eql(u8, e.name, test_window.button_label)) self.found = e.rect;
-        }
-    };
-    var finder: Finder = .{};
-    const count = uia.snapshot(tw.window(), &finder) catch |err| {
-        report.fail("accessibility", "snapshot failed: {t} hr=0x{x}", .{ err, com.lastHr() });
-        return report.failed;
-    };
-    if (finder.found) |ur| {
-        report.ok("accessibility", "{d} elements, button found", .{count});
+    if (found) |ur| {
+        report.ok("accessibility", "{d} elements on the UIA worker, button found", .{snap.ok.elements.len});
         // dpi: Win32, UIA and DXGI agree on physical coordinates.
-        const same = ur.left == br.left and ur.top == br.top and ur.right == br.right and ur.bottom == br.bottom;
+        const same = ur.x == br.left and ur.y == br.top and ur.right() == br.right and ur.bottom() == br.bottom;
         const frame = backend.capture(0, arena);
         const px = struct {
             fn at(f: display.Frame, origin: display.Rect, x: i32, y: i32) [4]u8 {
@@ -272,11 +267,11 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
             }
         }.at;
         if (!same) {
-            report.fail("dpi", "UIA button rect {d},{d},{d},{d} differs from Win32 {d},{d},{d},{d}", .{ ur.left, ur.top, ur.right, ur.bottom, br.left, br.top, br.right, br.bottom });
-        } else if (frame != .frame or isColor(px(frame.frame, primary, ur.left + 10, ur.top + 10), test_window.magenta) or !isColor(px(frame.frame, primary, ur.left - 4, ur.top + 10), test_window.magenta)) {
-            report.fail("dpi", "captured pixels do not match the button edge at {d},{d}", .{ ur.left, ur.top });
-        } else report.ok("dpi", "per-monitor v2, {d} dpi, Win32 = UIA = DXGI at the button edge", .{monitorDpi(ur.left, ur.top)});
-    } else report.fail("accessibility", "button `{s}` not found among {d} elements", .{ test_window.button_label, count });
+            report.fail("dpi", "UIA button rect {d},{d},{d},{d} differs from Win32 {d},{d},{d},{d}", .{ ur.x, ur.y, ur.right(), ur.bottom(), br.left, br.top, br.right, br.bottom });
+        } else if (frame != .frame or isColor(px(frame.frame, primary, ur.x + 10, ur.y + 10), test_window.magenta) or !isColor(px(frame.frame, primary, ur.x - 4, ur.y + 10), test_window.magenta)) {
+            report.fail("dpi", "captured pixels do not match the button edge at {d},{d}", .{ ur.x, ur.y });
+        } else report.ok("dpi", "per-monitor v2, {d} dpi, Win32 = UIA = DXGI at the button edge", .{monitorDpi(ur.x, ur.y)});
+    } else report.fail("accessibility", "button `{s}` not found among {d} elements", .{ test_window.button_label, snap.ok.elements.len });
 
     var saved: w.POINT = undefined;
     _ = w.GetCursorPos(&saved);
@@ -373,7 +368,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
             w.Sleep(50);
         }
         const layout_name: []const u8 = if (azerty != null) "AZERTY 040C" else "active layout (no French layout installed)";
-        var buf: [64]u16 = undefined;
+        var buf: [64:0]u16 = undefined;
         tw.resetEvents();
         _ = try caller.call("key", "{{\"text\":\"a\"}}", .{});
         _ = try caller.call("key", "{{\"text\":\";\"}}", .{});
@@ -398,6 +393,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
         const bad = try caller.call("key", "{{\"text\":\"Retrun\"}}", .{});
         if (bad.is_error and std.mem.indexOf(u8, bad.text, "Return") != null) report.ok("key-names", "{s}", .{bad.text}) else report.fail("key-names", "{s}", .{bad.text});
     }
+
+    uiChecks(&report, &caller, &backend, &tw) catch |err| report.fail("ui", "{t}", .{err});
 
     // windows: window_list reports the test window; window_focus restores it.
     {
@@ -437,6 +434,121 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
     releaseCheck(io, &report, arena);
 
     return report.failed;
+}
+
+/// Id of the first ui_tree line containing `needle`.
+fn idOf(tree: []const u8, needle: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, tree, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, needle) == null) continue;
+        var it = std.mem.tokenizeScalar(u8, line, ' ');
+        const id = it.next() orelse return null;
+        return if (uitree.parseId(id) != null) id else null;
+    }
+    return null;
+}
+
+/// The accessibility tools and the post-action observation, through the
+/// dispatcher, against the test window.
+fn uiChecks(report: *Report, caller: *Caller, backend: *Windows, tw: *TestWindow) !void {
+    _ = w.SetForegroundWindow(tw.window());
+    const handle = @intFromPtr(tw.window());
+
+    // ui-tree: one line per element with its id; the password stays masked.
+    const tree = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{handle});
+    const button_line = "button \"" ++ test_window.button_label ++ "\"";
+    const button_id = idOf(tree.text, button_line);
+    const leaked = std.mem.indexOf(u8, tree.text, test_window.secret) != null;
+    if (!tree.is_error and button_id != null and std.mem.indexOf(u8, tree.text, "[=" ++ uitree.password_mask ++ "]") != null and !leaked)
+        report.ok("ui-tree", "button is {s}, password field shown as [=•••]", .{button_id.?})
+    else
+        report.fail("ui-tree", "button id {?s}, password leaked: {}, tree:\n{s}", .{ button_id, leaked, tree.text });
+    const id = button_id orelse return;
+
+    // ui-find: by role and accent-insensitive name words.
+    const found = try caller.call("ui_find", "{{\"query\":\"role:button SELFTEST\",\"window\":\"0x{x}\"}}", .{handle});
+    if (!found.is_error and std.mem.indexOf(u8, found.text, button_line) != null) report.ok("ui-find", "role:button SELFTEST finds {s}", .{id}) else report.fail("ui-find", "{s}", .{found.text});
+
+    // ui-act: Invoke reaches the button as BN_CLICKED, without coordinates.
+    const before = tw.commandCount();
+    const invoked = try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{id});
+    const clicked = waitFor(struct {
+        fn f(t: *TestWindow, n: u32) bool {
+            return t.commandCount() > n;
+        }
+    }.f, .{ tw, before }, 1000);
+    if (!invoked.is_error and clicked) report.ok("ui-act", "{s}", .{invoked.text}) else report.fail("ui-act", "error={} BN_CLICKED={} {s}", .{ invoked.is_error, clicked, invoked.text });
+
+    // ui-set-value: the password field takes the value, which no output shows.
+    if (idOf(tree.text, "[=" ++ uitree.password_mask ++ "]")) |pid| {
+        const value = "s3cr3t-neo-compute";
+        const set = try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"set_value\",\"value\":\"{s}\",\"observe\":\"delta\"}}", .{ pid, value });
+        var buf: [64:0]u16 = undefined;
+        const n: usize = @intCast(@max(0, w.GetWindowTextW(tw.passwordWindow(), &buf, buf.len)));
+        var utf8: [192]u8 = undefined;
+        const got = utf8[0..std.unicode.wtf16LeToWtf8(&utf8, buf[0..n])];
+        const shown = std.mem.indexOf(u8, set.text, value) != null;
+        if (!set.is_error and std.mem.eql(u8, got, value) and !shown) report.ok("ui-set-value", "password field set through ValuePattern, value absent from the result", .{}) else report.fail("ui-set-value", "error={} field matches={} value shown={} {s}", .{ set.is_error, std.mem.eql(u8, got, value), shown, set.text });
+    } else report.fail("ui-set-value", "password field not in the tree", .{});
+
+    // settle: an action on a still window settles; a window repainting every
+    // 15 ms reaches settle_timeout_ms without an error.
+    {
+        const shot = try caller.call("screenshot", "{{\"display\":0}}", .{});
+        _ = shot;
+        var wr: w.RECT = undefined;
+        _ = w.GetWindowRect(tw.window(), &wr);
+        const m = display.Mapping.of(0, backend.displays()[0].rect, display.default_long_side);
+        const c = m.toScreenshot(wr.left + 300, wr.top + 200);
+        const still = try caller.call("left_click", "{{\"coordinate\":[{d},{d}]}}", .{ c[0], c[1] });
+        tw.animate(true);
+        w.Sleep(50);
+        const t0 = qpcUs();
+        const busy = try caller.call("left_click", "{{\"coordinate\":[{d},{d}],\"settle_timeout_ms\":300,\"observe\":\"none\"}}", .{ c[0], c[1] });
+        _ = busy;
+        const busy2 = try caller.call("mouse_move", "{{\"coordinate\":[{d},{d}],\"settle_timeout_ms\":300}}", .{ c[0], c[1] });
+        const busy_ms = (qpcUs() - t0) / 1000;
+        tw.animate(false);
+        w.Sleep(100);
+        const settled = std.mem.indexOf(u8, still.text, "settled in ") != null and std.mem.indexOf(u8, still.text, "window=0x") != null;
+        const timed_out = !busy2.is_error and std.mem.indexOf(u8, busy2.text, "settle timeout") != null;
+        if (settled and timed_out) report.ok("settle", "still window: `{s}`; animated window: settle timeout after {d} ms", .{ std.mem.sliceTo(still.text, '\n'), busy_ms }) else report.fail("settle", "still: {s}\nanimated: {s}", .{ still.text, busy2.text });
+    }
+
+    // ui-timeout: a window that stops answering yields a partial tree or a
+    // bounded error, and the worker still serves other windows.
+    {
+        tw.hang(1500);
+        w.Sleep(50);
+        const t0 = qpcUs();
+        const hung = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{handle});
+        const hung_ms = (qpcUs() - t0) / 1000;
+        const taskbar = w.FindWindowW(std.unicode.utf8ToUtf16LeStringLiteral("Shell_TrayWnd"), null);
+        const t1 = qpcUs();
+        const other = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{@intFromPtr(taskbar)});
+        const other_ms = (qpcUs() - t1) / 1000;
+        w.Sleep(1500);
+        const partial = std.mem.startsWith(u8, hung.text, "{partial: timeout}") or (hung.is_error and std.mem.indexOf(u8, hung.text, "ne répond plus") != null);
+        if (hung_ms < 1000 and !other.is_error and other_ms < 1000) {
+            if (partial) report.ok("ui-timeout", "hung window answered in {d} ms (`{s}`), taskbar tree next in {d} ms", .{ hung_ms, std.mem.sliceTo(hung.text, '\n'), other_ms }) else report.ok("ui-timeout", "hung window still answered in {d} ms (provider in-process, no timeout needed), taskbar tree next in {d} ms", .{ hung_ms, other_ms });
+        } else report.fail("ui-timeout", "hung window {d} ms ({s}), taskbar {d} ms error={}", .{ hung_ms, std.mem.sliceTo(hung.text, '\n'), other_ms, other.is_error });
+    }
+
+    // ui-stale: an element destroyed between ui_tree and ui_act.
+    {
+        var tmp: TestWindow = .{ .rect = .{ .left = 40, .top = 40, .right = 400, .bottom = 300 } };
+        try tmp.start();
+        w.Sleep(150);
+        const t = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{@intFromPtr(tmp.window())});
+        const tid = idOf(t.text, button_line);
+        tmp.stop();
+        w.Sleep(100);
+        if (tid) |sid| {
+            const r = try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"invoke\"}}", .{sid});
+            const want = try std.fmt.allocPrint(caller.arena, "Élément {s} introuvable : rappelle ui_tree", .{sid});
+            if (r.is_error and std.mem.eql(u8, r.text, want)) report.ok("ui-stale", "{s}", .{r.text}) else report.fail("ui-stale", "{s}", .{r.text});
+        } else report.fail("ui-stale", "temporary button not in the tree:\n{s}", .{t.text});
+    }
 }
 
 fn dpiUnaware(report: *Report, caller: *Caller, main: *TestWindow, primary: display.Rect) !void {

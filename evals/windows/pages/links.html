@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Liste neo-compute</title>
+  <style>body { font: 16px system-ui, sans-serif; margin: 2rem; } li { margin: 0.4rem 0; }</style>
+</head>
+<body>
+  <h1>Articles</h1>
+  <ul id="list"></ul>
+  <script>
+    // The opened article goes to the title, which the task check reads.
+    const list = document.getElementById('list');
+    for (let i = 1; i <= 60; i++) {
+      const a = document.createElement('a');
+      a.href = '#';
+      a.textContent = 'Article ' + i;
+      a.onclick = () => { document.title = 'ouvert article ' + i; return false; };
+      const li = document.createElement('li');
+      li.appendChild(a);
+      list.appendChild(li);
+    }
+  </script>
+</body>
+</html>

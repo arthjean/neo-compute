@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Conditions neo-compute</title>
+  <style>body { font: 16px system-ui, sans-serif; margin: 2rem; max-width: 50rem; }</style>
+</head>
+<body>
+  <h1>Conditions d'utilisation</h1>
+  <div id="text"></div>
+  <form id="f">
+    <label><input name="lu" type="checkbox"> J'ai lu les conditions</label>
+    <button type="submit">Confirmer</button>
+  </form>
+  <script>
+    const text = document.getElementById('text');
+    for (let i = 1; i <= 120; i++) {
+      const p = document.createElement('p');
+      p.textContent = 'Article ' + i + '. Le service est fourni tel quel, sans garantie d\'aucune sorte, et peut évoluer sans préavis.';
+      text.appendChild(p);
+    }
+    // The outcome goes to the title, which the task check reads.
+    document.getElementById('f').onsubmit = (e) => {
+      e.preventDefault();
+      document.title = e.target.lu.checked ? 'confirmé' : 'non confirmé';
+    };
+  </script>
+</body>
+</html>

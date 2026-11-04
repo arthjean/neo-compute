@@ -242,41 +242,34 @@ pub fn holdKey(ctx: anytype, text: []const u8, duration: f64) Result {
     return Result.text("ok");
 }
 
-/// Types `text` as Unicode key events, in batches of at most
-/// `input.type_batch_units` UTF-16 units (64 events) per backend call. New
-/// lines are sent as the Return key; surrogate pairs never straddle batches.
+/// Types `text` one character per backend call (a surrogate pair stays
+/// whole, so at most 4 events per SendInput), new lines as the Return key.
+/// A backend that declares `type_pace_ns` gets that pause after each
+/// character: Windows needs it because a target that pumps late reads queued
+/// VK_PACKET characters wrong. Progress goes out every 100 characters.
 pub fn typeText(ctx: anytype, text: []const u8) Result {
     const view = std.unicode.Utf8View.init(text) catch return Result.err("Texte invalide : UTF-8 attendu.");
     if (foregroundCheck(ctx)) |r| return r;
-    var batch: [input.type_batch_units]u16 = undefined;
-    var len: usize = 0;
-    var batches: usize = 0;
+    const Backend = @typeInfo(@TypeOf(ctx.backend)).pointer.child;
+    const pace: u64 = if (@hasDecl(Backend, "type_pace_ns")) Backend.type_pace_ns else 0;
     var it = view.iterator();
     var prev_cr = false;
+    var count: usize = 0;
     while (it.nextCodepoint()) |cp| {
-        const is_newline = cp == '\n' or cp == '\r';
-        if (is_newline or len + 2 > batch.len) {
-            if (len > 0) {
-                ctx.backend.typeText(batch[0..len]) catch |e| return inputError(e);
-                len = 0;
-                batches += 1;
-                // Yield between batches: keeps the target's queue from
-                // overflowing and makes long input cancellable.
-                if (!ctx.sleep(std.time.ns_per_ms)) return Result.err("type annulé.");
-                if (batches % 32 == 0) ctx.progress(@floatFromInt(it.i), @floatFromInt(text.len));
-            }
-        }
-        if (is_newline) {
-            if (!(cp == '\n' and prev_cr)) ctx.backend.keyCombo(.{ .key = .{ .key = .enter } }, .tap) catch |e| return inputError(e);
+        if (cp == '\n' or cp == '\r') {
+            const skip = cp == '\n' and prev_cr;
             prev_cr = cp == '\r';
-            continue;
+            if (skip) continue;
+            ctx.backend.keyCombo(.{ .key = .{ .key = .enter } }, .tap) catch |e| return inputError(e);
+        } else {
+            prev_cr = false;
+            var units: [2]u16 = undefined;
+            const n = utf16Of(cp, &units);
+            ctx.backend.typeText(units[0..n]) catch |e| return inputError(e);
         }
-        prev_cr = false;
-        var units: [2]u16 = undefined;
-        const n = utf16Of(cp, &units);
-        @memcpy(batch[len..][0..n], units[0..n]);
-        len += n;
+        count += 1;
+        if (!ctx.sleep(pace)) return Result.err("type annulé.");
+        if (count % 100 == 0) ctx.progress(@floatFromInt(it.i), @floatFromInt(text.len));
     }
-    if (len > 0) ctx.backend.typeText(batch[0..len]) catch |e| return inputError(e);
     return Result.text("ok");
 }

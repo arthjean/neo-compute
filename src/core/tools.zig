@@ -1,33 +1,34 @@
 //! Tool declarations. The first 17 mirror `computer_toolset_20260801`
 //! (names and parameters), the last 5 are neo-compute's accessibility and
-//! window tools. Each `run` receives a `*Ctx(Backend)` and returns a Result.
+//! window tools (`extension`). Each `run` receives a `*Ctx(Backend)` and
+//! returns a Result. Action tools take the optional `observe` and
+//! `settle_timeout_ms` extensions (US-015), explained once in the MCP
+//! instructions rather than per field to stay within the definition budget.
 
 const std = @import("std");
 const Result = @import("mcp.zig").Result;
 const screen = @import("screen.zig");
 const actions = @import("actions.zig");
 const display = @import("display.zig");
+const a11y = @import("a11y.zig");
+const uitree = @import("uitree.zig");
 const fmt = @import("session.zig").fmt;
 
 const Point = [2]i32;
+const Observe = a11y.Observe;
+const settle_info = .{ .maximum = a11y.max_settle_ms };
 
-const coordinate_info = .{ .description = "[x, y] in screenshot pixels" };
-const modifier_info = .{ .description = "Held modifiers, e.g. shift or ctrl+shift" };
-
-/// Behavior lands with the Windows perception and action epics; until then
-/// the tool is listed and validated but reports that it is unavailable.
-fn unavailable(ctx: anytype, comptime name: []const u8, comptime story: []const u8) Result {
-    _ = ctx;
-    return Result.err(name ++ " : pas encore disponible sur ce serveur (" ++ story ++ "). Aucune action exécutée.");
+/// Observation after an action (US-015), from the tool's arguments.
+fn observed(ctx: anytype, r: Result, args: anytype, window: ?u64) Result {
+    return a11y.observeAfter(ctx, r, args.observe, args.settle_timeout_ms, window);
 }
 
 pub const screenshot = struct {
     pub const name = "screenshot";
-    pub const description = "Capture the display as a JPEG image.";
+    pub const description = "JPEG screenshot of a display.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true };
     pub const Args = struct {
         display: ?u32 = null,
-        pub const field_info = .{ .display = .{ .description = "Display index; default: the foreground window's" } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         return screen.screenshot(ctx, args.display);
@@ -36,11 +37,10 @@ pub const screenshot = struct {
 
 pub const zoom = struct {
     pub const name = "zoom";
-    pub const description = "Return a region of the last screenshot at full resolution.";
+    pub const description = "Region of the last screenshot at full resolution.";
     pub const annotations = .{ .read_only = true, .idempotent = true };
     pub const Args = struct {
         region: [4]i32,
-        pub const field_info = .{ .region = .{ .description = "[x0, y0, x1, y1] in screenshot pixels" } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         return screen.zoom(ctx, args.region);
@@ -55,31 +55,35 @@ fn ClickTool(comptime tool_name: []const u8, comptime desc: []const u8, comptime
         pub const Args = struct {
             coordinate: ?Point = null,
             text: ?[]const u8 = null,
-            pub const field_info = .{ .coordinate = coordinate_info, .text = modifier_info };
+            observe: ?Observe = null,
+            settle_timeout_ms: ?u32 = null,
+            pub const field_info = .{ .settle_timeout_ms = settle_info };
         };
         pub fn run(ctx: anytype, args: Args) Result {
-            return actions.click(ctx, args.coordinate, args.text, button, count);
+            return observed(ctx, actions.click(ctx, args.coordinate, args.text, button, count), args, null);
         }
     };
 }
 
-pub const left_click = ClickTool("left_click", "Left click at coordinate, or at the cursor when omitted.", true, .left, 1);
-pub const right_click = ClickTool("right_click", "Right click at coordinate, or at the cursor.", false, .right, 1);
-pub const middle_click = ClickTool("middle_click", "Middle click at coordinate, or at the cursor.", false, .middle, 1);
-pub const double_click = ClickTool("double_click", "Double click at coordinate, or at the cursor.", false, .left, 2);
-pub const triple_click = ClickTool("triple_click", "Triple click at coordinate, or at the cursor.", false, .left, 3);
+pub const left_click = ClickTool("left_click", "Left click at coordinate or the cursor.", true, .left, 1);
+pub const right_click = ClickTool("right_click", "Right click at coordinate or the cursor.", false, .right, 1);
+pub const middle_click = ClickTool("middle_click", "Middle click at coordinate or the cursor.", false, .middle, 1);
+pub const double_click = ClickTool("double_click", "Double click at coordinate or the cursor.", false, .left, 2);
+pub const triple_click = ClickTool("triple_click", "Triple click at coordinate or the cursor.", false, .left, 3);
 
 pub const left_click_drag = struct {
     pub const name = "left_click_drag";
-    pub const description = "Press at start_coordinate, drag to coordinate, release.";
+    pub const description = "Drag from start_coordinate to coordinate.";
     pub const Args = struct {
         start_coordinate: Point,
         coordinate: Point,
         text: ?[]const u8 = null,
-        pub const field_info = .{ .start_coordinate = coordinate_info, .coordinate = coordinate_info, .text = modifier_info };
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .settle_timeout_ms = settle_info };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return actions.drag(ctx, args.start_coordinate, args.coordinate, args.text);
+        return observed(ctx, actions.drag(ctx, args.start_coordinate, args.coordinate, args.text), args, null);
     }
 };
 
@@ -88,10 +92,12 @@ pub const mouse_move = struct {
     pub const description = "Move the cursor without clicking.";
     pub const Args = struct {
         coordinate: Point,
-        pub const field_info = .{ .coordinate = coordinate_info };
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .settle_timeout_ms = settle_info };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return actions.move(ctx, args.coordinate);
+        return observed(ctx, actions.move(ctx, args.coordinate), args, null);
     }
 };
 
@@ -99,10 +105,13 @@ fn ButtonTool(comptime tool_name: []const u8, comptime desc: []const u8, comptim
     return struct {
         pub const name = tool_name;
         pub const description = desc;
-        pub const Args = struct {};
+        pub const Args = struct {
+            observe: ?Observe = null,
+            settle_timeout_ms: ?u32 = null,
+            pub const field_info = .{ .settle_timeout_ms = settle_info };
+        };
         pub fn run(ctx: anytype, args: Args) Result {
-            _ = args;
-            return actions.button(ctx, down);
+            return observed(ctx, actions.button(ctx, down), args, null);
         }
     };
 }
@@ -112,7 +121,7 @@ pub const left_mouse_up = ButtonTool("left_mouse_up", "Release the left button a
 
 pub const cursor_position = struct {
     pub const name = "cursor_position";
-    pub const description = "Report the cursor position in screenshot pixels.";
+    pub const description = "Cursor position in screenshot pixels.";
     pub const annotations = .{ .read_only = true, .idempotent = true };
     pub const Args = struct {};
     pub fn run(ctx: anytype, args: Args) Result {
@@ -123,60 +132,70 @@ pub const cursor_position = struct {
 
 pub const scroll = struct {
     pub const name = "scroll";
-    pub const description = "Scroll at coordinate, or at the cursor.";
+    pub const description = "Scroll at coordinate or the cursor.";
     pub const annotations = .{ .always_load = true };
     pub const Args = struct {
         scroll_direction: enum { up, down, left, right },
         scroll_amount: u32,
         coordinate: ?Point = null,
         text: ?[]const u8 = null,
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
         pub const field_info = .{
-            .scroll_amount = .{ .description = "Wheel clicks", .minimum = 1, .maximum = 100 },
-            .coordinate = coordinate_info,
-            .text = modifier_info,
+            .scroll_amount = .{ .minimum = 1, .maximum = 100 },
+            .settle_timeout_ms = settle_info,
         };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return actions.scroll(ctx, args.scroll_direction, args.scroll_amount, args.coordinate, args.text);
+        return observed(ctx, actions.scroll(ctx, args.scroll_direction, args.scroll_amount, args.coordinate, args.text), args, null);
     }
 };
 
 pub const @"type" = struct {
     pub const name = "type";
-    pub const description = "Type literal text at the keyboard focus.";
+    pub const description = "Type text at the keyboard focus.";
     pub const annotations = .{ .always_load = true };
-    pub const Args = struct { text: []const u8 };
+    pub const Args = struct {
+        text: []const u8,
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .settle_timeout_ms = settle_info };
+    };
     pub fn run(ctx: anytype, args: Args) Result {
-        return actions.typeText(ctx, args.text);
+        return observed(ctx, actions.typeText(ctx, args.text), args, null);
     }
 };
 
 pub const key = struct {
     pub const name = "key";
-    pub const description = "Press a key or +-joined combination (Return, ctrl+s, alt+Tab) repeat times.";
+    pub const description = "Press a key or combination (Return, ctrl+s) repeat times.";
     pub const annotations = .{ .always_load = true };
     pub const Args = struct {
         text: []const u8,
         repeat: u32 = 1,
-        pub const field_info = .{ .repeat = .{ .minimum = 1, .maximum = 100 } };
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .repeat = .{ .minimum = 1, .maximum = 100 }, .settle_timeout_ms = settle_info };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return actions.key(ctx, args.text, args.repeat);
+        return observed(ctx, actions.key(ctx, args.text, args.repeat), args, null);
     }
 };
 
-const duration_info = .{ .description = "Seconds", .minimum = 0, .maximum = 300 };
+const duration_info = .{ .minimum = 0, .maximum = 300 };
 
 pub const hold_key = struct {
     pub const name = "hold_key";
-    pub const description = "Hold a key or combination down for duration seconds.";
+    pub const description = "Hold a key or combination for duration seconds.";
     pub const Args = struct {
         text: []const u8,
         duration: f64,
-        pub const field_info = .{ .duration = duration_info };
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .duration = duration_info, .settle_timeout_ms = settle_info };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return actions.holdKey(ctx, args.text, args.duration);
+        return observed(ctx, actions.holdKey(ctx, args.text, args.duration), args, null);
     }
 };
 
@@ -195,60 +214,75 @@ pub const wait = struct {
 
 pub const ui_tree = struct {
     pub const name = "ui_tree";
-    pub const description = "Pruned accessibility tree of the foreground window, one line per element with its id.";
+    pub const description = "Accessibility tree of the foreground window, one line per element id; since=last: changes only.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true };
+    pub const extension = true;
     pub const Args = struct {
         window: ?[]const u8 = null,
         since: ?enum { last } = null,
-        pub const field_info = .{
-            .window = .{ .description = "Window handle from window_list" },
-            .since = .{ .description = "last: only changes since the previous tree" },
-        };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        _ = args;
-        return unavailable(ctx, name, "US-011");
+        const handle = switch (optionalHandle(ctx, args.window)) {
+            .ok => |h| h,
+            .err => |r| return r,
+        };
+        return a11y.tree(ctx, handle, args.since != null);
     }
 };
 
 pub const ui_find = struct {
     pub const name = "ui_find";
-    pub const description = "Find elements by role, name substring or state; at most 20 lines.";
+    pub const description = "Find elements: name words, role:<role>, state:<state>; at most 20 lines.";
     pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const extension = true;
     pub const Args = struct {
         query: []const u8,
         window: ?[]const u8 = null,
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        _ = args;
-        return unavailable(ctx, name, "US-013");
+        const handle = switch (optionalHandle(ctx, args.window)) {
+            .ok => |h| h,
+            .err => |r| return r,
+        };
+        return a11y.find(ctx, args.query, handle);
     }
 };
 
 pub const ui_act = struct {
     pub const name = "ui_act";
-    pub const description = "Act on an element by id from ui_tree or ui_find, without coordinates.";
+    pub const description = "Act on an element id from ui_tree or ui_find.";
     pub const annotations = .{ .always_load = true };
+    pub const extension = true;
     pub const Args = struct {
         id: []const u8,
-        action: enum { invoke, toggle, select, expand, collapse, set_value, focus, scroll_into_view },
+        action: uitree.Action,
         value: ?[]const u8 = null,
         fallback: ?enum { click } = null,
-        pub const field_info = .{ .value = .{ .description = "Text for set_value" } };
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .settle_timeout_ms = settle_info };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        _ = args;
-        return unavailable(ctx, name, "US-013");
+        const r = a11y.act(ctx, args.id, args.action, args.value, args.fallback != null);
+        return observed(ctx, r, args, a11y.windowOf(ctx, args.id));
     }
 };
 
+/// The window handle of an optional `window` argument.
+fn optionalHandle(ctx: anytype, text: ?[]const u8) union(enum) { ok: ?u64, err: Result } {
+    const t = text orelse return .{ .ok = null };
+    if (parseHandle(t)) |h| return .{ .ok = h };
+    return .{ .err = Result.err(fmt(ctx.arena, "Handle `{s}` invalide : utilise un handle de window_list (ex. 0x1a2b).", .{t})) };
+}
+
 pub const window_list = struct {
     pub const name = "window_list";
-    pub const description = "List visible top-level windows with handle, title, process and rectangle.";
+    pub const description = "Visible top-level windows: handle, title, process, rectangle.";
     pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const extension = true;
     pub const Args = struct {
         include_hidden: bool = false,
-        pub const field_info = .{ .include_hidden = .{ .description = "Include cloaked windows (other virtual desktops)" } };
+        pub const field_info = .{ .include_hidden = .{ .description = "Include cloaked windows" } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         return windowList(ctx, args.include_hidden);
@@ -257,19 +291,23 @@ pub const window_list = struct {
 
 pub const window_focus = struct {
     pub const name = "window_focus";
-    pub const description = "Bring a window to the foreground, restoring it if minimized.";
+    pub const description = "Bring a window to the foreground, restoring it.";
+    pub const extension = true;
     pub const Args = struct {
         window: []const u8,
-        pub const field_info = .{ .window = .{ .description = "Handle from window_list" } };
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .settle_timeout_ms = settle_info };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = parseHandle(args.window) orelse
             return Result.err(fmt(ctx.arena, "Handle `{s}` invalide : utilise un handle de window_list (ex. 0x1a2b).", .{args.window}));
-        return switch (ctx.backend.focusWindow(handle)) {
+        const r = switch (ctx.backend.focusWindow(handle)) {
             .ok => Result.text(fmt(ctx.arena, "0x{x} au premier plan", .{handle})),
             .closed => Result.err("Fenêtre fermée : rappelle window_list"),
             .refused => Result.err(fmt(ctx.arena, "Fenêtre 0x{x} : Windows a refusé le premier plan. Clique sur la fenêtre ou réessaie.", .{handle})),
         };
+        return observed(ctx, r, args, handle);
     }
 };
 

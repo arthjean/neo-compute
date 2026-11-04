@@ -152,6 +152,15 @@ fn edgeToPhysical(v: i32, scale: f64, extent: i32) i32 {
     return std.math.clamp(p, 0, extent);
 }
 
+/// Scale factor without trailing zeros (2, 1.5, 1.333).
+pub fn scaleText(buf: []u8, scale: f64) []const u8 {
+    const s = std.fmt.bufPrint(buf, "{d:.3}", .{scale}) catch return "?";
+    var end = s.len;
+    while (end > 0 and s[end - 1] == '0') end -= 1;
+    if (end > 0 and s[end - 1] == '.') end -= 1;
+    return s[0..end];
+}
+
 /// Index of the display containing (x, y), else the one nearest to it.
 pub fn displayAt(displays: []const Display, x: i32, y: i32) ?usize {
     var best: ?usize = null;

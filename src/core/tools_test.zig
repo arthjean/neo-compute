@@ -12,27 +12,31 @@ const mcp_test = @import("mcp_test.zig");
 
 const Server = mcp.Server(Fake, tools.all);
 
-const Harness = struct {
+pub const Harness = struct {
     backend: Fake = .{},
     server: Server = undefined,
     out: std.Io.Writer.Allocating = undefined,
     arena: std.heap.ArenaAllocator = undefined,
     next_id: u32 = 1,
 
-    fn init(self: *Harness, gpa: std.mem.Allocator) void {
-        self.server = .init(gpa, testing.io, &self.backend, .{});
+    pub fn init(self: *Harness, gpa: std.mem.Allocator) void {
+        self.initWith(gpa, .{});
+    }
+
+    pub fn initWith(self: *Harness, gpa: std.mem.Allocator, options: mcp.Options) void {
+        self.server = .init(gpa, testing.io, &self.backend, options);
         self.out = .init(testing.allocator);
         self.arena = .init(testing.allocator);
     }
 
-    fn deinit(self: *Harness) void {
+    pub fn deinit(self: *Harness) void {
         self.server.deinit();
         self.out.deinit();
         self.arena.deinit();
     }
 
     /// Calls `tool` with `args` (JSON) and returns the parsed `result`.
-    fn call(self: *Harness, tool: []const u8, args: []const u8) !std.json.ObjectMap {
+    pub fn call(self: *Harness, tool: []const u8, args: []const u8) !std.json.ObjectMap {
         self.out.clearRetainingCapacity();
         const a = self.arena.allocator();
         const line = try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\",\"arguments\":{s}}}}}", .{ self.next_id, tool, args });
@@ -49,21 +53,21 @@ const Harness = struct {
     }
 };
 
-fn isError(res: std.json.ObjectMap) bool {
+pub fn isError(res: std.json.ObjectMap) bool {
     return if (res.get("isError")) |e| e.bool else false;
 }
 
-fn block(res: std.json.ObjectMap, i: usize) std.json.ObjectMap {
+pub fn block(res: std.json.ObjectMap, i: usize) std.json.ObjectMap {
     return res.get("content").?.array.items[i].object;
 }
 
-fn text(res: std.json.ObjectMap) []const u8 {
+pub fn text(res: std.json.ObjectMap) []const u8 {
     const items = res.get("content").?.array.items;
     for (items) |it| if (std.mem.eql(u8, it.object.get("type").?.string, "text")) return it.object.get("text").?.string;
     return "";
 }
 
-fn expectContains(haystack: []const u8, needle: []const u8) !void {
+pub fn expectContains(haystack: []const u8, needle: []const u8) !void {
     if (std.mem.indexOf(u8, haystack, needle) == null) {
         std.debug.print("`{s}` lacks `{s}`\n", .{ haystack, needle });
         return error.TestExpectedEqual;
@@ -300,7 +304,7 @@ test "key sends the parsed combination repeat times and suggests names for unkno
     try testing.expect(isError(try h.call("key", "{\"text\":\"ctrl+☺\"}")));
 }
 
-test "type sends UTF-16 in batches of at most 64 events, emoji and new lines included" {
+test "type sends one character per SendInput, emoji and new lines included" {
     var h: Harness = .{};
     h.init(testing.allocator);
     defer h.deinit();
@@ -309,6 +313,9 @@ test "type sends UTF-16 in batches of at most 64 events, emoji and new lines inc
     // Each new line (\n and \r\n) is one Return key.
     try testing.expectEqual(@as(usize, 2), h.backend.key_len);
     try testing.expectEqual(.enter, h.backend.key_calls[0].combo.key.key);
+    // One backend call per character: a target that pumps late misreads a
+    // burst of VK_PACKET events (Notepad typed "Fin du .........").
+    try testing.expectEqual(@as(usize, 5), h.backend.type_calls);
 
     h.backend.typed_len = 0;
     // 900 units; surrogate pairs must not be split across batches.
@@ -321,7 +328,7 @@ test "type sends UTF-16 in batches of at most 64 events, emoji and new lines inc
     const args = try std.fmt.allocPrint(h.arena.allocator(), "{{\"text\":\"{s}\"}}", .{long});
     try testing.expect(!isError(try h.call("type", args)));
     try testing.expectEqual(@as(usize, 900), h.backend.typed_len);
-    try testing.expect(h.backend.largest_type_batch <= 64);
+    try testing.expectEqual(@as(usize, 4), h.backend.largest_type_batch);
     for (0..300) |i| try testing.expectEqual(@as(u16, 0xD83D), h.backend.typed[i * 3]);
 }
 

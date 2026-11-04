@@ -67,7 +67,7 @@ fn typeSchema(comptime T: type) []const u8 {
         .bool => "{\"type\":\"boolean\"}",
         .int => "{\"type\":\"integer\"}",
         .float => "{\"type\":\"number\"}",
-        .@"enum" => |e| blk: {
+        .@"enum" => |e| if (@hasDecl(T, "json_schema")) T.json_schema else blk: {
             var list: []const u8 = "";
             for (e.field_names, 0..) |n, i| list = list ++ (if (i == 0) "" else ",") ++ jsonString(n);
             break :blk "{\"type\":\"string\",\"enum\":[" ++ list ++ "]}";

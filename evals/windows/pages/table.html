@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Catalogue neo-compute</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 2rem; }
+    td, th { padding: 0.3rem 1rem; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Catalogue</h1>
+  <form id="f">
+    <table>
+      <thead><tr><th>Choix</th><th>Produit</th><th>Prix</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <button type="submit">Valider</button>
+  </form>
+  <script>
+    const products = [
+      ['Cahier A4', '3,40 €'], ['Agrafeuse', '7,90 €'], ['Classeur', '4,10 €'], ['Stylo bleu', '1,20 €'],
+      ['Ramette de papier', '5,60 €'], ['Trousse', '6,30 €'], ['Règle 30 cm', '1,90 €'], ['Calculatrice', '12,50 €'],
+      ['Surligneur', '1,45 €'], ['Gomme', '1,35 €'], ['Ciseaux', '3,80 €'], ['Colle', '2,25 €'],
+    ];
+    const rows = document.getElementById('rows');
+    for (const [name, price] of products) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td><input type="checkbox" aria-label="Choisir ' + name + '" value="' + name + '"></td><td>' + name + '</td><td>' + price + '</td>';
+      rows.appendChild(tr);
+    }
+    // The checked products go to the title, which the task check reads.
+    document.getElementById('f').onsubmit = (e) => {
+      e.preventDefault();
+      const picked = [...document.querySelectorAll('input:checked')].map((i) => i.value);
+      document.title = 'validé ' + picked.join(', ');
+    };
+  </script>
+</body>
+</html>

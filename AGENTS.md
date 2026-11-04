@@ -20,9 +20,10 @@ asking. Stop and report to Arthur instead of proceeding when:
 - passing the bench gate would require rewriting `bench/baseline.json`. Use
   `--write-baseline` only for a new scenario or at his request, never to clear
   a regression;
-- a task needs `zig build calibrate-tokens`: it calls `claude -p` on his Claude
-  Code subscription. There is no Anthropic API key: never add a step that
-  needs `ANTHROPIC_API_KEY` or direct API calls.
+- a task needs `zig build calibrate-tokens` or `evals/run.ps1` without
+  `-DryRun`: both call `claude -p` on his Claude Code subscription. There is
+  no Anthropic API key: never add a step that needs `ANTHROPIC_API_KEY` or
+  direct API calls.
 
 Every change keeps these product invariants (PRD FR-07 to FR-18):
 
@@ -46,12 +47,14 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig` |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates |
+| `zig build bench -- <app>` | One application scenario (`notepad`, `explorer`, `settings`, `calculator`, `chrome`, `vscode`): opens the app, times `ui_tree`, closes it; figures in `bench/apps.md` |
+| `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 tasks: scripted setup, final-state check and cleanup without `claude -p`. Without `-DryRun` it runs the campaign (see Boundaries); `evals/report.ps1` writes `evals/reports/<date>.md` |
 
 A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
 also needs `selftest`, with its output in the report. `selftest` moves the
-cursor, types, and raises a topmost window; `bench` captures the screen and
-reads the taskbar. Run them one at a time.
+cursor, types, and raises a topmost window; `bench` captures the screen,
+reads the taskbar and raises a topmost test window (`settle`). Run them one at a time.
 
 ## Architecture and gotchas
 

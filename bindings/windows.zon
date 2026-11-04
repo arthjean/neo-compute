@@ -73,5 +73,14 @@
         "SWP_NOZORDER",                        "SWP_NOACTIVATE",                     "GetModuleFileNameW",                         "WM_KEYDOWN",                     "WM_MOUSEWHEEL",
         "WM_RBUTTONDOWN",                      "WM_APP",                             "SetWindowTextW",                             "SetThreadDpiAwarenessContext",   "DPI_AWARENESS_CONTEXT_UNAWARE",
         "ClientToScreen",
+
+        // UI Automation worker (US-011): job signaling, timeouts, desktop fallback
+                             "CreateEventW",                       "SetEvent",                                   "WaitForSingleObject",            "INFINITE",
+        "UIA_E_TIMEOUT",                       "GetClassNameW",                      "SendMessageTimeoutW",                        "InternalGetWindowText",          "SMTO_ABORTIFHUNG",
+        "WM_NULL",                             "IsWindowEnabled",
+
+        // Selftest fixtures for the accessibility tools
+                           "ES_PASSWORD",                                "WM_COMMAND",                     "BN_CLICKED",
+        "WS_BORDER",                           "KillTimer",                          "GetWindowTextLengthW",
     },
 }

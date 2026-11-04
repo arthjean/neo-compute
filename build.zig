@@ -112,6 +112,8 @@ pub fn build(b: *std.Build) void {
     bench_run.addArgs(&.{ "bench", "all" });
     bench_run.addPassthruArgs();
     bench_run.has_side_effects = true;
+    // The explorer scenario runs the C witness probe from zig-out/bin.
+    bench_run.step.dependOn(b.getInstallStep());
     b.step("bench", "Run the benchmark scenarios (ReleaseFast)").dependOn(&bench_run.step);
 
     // Developer-only: measures the bytes/token ratio through Claude Code

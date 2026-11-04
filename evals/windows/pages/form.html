@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Formulaire neo-compute</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 2rem; }
+    label { display: block; margin: 0.75rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Inscription</h1>
+  <!-- The submitted state goes to the title, which the task check reads. -->
+  <form onsubmit="document.title = 'envoyé nom=' + this.nom.value + ';pays=' + this.pays.value + ';abonne=' + (this.abonne.checked ? 'oui' : 'non'); return false;">
+    <label>Nom <input name="nom" type="text"></label>
+    <label>Pays
+      <select name="pays"><option>France</option><option>Belgique</option><option>Suisse</option></select>
+    </label>
+    <label><input name="abonne" type="checkbox"> Recevoir les nouvelles</label>
+    <button type="submit">Envoyer</button>
+  </form>
+</body>
+</html>

@@ -17,8 +17,8 @@ else
 pub const Server = mcp.Server(Backend, tools.all);
 
 const usage =
-    \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920]
-    \\       neo-compute bench <all|transport|capture|snapshot|screenshot|window_list> [--iterations N]
+    \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision]
+    \\       neo-compute bench <all|transport|diff|capture|snapshot|screenshot|window_list|ui_tree|settle|APP> [--iterations N]
     \\                         [--check BASELINE.json] [--write-baseline FILE]
     \\       neo-compute selftest
     \\       neo-compute --version
@@ -33,6 +33,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     var trace = false;
     var screenshot_size: u32 = display.default_long_side;
+    var mode: mcp.Mode = .a11y;
     var i: usize = 1;
     if (i < args.len and std.mem.eql(u8, args[i], "serve")) i += 1;
     while (i < args.len) : (i += 1) {
@@ -47,6 +48,13 @@ pub fn main(init: std.process.Init) !u8 {
                 return 2;
             }
             i += 1;
+        } else if (std.mem.eql(u8, a, "--mode")) {
+            const v = if (i + 1 < args.len) args[i + 1] else "";
+            mode = std.meta.stringToEnum(mcp.Mode, v) orelse {
+                std.debug.print("neo-compute: --mode needs a11y or vision\n", .{});
+                return 2;
+            };
+            i += 1;
         } else if (std.mem.eql(u8, a, "--version")) {
             std.debug.print("{s} {s}\n", .{ mcp.server_name, mcp.server_version });
             return 0;
@@ -55,7 +63,7 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         }
     }
-    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size });
+    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size, .mode = mode });
 }
 
 fn serve(init: std.process.Init, options: mcp.Options) !u8 {
@@ -170,4 +178,6 @@ test {
     _ = @import("core/jpeg.zig");
     _ = @import("core/keys.zig");
     _ = @import("core/tools_test.zig");
+    _ = @import("core/uitree.zig");
+    _ = @import("core/a11y_test.zig");
 }

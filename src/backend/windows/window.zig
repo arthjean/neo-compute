@@ -57,6 +57,14 @@ pub fn isCloaked(hwnd: w.HWND) bool {
     return cloaked != 0;
 }
 
+/// The visible frame of a window, without the invisible resize borders.
+pub fn rect(hwnd: w.HWND) ?display.Rect {
+    if (hwnd == null or w.IsWindow(hwnd) == 0) return null;
+    var r: w.RECT = undefined;
+    if (w.DwmGetWindowAttribute(hwnd, @intCast(w.DWMWA_EXTENDED_FRAME_BOUNDS), &r, @sizeOf(w.RECT)) < 0 and w.GetWindowRect(hwnd, &r) == 0) return null;
+    return .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
+}
+
 /// Visible top-level windows with a title, top of the z-order first.
 /// Tool windows (palettes, overlays) are left out unless they ask for a
 /// taskbar button; cloaked ones (other virtual desktops, suspended apps)

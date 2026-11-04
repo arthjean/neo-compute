@@ -1,0 +1,125 @@
+{
+  "instructions": "Tu pilotes ce bureau Windows uniquement avec les outils MCP du serveur desk. Travaille seulement dans la fenêtre indiquée et ne touche à aucune autre fenêtre. Quand la tâche est faite, réponds TERMINÉ.",
+  "tasks": [
+    {
+      "id": "explorer-rename",
+      "app": "Explorateur",
+      "pilot": true,
+      "prompt": "Dans la fenêtre de l'Explorateur de fichiers ouverte sur le dossier explorer-rename, renomme le fichier texte rapport-brouillon en rapport-final (l'extension .txt ne change pas)."
+    },
+    {
+      "id": "calculator-multiply",
+      "app": "Calculatrice",
+      "pilot": true,
+      "prompt": "Dans la Calculatrice ouverte, calcule 1234 × 56 et laisse le résultat affiché."
+    },
+    {
+      "id": "settings-about",
+      "app": "Paramètres",
+      "pilot": true,
+      "prompt": "Dans la fenêtre Paramètres ouverte, va à la page Système > Informations système."
+    },
+    {
+      "id": "chrome-form",
+      "app": "Chrome",
+      "pilot": true,
+      "prompt": "Dans Chrome, sur la page « Formulaire neo-compute », saisis « Ada Lovelace » dans le champ Nom, choisis Belgique comme pays, coche « Recevoir les nouvelles », puis clique sur Envoyer."
+    },
+    {
+      "id": "vscode-edit",
+      "app": "VS Code",
+      "pilot": true,
+      "prompt": "Dans la fenêtre VS Code ouverte sur bonjour.txt, remplace tout le contenu du fichier par la seule ligne « neo-compute pilote », puis enregistre le fichier."
+    },
+    {
+      "id": "notepad-write",
+      "app": "Bloc-notes",
+      "pilot": false,
+      "prompt": "Dans le Bloc-notes ouvert sur liste.txt, écris exactement « Liste de courses : pain, lait, œufs », puis enregistre le fichier."
+    },
+    {
+      "id": "notepad-replace",
+      "app": "Bloc-notes",
+      "pilot": false,
+      "prompt": "Dans le Bloc-notes ouvert sur histoire.txt, remplace toutes les occurrences du mot « chat » par « chien », puis enregistre le fichier."
+    },
+    {
+      "id": "notepad-delete-line",
+      "app": "Bloc-notes",
+      "pilot": false,
+      "prompt": "Dans le Bloc-notes ouvert sur lignes.txt, supprime la ligne « Ligne 27 » (la ligne entière, sans laisser de ligne vide), puis enregistre le fichier."
+    },
+    {
+      "id": "notepad-append",
+      "app": "Bloc-notes",
+      "pilot": false,
+      "prompt": "Dans le Bloc-notes ouvert sur compte-rendu.txt, ajoute à la fin une nouvelle ligne « Fin du document. », puis enregistre le fichier."
+    },
+    {
+      "id": "explorer-newfolder",
+      "app": "Explorateur",
+      "pilot": false,
+      "prompt": "Dans la fenêtre de l'Explorateur de fichiers ouverte sur le dossier explorer-new, crée un nouveau dossier nommé « Archives 2026 »."
+    },
+    {
+      "id": "explorer-move",
+      "app": "Explorateur",
+      "pilot": false,
+      "prompt": "Dans la fenêtre de l'Explorateur de fichiers ouverte sur le dossier explorer-move, déplace le fichier fichier-23 dans le sous-dossier Tri."
+    },
+    {
+      "id": "settings-display",
+      "app": "Paramètres",
+      "pilot": false,
+      "prompt": "Dans la fenêtre Paramètres ouverte, va à la page Système > Écran."
+    },
+    {
+      "id": "settings-mouse-search",
+      "app": "Paramètres",
+      "pilot": false,
+      "prompt": "Dans la fenêtre Paramètres ouverte, utilise la zone de recherche des Paramètres pour ouvrir la page des paramètres de la souris."
+    },
+    {
+      "id": "chrome-link",
+      "app": "Chrome",
+      "pilot": false,
+      "prompt": "Dans Chrome, sur la page « Liste neo-compute », clique sur le lien « Article 47 »."
+    },
+    {
+      "id": "chrome-cheapest",
+      "app": "Chrome",
+      "pilot": false,
+      "prompt": "Dans Chrome, sur la page « Catalogue neo-compute », coche uniquement le produit le moins cher du tableau, puis clique sur Valider."
+    },
+    {
+      "id": "chrome-terms",
+      "app": "Chrome",
+      "pilot": false,
+      "prompt": "Dans Chrome, sur la page « Conditions neo-compute », coche « J'ai lu les conditions » tout en bas de la page, puis clique sur Confirmer."
+    },
+    {
+      "id": "vscode-line",
+      "app": "VS Code",
+      "pilot": false,
+      "prompt": "Dans la fenêtre VS Code ouverte sur journal.txt, remplace « TODO » par « FAIT » à la ligne 150, puis enregistre le fichier."
+    },
+    {
+      "id": "vscode-replace-all",
+      "app": "VS Code",
+      "pilot": false,
+      "prompt": "Dans la fenêtre VS Code ouverte sur config.txt, remplace toutes les occurrences de « foo » par « qux », puis enregistre le fichier."
+    },
+    {
+      "id": "calculator-percent",
+      "app": "Calculatrice",
+      "pilot": false,
+      "prompt": "Dans la Calculatrice ouverte, calcule 15 % de 240 et laisse le résultat affiché."
+    },
+    {
+      "id": "calculator-chain",
+      "app": "Calculatrice",
+      "pilot": false,
+      "prompt": "Dans la Calculatrice ouverte, calcule (48 + 52) ÷ 8 et laisse le résultat affiché."
+    }
+  ]
+}

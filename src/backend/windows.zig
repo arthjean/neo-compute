@@ -13,6 +13,8 @@ const capture_mod = @import("windows/capture.zig");
 const input = @import("windows/input.zig");
 const window = @import("windows/window.zig");
 const com = @import("windows/com.zig");
+const uia = @import("windows/uia.zig");
+const uitree = @import("../core/uitree.zig");
 const Capture = capture_mod.Capture;
 const fmt = @import("../core/session.zig").fmt;
 
@@ -25,12 +27,14 @@ pub const Windows = struct {
     names: [display.max_displays][96]u8 = undefined,
     displays_len: usize = 0,
     held: input.Held = .{},
+    ui: uia.Worker,
 
     pub fn init(gpa: std.mem.Allocator) Windows {
-        return .{ .gpa = gpa };
+        return .{ .gpa = gpa, .ui = .{ .gpa = gpa } };
     }
 
     pub fn deinit(self: *Windows) void {
+        self.ui.deinit();
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
     }
@@ -176,6 +180,13 @@ pub const Windows = struct {
         return input.keyCombo(&self.held, combo, action);
     }
 
+    /// Pause after each typed character. TranslateMessage reads a VK_PACKET
+    /// character from the thread's latest packet, not from the message, so a
+    /// target that pumps late (Notepad) turns queued characters into the last
+    /// one sent ("Fin du ........."). Measured on Notepad 11: 4 ms still
+    /// drops characters, 8 ms and more types them all.
+    pub const type_pace_ns = 10 * std.time.ns_per_ms;
+
     pub fn typeText(self: *Windows, units: []const u16) core_input.InputError!void {
         _ = self;
         return input.typeText(units);
@@ -191,7 +202,25 @@ pub const Windows = struct {
         if (self.held.count() > 0) input.releaseAll(&self.held);
     }
 
+    // ------------------------------------------------------------ accessibility
+
+    /// Tree of `window` (the foreground window when null), read on the UIA
+    /// worker thread.
+    pub fn uiSnapshot(self: *Windows, arena: std.mem.Allocator, hwnd: ?u64) uitree.SnapshotResult {
+        return self.ui.snapshot(arena, hwnd);
+    }
+
+    pub fn uiAct(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
+        return self.ui.act(arena, hwnd, key, action, value);
+    }
+
     // ------------------------------------------------------------ windows
+
+    /// Visible frame of `hwnd`, else of the foreground window (settling).
+    pub fn windowRect(self: *Windows, hwnd: ?u64) ?display.Rect {
+        _ = self;
+        return window.rect(if (hwnd) |h| @ptrFromInt(h) else w.GetForegroundWindow());
+    }
 
     pub fn listWindows(self: *Windows, arena: std.mem.Allocator, include_hidden: bool) error{OutOfMemory}![]const display.WindowInfo {
         _ = self;

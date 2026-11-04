@@ -15,6 +15,7 @@ const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 const mcp = @import("mcp.zig");
 const tools = @import("tools.zig");
 const Fake = @import("../backend/fake.zig").Fake;
+const uitree = @import("uitree.zig");
 
 pub const Stats = struct {
     p50_ns: u64,
@@ -25,18 +26,37 @@ pub const Stats = struct {
 };
 
 pub const Outcome = union(enum) {
-    ok: struct { iterations: usize, stages: [stage_count]?Stats, total: Stats },
+    ok: struct {
+        iterations: usize,
+        stages: [stage_count]?Stats,
+        total: Stats,
+        /// p95 of the C witness probe on the same window, for a
+        /// provider-bound budget (decision 0004).
+        witness_p95_ns: ?u64 = null,
+    },
     unsupported: []const u8,
 };
 
 pub const Result = struct { name: []const u8, outcome: Outcome };
 
-/// Absolute p95 budgets on a scenario's total (PRD Quality Gates).
-pub const budgets = [_]struct { scenario: []const u8, ms: f64 }{
+/// Absolute p95 budgets on a scenario's total (PRD Quality Gates). A
+/// provider-bound budget also passes when the total stays within 110 % of the
+/// C witness probe on the same window: the cost is then the provider's
+/// (decision 0004).
+pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: bool = false }{
     .{ .scenario = "capture", .ms = 8 },
     .{ .scenario = "screenshot", .ms = 30 },
     .{ .scenario = "snapshot", .ms = 50 },
     .{ .scenario = "window_list", .ms = 5 },
+    .{ .scenario = "diff", .ms = 3 },
+    .{ .scenario = "ui_tree", .ms = 50 },
+    // US-011 and US-014, on the reference applications (bench <app>).
+    .{ .scenario = "notepad", .ms = 50 },
+    .{ .scenario = "explorer", .ms = 50, .provider_bound = true },
+    .{ .scenario = "settings", .ms = 50 },
+    .{ .scenario = "calculator", .ms = 50 },
+    .{ .scenario = "chrome", .ms = 120 },
+    .{ .scenario = "vscode", .ms = 120 },
 };
 
 fn percentile(sorted: []const u64, p: f64) u64 {
@@ -76,7 +96,8 @@ pub fn measure(gpa: std.mem.Allocator, io: Io, scenario: anytype, iterations: us
             if (t.used[s]) used[s] = true;
             allocs[s] += t.allocs[s];
             // dispatch encloses the tool's own stages; count it once.
-            if (s != @backingInt(Stage.dispatch)) total += t.ns[s];
+            // settle waits on the application, not on neo-compute (US-015).
+            if (s != @backingInt(Stage.dispatch) and s != @backingInt(Stage.settle)) total += t.ns[s];
         }
         totals[i] = total;
     }
@@ -92,8 +113,9 @@ pub fn measure(gpa: std.mem.Allocator, io: Io, scenario: anytype, iterations: us
 // ---------------------------------------------------------------- transport scenario
 
 /// Parse + dispatch + serialize + write of `ping`, `tools/list` and a
-/// validated `tools/call`, through the real dispatcher, into a discarding
-/// writer. One iteration replays them `rounds` times so a sample spans tens
+/// validated `tools/call` without observation (the `diff` and `ui_tree`
+/// scenarios time observations), through the real dispatcher, into a
+/// discarding writer. One iteration replays them `rounds` times so a sample spans tens
 /// of microseconds rather than a few timer ticks.
 pub const Transport = struct {
     pub const name = "transport";
@@ -103,7 +125,7 @@ pub const Transport = struct {
     const lines = [_][]const u8{
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"key\",\"arguments\":{\"text\":\"ctrl+s\",\"repeat\":0}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"key\",\"arguments\":{\"text\":\"ctrl+s\",\"repeat\":0,\"observe\":\"none\"}}}",
     };
 
     backend: Fake = .{},
@@ -132,6 +154,43 @@ pub const Transport = struct {
                 if (self.server.timings.used[s]) t.used[s] = true;
             }
         };
+    }
+};
+
+// ---------------------------------------------------------------- diff scenario
+
+/// Diff of two 1,500-element trees with a few additions, removals and
+/// changes per iteration (US-012: p95 < 3 ms).
+pub const Diff = struct {
+    pub const name = "diff";
+    pub const default_iterations = 1000;
+    const n = 1500;
+
+    old: [n]uitree.Shown = undefined,
+    new: [n]uitree.Shown = undefined,
+    arena: std.heap.ArenaAllocator,
+    io: Io,
+    round: u32 = 0,
+
+    pub fn init(self: *Diff, gpa: std.mem.Allocator, io: Io) void {
+        self.* = .{ .arena = .init(gpa), .io = io };
+        for (&self.old, 0..) |*s, i| s.* = .{ .id = @intCast(i + 1), .role = .button, .states = .{}, .name_hash = i *% 0x9e3779b97f4a7c15, .value_hash = 0, .rect = .{ .x = @intCast(i % 40 * 30), .y = @intCast(i / 40 * 20), .w = 28, .h = 18 } };
+    }
+
+    pub fn step(self: *Diff, t: *Timings) !void {
+        _ = self.arena.reset(.retain_capacity);
+        self.new = self.old;
+        self.round +%= 1;
+        // 5 renamed, 5 moved, 5 replaced by new elements.
+        for (0..5) |k| {
+            const i = (self.round * 97 + k * 301) % n;
+            self.new[i].name_hash +%= 1;
+            self.new[(i + 1) % n].rect.x += 9;
+            self.new[(i + 2) % n].id = @intCast(n + 1 + self.round * 5 + k);
+        }
+        t.start(self.io, .diff);
+        defer t.stop(self.io, .diff);
+        _ = try uitree.diff(self.arena.allocator(), &self.old, &self.new);
     }
 };
 
@@ -167,6 +226,10 @@ pub fn writeReport(results: []const Result, w: *Io.Writer) !void {
                 try s.objectField("total");
                 try writeStats(&s, ok.total);
                 try s.endObject();
+                if (ok.witness_p95_ns) |wp| {
+                    try s.objectField("witness_p95_us");
+                    try s.write(us(wp));
+                }
             },
         }
         try s.endObject();
@@ -196,8 +259,8 @@ fn writeStats(s: *std.json.Stringify, st: Stats) !void {
 }
 
 /// Baseline file: `{"reference_p95_us": {"<scenario>": {"<stage>": us}}}`.
-/// Fails when a p95 exceeds 110 % of its reference or a scenario total
-/// exceeds its absolute budget. Returns the number of violations.
+/// Fails when a p95 exceeds 110 % of its reference by at least
+/// `min_regression_us`, or a scenario total exceeds its absolute budget. Returns the number of violations.
 pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []const Result, log: *Io.Writer) !usize {
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, baseline_json, .{});
     const refs = if (v.object.get("reference_p95_us")) |r| r.object else std.json.ObjectMap.empty;
@@ -209,7 +272,18 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
         };
         for (budgets) |b| if (std.mem.eql(u8, b.scenario, r.name)) {
             const p95_ms = us(ok.total.p95_ns) / 1000.0;
-            if (p95_ms > b.ms) {
+            if (p95_ms <= b.ms) continue;
+            if (b.provider_bound) {
+                const witness = ok.witness_p95_ns orelse {
+                    violations += 1;
+                    try log.print("bench: {s} total p95 {d:.2} ms exceeds the {d} ms budget and no witness probe ran (build zig-out/bin/probe_c.exe)\n", .{ r.name, p95_ms, b.ms });
+                    continue;
+                };
+                const witness_ms = us(witness) / 1000.0;
+                if (p95_ms <= witness_ms * 1.10) continue;
+                violations += 1;
+                try log.print("bench: {s} total p95 {d:.2} ms exceeds the {d} ms budget and 110 % of the {d:.2} ms witness probe\n", .{ r.name, p95_ms, b.ms, witness_ms });
+            } else {
                 violations += 1;
                 try log.print("bench: {s} total p95 {d:.2} ms exceeds the {d} ms budget\n", .{ r.name, p95_ms, b.ms });
             }
@@ -217,6 +291,9 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
         const scenario_refs = refs.get(r.name) orelse continue;
         for (ok.stages, 0..) |maybe, i| {
             const st = maybe orelse continue;
+            // Settling time depends on the application on screen: reported,
+            // never checked.
+            if (i == @backingInt(Stage.settle)) continue;
             violations += try compare(log, r.name, @tagName(@as(Stage, @fromBackingInt(@intCast(i)))), st, scenario_refs);
         }
         violations += try compare(log, r.name, "total", ok.total, scenario_refs);
@@ -233,10 +310,15 @@ fn compare(log: *Io.Writer, scenario: []const u8, stage: []const u8, st: Stats, 
         else => return 0,
     };
     const p95 = us(st.p95_ns);
-    if (p95 <= ref * 1.10) return 0;
+    // Below 1 us of difference the timer resolution dominates: 0.3 to 0.4 us
+    // is one tick, not a regression.
+    if (p95 <= ref * 1.10 or p95 - ref < min_regression_us) return 0;
     try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference\n", .{ scenario, stage, p95, ref });
     return 1;
 }
+
+/// Smallest p95 increase over a reference that counts as a regression.
+pub const min_regression_us = 1.0;
 
 /// Number of runs a baseline is recorded over (`--write-baseline`).
 pub const baseline_runs = 5;
@@ -281,15 +363,22 @@ pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
     try w.writeByte('\n');
 }
 
-pub const scenario_names = [_][]const u8{ "transport", "capture", "snapshot", "screenshot", "window_list" };
+/// `settle` reports the settling time of an action apart (US-015): it has
+/// no budget and no reference, its other stages are the post-action delta.
+pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "snapshot", "screenshot", "window_list", "ui_tree", "settle" };
+
+/// Scenarios that open applications on the desktop: run on request only
+/// (`neo-compute bench chrome`), never by `all`.
+pub const app_scenarios = [_][]const u8{ "notepad", "explorer", "settings", "calculator", "chrome", "vscode" };
 
 /// Runs `which` ("all" or one scenario name). Platform scenarios come from
 /// `Backend.benchScenario`; a backend without them reports them unsupported.
 pub fn run(comptime Backend: type, gpa: std.mem.Allocator, io: Io, which: []const u8, iterations: ?usize) ![]Result {
     var results: std.ArrayList(Result) = .empty;
     var known = std.mem.eql(u8, which, "all");
-    for (scenario_names) |name| {
-        if (!std.mem.eql(u8, which, "all") and !std.mem.eql(u8, which, name)) continue;
+    for (scenario_names ++ app_scenarios, 0..) |name, index| {
+        const explicit = std.mem.eql(u8, which, name);
+        if (!explicit and (index >= scenario_names.len or !std.mem.eql(u8, which, "all"))) continue;
         known = true;
         var counter: CountingAllocator = .init(gpa);
         const outcome: Outcome = if (std.mem.eql(u8, name, "transport")) blk: {
@@ -303,6 +392,16 @@ pub fn run(comptime Backend: type, gpa: std.mem.Allocator, io: Io, which: []cons
                 try t.step(&scratch);
             }
             break :blk try measure(gpa, io, t, iterations orelse Transport.default_iterations, &counter);
+        } else if (std.mem.eql(u8, name, "diff")) blk: {
+            const d = try gpa.create(Diff);
+            defer gpa.destroy(d);
+            d.init(counter.allocator(), io);
+            defer d.arena.deinit();
+            for (0..100) |_| {
+                var scratch: Timings = .{};
+                try d.step(&scratch);
+            }
+            break :blk try measure(gpa, io, d, iterations orelse Diff.default_iterations, &counter);
         } else if (@hasDecl(Backend, "benchScenario"))
             try Backend.benchScenario(gpa, io, &counter, name, iterations)
         else

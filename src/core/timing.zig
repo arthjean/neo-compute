@@ -6,7 +6,9 @@ const std = @import("std");
 const Io = std.Io;
 const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 
-pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, windows, serialize, write };
+/// `settle` (waiting for the screen to stop changing, US-015) is reported
+/// apart and kept out of totals and budgets.
+pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, diff, windows, settle, serialize, write };
 pub const stage_count = @typeInfo(Stage).@"enum".field_names.len;
 
 pub fn now(io: Io) i96 {

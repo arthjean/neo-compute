@@ -6,7 +6,18 @@ const std = @import("std");
 const display = @import("display.zig");
 const image = @import("image.zig");
 const jpeg = @import("jpeg.zig");
+const uitree = @import("uitree.zig");
 const Mapping = display.Mapping;
+
+/// What an action tool returns once the screen has settled (US-015).
+pub const Observe = enum {
+    delta,
+    screenshot,
+    none,
+    /// Without `"type"`: the enum says it all, and the 15 action tools that
+    /// repeat this schema stay within the definition budget.
+    pub const json_schema = "{\"enum\":[\"delta\",\"screenshot\",\"none\"]}";
+};
 
 pub const Session = struct {
     gpa: std.mem.Allocator,
@@ -17,6 +28,10 @@ pub const Session = struct {
     shots: [display.max_displays]?Mapping = @splat(null),
     reducer: image.Reducer = .{},
     encoder: jpeg.Encoder = .{},
+    /// Element ids and the last tree shown per window.
+    ui: uitree.State = .{},
+    /// Observation of action tools without `observe`.
+    default_observe: Observe = .delta,
 
     pub fn init(gpa: std.mem.Allocator, long_side: u32) Session {
         return .{ .gpa = gpa, .long_side = long_side };
@@ -25,6 +40,7 @@ pub const Session = struct {
     pub fn deinit(self: *Session) void {
         self.reducer.deinit(self.gpa);
         self.encoder.deinit(self.gpa);
+        self.ui.deinit(self.gpa);
     }
 
     pub const Resolved = union(enum) { ok: Mapping, err: []const u8 };

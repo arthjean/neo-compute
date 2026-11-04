@@ -38,15 +38,6 @@ pub fn toPhysical(ctx: anytype, c: [2]i32) Physical {
     return .{ .ok = m.toPhysical(c[0], c[1]) };
 }
 
-/// Scale factor without trailing zeros (2, 1.5, 1.333).
-fn scaleText(buf: []u8, scale: f64) []const u8 {
-    const s = std.fmt.bufPrint(buf, "{d:.3}", .{scale}) catch return "?";
-    var end = s.len;
-    while (end > 0 and s[end - 1] == '0') end -= 1;
-    if (end > 0 and s[end - 1] == '.') end -= 1;
-    return s[0..end];
-}
-
 fn frameOf(ctx: anytype, m: Mapping) union(enum) { ok: display.Frame, err: []const u8 } {
     ctx.timings.start(ctx.io, .capture);
     const cap = ctx.backend.capture(m.display, ctx.arena);
@@ -100,7 +91,7 @@ pub fn screenshot(ctx: anytype, display_arg: ?u32) Result {
     if (encodeImage(ctx, &r, frame, full, m.width, m.height, jpeg.screenshot_quality)) |e| return Result.err(e);
     ctx.session.recordShot(m);
     var sbuf: [32]u8 = undefined;
-    r.blocks[1] = .{ .text = fmt(ctx.arena, "display={d} scale={s} size={d}x{d}", .{ index, scaleText(&sbuf, m.scale), m.width, m.height }) };
+    r.blocks[1] = .{ .text = fmt(ctx.arena, "display={d} scale={s} size={d}x{d}", .{ index, display.scaleText(&sbuf, m.scale), m.width, m.height }) };
     return r;
 }
 

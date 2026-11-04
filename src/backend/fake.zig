@@ -5,6 +5,7 @@ const std = @import("std");
 const display = @import("../core/display.zig");
 const input = @import("../core/input.zig");
 const keys = @import("../core/keys.zig");
+const uitree = @import("../core/uitree.zig");
 
 pub const displays_fixture = [_]display.Display{
     .{ .rect = .{ .x = 0, .y = 0, .w = 2560, .h = 1440 }, .name = "FAKE-1" },
@@ -27,6 +28,25 @@ fn fillFrames() void {
     }
     frames_ready = true;
 }
+
+/// Inside the fixture window, which settling watches.
+const animation_rect = [_]display.Rect{.{ .x = 200, .y = 200, .w = 32, .h = 32 }};
+
+/// Notepad-like tree on the primary display (physical pixels).
+pub const ui_fixture = [_]uitree.Element{
+    .{ .key = 100, .depth = 0, .role = .window, .name = "Sans titre - Bloc-notes", .rect = .{ .x = 100, .y = 80, .w = 1200, .h = 800 } },
+    .{ .key = 101, .depth = 1, .role = .pane, .rect = .{ .x = 100, .y = 80, .w = 1200, .h = 800 } },
+    .{ .key = 102, .depth = 2, .role = .menubar, .name = "Application", .rect = .{ .x = 100, .y = 120, .w = 1200, .h = 40 } },
+    .{ .key = 103, .depth = 3, .role = .menuitem, .name = "Fichier", .states = .{ .collapsed = true }, .actions = .{ .expand_collapse = true }, .rect = .{ .x = 110, .y = 124, .w = 80, .h = 32 } },
+    .{ .key = 104, .depth = 3, .role = .menuitem, .name = "Édition", .states = .{ .collapsed = true }, .actions = .{ .expand_collapse = true }, .rect = .{ .x = 200, .y = 124, .w = 80, .h = 32 } },
+    .{ .key = 105, .depth = 2, .role = .edit, .name = "Éditeur de texte", .value = "Bonjour \"monde\"", .states = .{ .focused = true }, .actions = .{ .value = true }, .rect = .{ .x = 100, .y = 160, .w = 1200, .h = 680 } },
+    .{ .key = 106, .depth = 2, .role = .edit, .name = "Mot de passe", .value = "hunter2", .password = true, .actions = .{ .value = true }, .rect = .{ .x = 100, .y = 840, .w = 400, .h = 30 } },
+    .{ .key = 107, .depth = 2, .role = .button, .name = "Enregistrer", .actions = .{ .invoke = true }, .rect = .{ .x = 1100, .y = 840, .w = 100, .h = 30 } },
+    .{ .key = 108, .depth = 2, .role = .checkbox, .name = "Retour automatique à la ligne", .states = .{ .checked = true }, .actions = .{ .toggle = true }, .rect = .{ .x = 600, .y = 840, .w = 300, .h = 30 } },
+    .{ .key = 109, .depth = 2, .role = .button, .name = "Imprimer", .states = .{ .disabled = true }, .actions = .{ .invoke = true }, .rect = .{ .x = 950, .y = 840, .w = 100, .h = 30 } },
+    .{ .key = 110, .depth = 2, .role = .text, .name = "Ligne 1, colonne 1", .rect = .{ .x = 100, .y = 870, .w = 200, .h = 10 } },
+    .{ .key = 111, .depth = 2, .role = .listitem, .name = "Hors champ", .states = .{ .offscreen = true }, .actions = .{ .select = true, .scroll = true }, .rect = .{ .x = 100, .y = 5000, .w = 200, .h = 20 } },
+};
 
 pub const KeyCall = struct { combo: keys.Combo, action: input.KeyAction };
 
@@ -55,6 +75,18 @@ pub const Fake = struct {
     type_calls: u32 = 0,
     largest_type_batch: usize = 0,
     focused: ?u64 = null,
+    /// Every capture reports a dirty rect, like a video or a spinner.
+    animating: bool = false,
+
+    /// Accessibility tree served by uiSnapshot; tests replace it.
+    ui_window: u64 = 0x1a2b,
+    ui_elements: []const uitree.Element = &ui_fixture,
+    ui_partial: bool = false,
+    ui_desktop: bool = false,
+    ui_web_pending: bool = false,
+    ui_snapshots: u32 = 0,
+    /// Last element action received.
+    ui_last_act: ?struct { key: u64, action: uitree.Action, value_len: usize } = null,
 
     pub fn releaseAllInputs(self: *Fake) void {
         self.held = 0;
@@ -81,7 +113,8 @@ pub const Fake = struct {
             .width = @intCast(d.rect.w),
             .height = @intCast(d.rect.h),
             .stride = @as(usize, @intCast(d.rect.w)) * 4,
-            .fresh = self.capture_calls == 1,
+            .fresh = self.capture_calls == 1 or self.animating,
+            .dirty = if (self.animating) &animation_rect else &.{},
         } };
     }
 
@@ -138,11 +171,56 @@ pub const Fake = struct {
         .{ .handle = 0x5e6f, .title = "Paramètres", .exe = "SystemSettings.exe", .pid = 99, .rect = .{ .x = 0, .y = 0, .w = 800, .h = 600 }, .elevated = false, .minimized = false, .cloaked = true },
     };
 
+    /// Window element of each fixture window, for snapshots by handle.
+    const win_roots = blk: {
+        var out: [windows_fixture.len]uitree.Element = undefined;
+        for (windows_fixture, 0..) |win, i| out[i] = .{ .key = win.handle, .depth = 0, .role = .window, .name = win.title, .rect = win.rect };
+        break :blk out;
+    };
+
     pub fn listWindows(self: *Fake, arena: std.mem.Allocator, include_hidden: bool) error{OutOfMemory}![]const display.WindowInfo {
         _ = self;
         var out: std.ArrayList(display.WindowInfo) = .empty;
         for (windows_fixture) |win| if (include_hidden or !win.cloaked) try out.append(arena, win);
         return out.items;
+    }
+
+    /// Rectangle of `window`, else of the foreground (accessibility) window.
+    pub fn windowRect(self: *Fake, window: ?u64) ?display.Rect {
+        if (window) |h| for (windows_fixture) |win| if (win.handle == h) return win.rect;
+        return if (self.ui_elements.len > 0) self.ui_elements[0].rect else null;
+    }
+
+    pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64) uitree.SnapshotResult {
+        _ = arena;
+        if (window) |h| if (h != self.ui_window) {
+            for (windows_fixture, 0..) |win, i| if (win.handle == h) return .{ .ok = .{ .window = h, .elements = win_roots[i..][0..1] } };
+            return .{ .err = "Fenêtre fermée : rappelle window_list" };
+        };
+        self.ui_snapshots += 1;
+        return .{ .ok = .{ .window = self.ui_window, .elements = self.ui_elements, .partial = self.ui_partial, .desktop = self.ui_desktop, .web_pending = self.ui_web_pending } };
+    }
+
+    pub fn uiAct(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
+        _ = arena;
+        _ = window;
+        const e = for (self.ui_elements) |el| {
+            if (el.key == key) break el;
+        } else return .gone;
+        if (e.states.disabled) return .disabled;
+        if (e.states.offscreen and action != .scroll_into_view) return .offscreen;
+        const supported = switch (action) {
+            .invoke => e.actions.invoke,
+            .toggle => e.actions.toggle,
+            .select => e.actions.select,
+            .expand, .collapse => e.actions.expand_collapse,
+            .set_value => e.actions.value,
+            .focus => true,
+            .scroll_into_view => e.actions.scroll,
+        };
+        if (!supported) return .{ .unsupported = e.rect };
+        self.ui_last_act = .{ .key = key, .action = action, .value_len = if (value) |v| v.len else 0 };
+        return .ok;
     }
 
     pub fn focusWindow(self: *Fake, handle: u64) display.FocusResult {

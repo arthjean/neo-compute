@@ -325,7 +325,7 @@ Remplacer le screenshot systématique par un arbre UIA élagué, des IDs stables
 - [ ] Format : `<id> <rôle> "<nom>" [=valeur] {états} @x,y,w,h`, indenté par profondeur, coordonnées dans l'espace screenshot de l'écran de la fenêtre, en-tête `display=<n> scale=<f>` ; un test golden fige le format.
 - [ ] La valeur d'un élément `IsPassword` n'apparaît jamais (`[=•••]`).
 - [ ] Étant donné un provider qui ne répond pas en 200 ms (`IUIAutomation2` TransactionTimeout), alors l'arbre partiel est renvoyé avec `{partial: timeout}` et le worker reste utilisable pour les autres fenêtres.
-- [ ] Snapshot p95 < 50 ms pour ≤ 400 nœuds sur Explorateur, Bloc-notes, Paramètres et Calculatrice.
+- [ ] Snapshot p95 < 50 ms pour ≤ 400 nœuds sur Explorateur, Bloc-notes, Paramètres et Calculatrice ; pour l'Explorateur, ou à défaut ≤ 110 % de la sonde témoin C sur la même fenêtre (décision 0004).
 
 #### US-012: IDs stables et observations différentielles
 **Description:** En tant que Claude Code, je veux des identifiants d'éléments stables et des deltas entre deux observations afin de ne relire que ce qui a changé.
@@ -340,7 +340,7 @@ Remplacer le screenshot systématique par un arbre UIA élagué, des IDs stables
 - [ ] `ui_tree` avec `since: "last"` renvoie uniquement les ajouts (`+`), suppressions (`-`) et changements (`~` nom, valeur, états, position > 4 px) depuis le dernier snapshot de la même fenêtre.
 - [ ] Étant donné un changement de fenêtre au premier plan, alors un snapshot complet de la nouvelle fenêtre est renvoyé, signalé par une ligne d'en-tête.
 - [ ] Étant donné un delta plus long que le snapshot complet, alors le snapshot complet est renvoyé.
-- [ ] Calcul du diff p95 < 3 ms pour 1 500 nœuds ; delta médian ≤ 150 tokens sur la suite de US-016.
+- [ ] Calcul du diff p95 < 3 ms pour 1 500 nœuds ; delta médian ≤ 150 tokens sur la suite de US-016 pour les deltas dans la page, hors contenu remplacé (arbre complet, ou delta qui ajoute et retire au moins 10 éléments chacun), mesuré à part (décision 0005).
 
 #### US-013: Actions par élément ui_act et recherche ui_find
 **Description:** En tant que Claude Code, je veux agir sur un élément par son ID afin de ne dépendre ni des coordonnées ni du rendu.

@@ -28,8 +28,42 @@ test "a backend without platform scenarios reports them unsupported without fail
     const results = try bench.run(Fake, testing.allocator, testing.io, "all", 50);
     defer testing.allocator.free(results);
     try testing.expectEqual(bench.scenario_names.len, results.len);
+    // transport and diff are portable; the others need a platform backend.
     try testing.expect(results[0].outcome == .ok);
-    for (results[1..]) |r| try testing.expect(r.outcome == .unsupported);
+    try testing.expect(results[1].outcome == .ok);
+    for (results[2..]) |r| try testing.expect(r.outcome == .unsupported);
+}
+
+test "diff scenario times 1,500-element diffs without steady-state allocation" {
+    const results = try bench.run(Fake, testing.allocator, testing.io, "diff", 200);
+    defer testing.allocator.free(results);
+    const ok = results[0].outcome.ok;
+    const st = ok.stages[@backingInt(timing.Stage.diff)].?;
+    try testing.expect(st.p50_ns > 0);
+    try testing.expectEqual(@as(u64, 0), st.allocations);
+}
+
+test "settling time is reported as its own stage and kept out of the total" {
+    const Scenario = struct {
+        pub fn step(_: *@This(), t: *timing.Timings) !void {
+            t.ns[@backingInt(timing.Stage.settle)] = 40 * std.time.ns_per_ms;
+            t.used[@backingInt(timing.Stage.settle)] = true;
+            t.ns[@backingInt(timing.Stage.accessibility)] = std.time.ns_per_ms;
+            t.used[@backingInt(timing.Stage.accessibility)] = true;
+        }
+    };
+    var s: Scenario = .{};
+    const ok = (try bench.measure(testing.allocator, testing.io, &s, 10, null)).ok;
+    try testing.expectEqual(@as(u64, 40 * std.time.ns_per_ms), ok.stages[@backingInt(timing.Stage.settle)].?.p95_ns);
+    try testing.expectEqual(@as(u64, std.time.ns_per_ms), ok.total.p95_ns);
+}
+
+test "application scenarios run only on request" {
+    const results = try bench.run(Fake, testing.allocator, testing.io, "chrome", 1);
+    defer testing.allocator.free(results);
+    try testing.expectEqual(@as(usize, 1), results.len);
+    try testing.expect(results[0].outcome == .unsupported);
+    for (bench.scenario_names) |n| for (bench.app_scenarios) |app| try testing.expect(!std.mem.eql(u8, n, app));
 }
 
 test "report lists p50, p95, p99, max and allocations per stage" {
@@ -46,8 +80,8 @@ test "report lists p50, p95, p99, max and allocations per stage" {
     try testing.expectEqualStrings("ok", transport.get("status").?.string);
     const parse = transport.get("stages").?.object.get("parse").?.object;
     for ([_][]const u8{ "p50_us", "p95_us", "p99_us", "max_us", "allocations" }) |k| try testing.expect(parse.get(k) != null);
-    try testing.expectEqualStrings("unsupported", scenarios[1].object.get("status").?.string);
-    try testing.expect(scenarios[1].object.get("reason").?.string.len > 0);
+    try testing.expectEqualStrings("unsupported", scenarios[2].object.get("status").?.string);
+    try testing.expect(scenarios[2].object.get("reason").?.string.len > 0);
 }
 
 fn fakeResult(name: []const u8, stage: timing.Stage, p95_us: u64) bench.Result {
@@ -68,11 +102,33 @@ test "check fails above 110 % of the reference or above the absolute budget" {
     try testing.expectEqual(@as(usize, 0), try bench.check(a, baseline, &.{fakeResult("capture", .capture, 1090)}, &sink.writer));
     try testing.expectEqual(@as(usize, 2), try bench.check(a, baseline, &.{fakeResult("capture", .capture, 1110)}, &sink.writer));
 
+    // Sub-microsecond stages: one timer tick above 110 % is not a regression.
+    const tiny = "{\"reference_p95_us\":{\"capture\":{\"capture\":0.5,\"total\":0.5}}}";
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, tiny, &.{fakeResult("capture", .capture, 1)}, &sink.writer));
+    try testing.expectEqual(@as(usize, 2), try bench.check(a, tiny, &.{fakeResult("capture", .capture, 2)}, &sink.writer));
+
     // snapshot budget 50 ms, screenshot 30 ms, with no reference at all.
     const empty = "{}";
     try testing.expectEqual(@as(usize, 0), try bench.check(a, empty, &.{fakeResult("snapshot", .accessibility, 49_000)}, &sink.writer));
     try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{fakeResult("snapshot", .accessibility, 51_000)}, &sink.writer));
     try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{fakeResult("screenshot", .encode, 31_000)}, &sink.writer));
+
+    // Settling time is reported but never checked, and stays out of totals.
+    const settle_ref = "{\"reference_p95_us\":{\"ui_tree\":{\"settle\":1}}}";
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, settle_ref, &.{fakeResult("ui_tree", .settle, 40_000)}, &sink.writer));
+
+    // Explorer's budget is provider-bound: above 50 ms it passes within 110 %
+    // of the witness probe, and fails without one.
+    var explorer = fakeResult("explorer", .accessibility, 84_000);
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{explorer}, &sink.writer));
+    explorer.outcome.ok.witness_p95_ns = 80_000_000;
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, empty, &.{explorer}, &sink.writer));
+    explorer.outcome.ok.witness_p95_ns = 70_000_000;
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{explorer}, &sink.writer));
+    // Absolute budgets stay absolute whatever the witness.
+    var notepad = fakeResult("notepad", .accessibility, 60_000);
+    notepad.outcome.ok.witness_p95_ns = 90_000_000;
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{notepad}, &sink.writer));
 
     // Unsupported scenarios are never checked.
     const skipped: bench.Result = .{ .name = "capture", .outcome = .{ .unsupported = "no output" } };
