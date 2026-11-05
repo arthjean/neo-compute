@@ -10,6 +10,7 @@ const screen = @import("screen.zig");
 const timing = @import("timing.zig");
 const actions = @import("actions.zig");
 const session = @import("session.zig");
+const policy = @import("policy.zig");
 const Result = @import("mcp.zig").Result;
 const fmt = session.fmt;
 
@@ -24,12 +25,7 @@ const oom = "Mémoire insuffisante : réessaie.";
 
 const Snap = struct { snap: uitree.Snapshot, m: display.Mapping, viewport: display.Rect };
 
-fn intersection(a: display.Rect, b: display.Rect) ?display.Rect {
-    if (!a.intersects(b)) return null;
-    const x = @max(a.x, b.x);
-    const y = @max(a.y, b.y);
-    return .{ .x = x, .y = y, .w = @min(a.right(), b.right()) - x, .h = @min(a.bottom(), b.bottom()) - y };
-}
+const intersection = display.intersection;
 
 /// Snapshot of `window` (the foreground window when null) and the mapping of
 /// the display it sits on. With `record`, the mapping becomes the space of
@@ -37,6 +33,13 @@ fn intersection(a: display.Rect, b: display.Rect) ?display.Rect {
 /// not record it: a click aimed from a screenshot of another display must
 /// keep that display's space.
 fn snapshot(ctx: anytype, window: ?u64, record: bool) union(enum) { ok: Snap, err: []const u8 } {
+    // A `deny` application is absent from the tree (US-017): it is never
+    // read. A post-action observation is not a request of its own and
+    // leaves the action's audit target alone.
+    const ref = if (window) |h| ctx.backend.windowRef(h) else ctx.backend.windowAt(null);
+    if (record) {
+        if (policy.require(ctx, ref, .observe)) |r| return .{ .err = r.blocks[0].text };
+    } else if (ref) |r| if (policy.hidden(ctx, r)) |msg| return .{ .err = msg };
     ctx.timings.start(ctx.io, .accessibility);
     const res = ctx.backend.uiSnapshot(ctx.arena, window);
     ctx.timings.stop(ctx.io, .accessibility);
@@ -225,6 +228,8 @@ pub fn act(ctx: anytype, id_text: []const u8, action: uitree.Action, value: ?[]c
     const owner = ctx.session.ui.ids.owner(id) orelse return Result.err(gone);
     if (action == .set_value and value == null)
         return Result.err("set_value demande le champ `value` : le texte à écrire. Aucune action exécutée.");
+    // Writing a value is typing; every other pattern is a click (US-017).
+    if (policy.requireWindow(ctx, owner.window, if (action == .set_value) .full else .click)) |r| return r;
     ctx.timings.start(ctx.io, .accessibility);
     const r = ctx.backend.uiAct(ctx.arena, owner.window, owner.key, action, value);
     ctx.timings.stop(ctx.io, .accessibility);

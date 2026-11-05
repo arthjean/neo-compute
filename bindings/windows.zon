@@ -82,5 +82,13 @@
         // Selftest fixtures for the accessibility tools
                            "ES_PASSWORD",                                "WM_COMMAND",                     "BN_CLICKED",
         "WS_BORDER",                           "KillTimer",                          "GetWindowTextLengthW",
+
+        // Security (EP-004): kill switch hooks, single instance, policy targets, masking
+                              "SetWindowsHookExW",              "UnhookWindowsHookEx",
+        "CallNextHookEx",                      "WH_KEYBOARD_LL",                     "WH_MOUSE_LL",                                "KBDLLHOOKSTRUCT",                "MSLLHOOKSTRUCT",
+        "LLKHF_INJECTED",                      "LLMHF_INJECTED",                     "HC_ACTION",                                  "WM_SYSKEYDOWN",                  "WM_KEYUP",
+        "WM_SYSKEYUP",                         "WM_MOUSEMOVE",                       "GetLastInputInfo",                           "LASTINPUTINFO",                  "GetTickCount",
+        "CreateMutexW",                        "ERROR_ALREADY_EXISTS",               "AcquireSRWLockExclusive",                    "ReleaseSRWLockExclusive",        "SRWLOCK",
+        "WS_EX_LAYERED",                       "WS_EX_TRANSPARENT",                  "UIA_IsPasswordPropertyId",                   "UIA_IsOffscreenPropertyId",
     },
 }

@@ -175,6 +175,14 @@ pub fn Registry(comptime tools: anytype) type {
             return false;
         }
 
+        /// Whether the named tool acts on the desktop: every tool that is not
+        /// read-only, except those declaring `inert` (`wait`). Actions are
+        /// refused while paused and in a second instance.
+        pub fn isAction(name: []const u8) bool {
+            inline for (tools) |T| if (std.mem.eql(u8, T.name, name)) return !annotationsOf(T).read_only and !@hasDecl(T, "inert");
+            return false;
+        }
+
         /// Validates `args` against the named tool and runs it. `null` means
         /// the tool is unknown (a protocol error for the caller).
         pub fn call(ctx: anytype, name: []const u8, args: ?std.json.Value) ?@TypeOf(ctx.*).Result {

@@ -73,6 +73,41 @@ pub const WindowInfo = struct {
 
 pub const FocusResult = enum { ok, closed, refused };
 
+/// A top-level window and its process, for the policy (US-017).
+pub const WindowRef = struct { handle: u64, pid: u32 };
+
+/// A visible top-level window (not minimized, not cloaked), top of the
+/// z-order first. `solid` is false for layered or transparent windows,
+/// which may show what lies below them.
+pub const VisibleWindow = struct { handle: u64, pid: u32, rect: Rect, solid: bool };
+
+pub fn intersection(a: Rect, b: Rect) ?Rect {
+    if (!a.intersects(b)) return null;
+    const x = @max(a.x, b.x);
+    const y = @max(a.y, b.y);
+    return .{ .x = x, .y = y, .w = @min(a.right(), b.right()) - x, .h = @min(a.bottom(), b.bottom()) - y };
+}
+
+/// Most pieces `subtract` keeps before giving up.
+pub const max_pieces = 64;
+
+/// Replaces `pieces` by their parts outside `cut` (up to four per piece).
+pub fn subtract(arena: std.mem.Allocator, pieces: *std.ArrayList(Rect), cut: Rect) !void {
+    var out: std.ArrayList(Rect) = .empty;
+    for (pieces.items) |r| {
+        const c = intersection(r, cut) orelse {
+            try out.append(arena, r);
+            continue;
+        };
+        if (c.y > r.y) try out.append(arena, .{ .x = r.x, .y = r.y, .w = r.w, .h = c.y - r.y });
+        if (c.bottom() < r.bottom()) try out.append(arena, .{ .x = r.x, .y = c.bottom(), .w = r.w, .h = r.bottom() - c.bottom() });
+        if (c.x > r.x) try out.append(arena, .{ .x = r.x, .y = c.y, .w = c.x - r.x, .h = c.h });
+        if (c.right() < r.right()) try out.append(arena, .{ .x = c.right(), .y = c.y, .w = r.right() - c.right(), .h = c.h });
+    }
+    if (out.items.len > max_pieces) return error.TooFragmented;
+    pieces.* = out;
+}
+
 pub const max_displays = 8;
 pub const default_long_side = 1280;
 pub const min_long_side = 1024;
@@ -200,6 +235,19 @@ test "mapping keeps the ratio, never upscales and stays within 1 px at scales up
             try std.testing.expect(@abs(back[0] - px) <= 1);
         }
     }
+}
+
+test "subtract keeps the parts of a rectangle outside the cut" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var pieces: std.ArrayList(Rect) = .empty;
+    try pieces.append(arena.allocator(), .{ .x = 0, .y = 0, .w = 100, .h = 100 });
+    try subtract(arena.allocator(), &pieces, .{ .x = 25, .y = 25, .w = 50, .h = 50 });
+    var area: i64 = 0;
+    for (pieces.items) |r| area += @as(i64, r.w) * r.h;
+    try std.testing.expectEqual(@as(i64, 100 * 100 - 50 * 50), area);
+    try subtract(arena.allocator(), &pieces, .{ .x = -10, .y = -10, .w = 200, .h = 200 });
+    try std.testing.expectEqual(@as(usize, 0), pieces.items.len);
 }
 
 test "displayAt picks the containing display, else the nearest" {

@@ -10,6 +10,9 @@ const std = @import("std");
 const Io = std.Io;
 const registry = @import("registry.zig");
 const timing = @import("timing.zig");
+const policy = @import("policy.zig");
+const audit = @import("audit.zig");
+pub const control = @import("control.zig");
 pub const Session = @import("session.zig").Session;
 
 pub const server_name = "neo-compute";
@@ -60,6 +63,9 @@ pub const Content = union(enum) {
     image: struct { data_base64: []const u8, mime: []const u8, width: u32, height: u32 },
 };
 
+/// Answer to any action of a second instance (US-019, FR-14).
+pub const instance_message = "Une autre session neo-compute contrôle déjà ce bureau : ferme l'autre session, puis relance neo-compute.";
+
 pub const Result = struct {
     blocks: [2]Content = undefined,
     len: u8 = 0,
@@ -99,6 +105,10 @@ pub fn Ctx(comptime Backend: type) type {
         out: ?*Io.Writer = null,
         /// `params._meta.progressToken` of the request, if any.
         progress_token: ?std.json.Value = null,
+        /// Application the action resolved to (US-017), for the audit log.
+        target: ?policy.Target = null,
+        /// The policy refused the action.
+        denied: bool = false,
 
         pub fn cancelled(self: *const Self) bool {
             return self.cancel.load(.acquire);
@@ -186,6 +196,12 @@ pub const Options = struct {
     mode: Mode = .a11y,
     /// Observation of action tools without `observe`; null follows the mode.
     default_observe: ?@import("session.zig").Observe = null,
+    /// Per-application levels (US-017); null means the defaults.
+    policy: ?*const policy.Policy = null,
+    /// Audit log of every tool call (US-019); null records nothing.
+    audit: ?*audit.Audit = null,
+    /// False for a second instance on the same desktop: actions are refused.
+    exclusive: bool = true,
 };
 
 /// The tools of `computer_toolset_20260801`: every tool that does not
@@ -218,13 +234,17 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
         free_q: Io.Queue(u8) = undefined,
         ready_q: Io.Queue(u8) = undefined,
         eof: std.atomic.Value(bool) = .init(false),
-        cancel: std.atomic.Value(bool) = .init(false),
+        /// Cancellation, pause and kill switch state (US-018).
+        control: control.Control = .{},
         id_lock: Io.Mutex = .init,
         inflight: IdText = .{},
         cancelled_ids: [slot_count]IdText = @splat(.{}),
         cancelled_next: usize = 0,
         timings: timing.Timings = .{},
         session: Session,
+        /// `initialize` instructions, with the policy problem if any.
+        instructions: []const u8,
+        instructions_owned: bool = false,
         /// Called after each handled message (bench and tests).
         on_message: ?*const fn (*Self) void = null,
 
@@ -234,10 +254,16 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
                 .a11y => .delta,
                 .vision => .screenshot,
             };
-            return .{ .gpa = gpa, .io = io, .backend = backend, .options = options, .arena = .init(gpa), .session = session };
+            if (options.policy) |p| session.policy = p;
+            const base = if (options.mode == .vision) vision_instructions else instructions;
+            var text: []const u8 = base;
+            if (session.policy.problem) |why|
+                text = std.mem.concat(gpa, u8, &.{ base, " ", why, ". Every application is limited to observe until the user fixes the file and restarts neo-compute." }) catch base;
+            return .{ .gpa = gpa, .io = io, .backend = backend, .options = options, .arena = .init(gpa), .session = session, .instructions = text, .instructions_owned = text.ptr != base.ptr };
         }
 
         pub fn deinit(self: *Self) void {
+            if (self.instructions_owned) self.gpa.free(self.instructions);
             for (&self.slots) |*s| s.buf.deinit(self.gpa);
             self.session.deinit();
             self.arena.deinit();
@@ -305,7 +331,7 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             // after reading `eof` as false.
             self.id_lock.lockUncancelable(self.io);
             self.eof.store(true, .release);
-            self.cancel.store(true, .release);
+            self.control.cancel.store(true, .release);
             self.id_lock.unlock(self.io);
             self.ready_q.close(self.io);
         }
@@ -337,7 +363,7 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             id.set(rid);
             self.id_lock.lockUncancelable(self.io);
             defer self.id_lock.unlock(self.io);
-            if (self.inflight.eql(&id)) self.cancel.store(true, .release);
+            if (self.inflight.eql(&id)) self.control.cancel.store(true, .release);
             self.cancelled_ids[self.cancelled_next % slot_count] = id;
             self.cancelled_next += 1;
             return true;
@@ -350,7 +376,7 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             defer self.id_lock.unlock(self.io);
             for (&self.cancelled_ids) |*c| if (c.eql(&text)) return false;
             self.inflight = text;
-            self.cancel.store(self.eof.load(.acquire), .release);
+            self.control.cancel.store(self.eof.load(.acquire), .release);
             return true;
         }
 
@@ -358,7 +384,7 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             self.id_lock.lockUncancelable(self.io);
             defer self.id_lock.unlock(self.io);
             self.inflight.len = 0;
-            return !self.cancel.load(.acquire);
+            return !self.control.cancel.load(.acquire);
         }
 
         fn handleLine(self: *Self, a: std.mem.Allocator, line: []const u8, out: *Io.Writer) !void {
@@ -409,18 +435,40 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             // The client is gone: queued tool calls are dropped unanswered.
             if (self.eof.load(.acquire)) return;
             if (!self.beginRequest(id)) return;
+            const args = p.object.get("arguments");
             var ctx: ToolCtx = .{
                 .arena = a,
                 .io = self.io,
                 .backend = self.backend,
-                .cancel = &self.cancel,
+                .cancel = &self.control.cancel,
                 .timings = &self.timings,
                 .session = &self.session,
                 .out = out,
                 .progress_token = progressToken(p),
             };
-            var result = Reg.call(&ctx, name, p.object.get("arguments")).?;
-            if (!self.endRequest()) {
+            const started = timing.now(self.io);
+            // Actions run under the kill switch (US-018) and the single
+            // instance rule (US-019); observation tools always run.
+            const acts = Reg.isAction(name);
+            var outcome: ?[]const u8 = null;
+            if (acts) self.control.beginAction();
+            var result = if (acts and !self.options.exclusive) blk: {
+                outcome = "instance";
+                break :blk Result.err(instance_message);
+            } else if (acts and self.control.isPaused()) blk: {
+                outcome = "paused";
+                break :blk Result.err(control.paused_message);
+            } else Reg.call(&ctx, name, args).?;
+            if (acts and self.control.endAction()) {
+                // The kill switch fired: the response says so instead of
+                // the tool's own cancellation message.
+                result = Result.err(control.paused_message);
+                outcome = "paused";
+            }
+            const answered = self.endRequest() or outcome != null;
+            if (!answered) outcome = "cancelled";
+            self.record(&ctx, name, args, started, outcome orelse if (ctx.denied) "denied" else if (result.is_error) "error" else "ok");
+            if (!answered or self.eof.load(.acquire)) {
                 // Cancelled: no response for this id. Held inputs go now;
                 // at end of stdin, serve releases them on its way out.
                 if (!self.eof.load(.acquire)) self.backend.releaseAllInputs();
@@ -430,6 +478,23 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             if (result.is_error) self.backend.releaseAllInputs();
             if (self.options.trace) result.token_estimate = estimateResultTokens(&result);
             try self.writeToolResult(out, id, &result);
+        }
+
+        /// Appends the call to the audit log (US-019). Of the arguments only
+        /// the length of `type`'s text is kept.
+        fn record(self: *Self, ctx: *const ToolCtx, name: []const u8, args: ?std.json.Value, started: i96, result: []const u8) void {
+            const log = self.options.audit orelse return;
+            var text_len: ?usize = null;
+            if (std.mem.eql(u8, name, "type")) if (args) |v| if (v == .object) if (v.object.get("text")) |t| if (t == .string) {
+                text_len = std.unicode.utf8CountCodepoints(t.string) catch t.string.len;
+            };
+            log.record(.{
+                .tool = name,
+                .target = ctx.target,
+                .duration_ns = @intCast(@max(timing.now(self.io) - started, 0)),
+                .result = result,
+                .text_len = text_len,
+            });
         }
 
         fn writeInitialize(self: *Self, out: *Io.Writer, id: std.json.Value, params: ?std.json.Value) !void {
@@ -460,7 +525,7 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
             try s.write(server_version);
             try s.endObject();
             try s.objectField("instructions");
-            try s.write(if (self.options.mode == .vision) vision_instructions else instructions);
+            try s.write(self.instructions);
             try s.endObject();
             try endResponse(out);
         }

@@ -78,8 +78,15 @@ fn hungRoot(arena: std.mem.Allocator, hwnd: w.HWND, desktop: bool) uitree.Snapsh
 const Job = union(enum) {
     snapshot: struct { arena: std.mem.Allocator, hwnd: ?u64, out: uitree.SnapshotResult = undefined },
     act: struct { arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8, out: uitree.ActResult = undefined },
+    /// Rectangles of the visible password fields of the foreground window,
+    /// into `Worker.secret_buf` (no arena: the dispatcher keeps using its
+    /// own while the scan runs).
+    secrets,
     quit,
 };
+
+/// Password fields masked per screenshot; more are rare enough to ignore.
+pub const max_secrets = 32;
 
 pub const Worker = struct {
     gpa: std.mem.Allocator,
@@ -87,6 +94,10 @@ pub const Worker = struct {
     wake: w.HANDLE = null,
     done: w.HANDLE = null,
     job: Job = .quit,
+    /// A job was started with `begin` and not yet waited for.
+    pending: bool = false,
+    secret_buf: [max_secrets]display.Rect = undefined,
+    secret_len: usize = 0,
     /// Why the worker could not start UI Automation, if it failed.
     init_error: ?[]const u8 = null,
 
@@ -104,8 +115,32 @@ pub const Worker = struct {
         return self.job.act.out;
     }
 
+    /// Starts the password scan of the foreground window without waiting
+    /// (US-019): it runs while the dispatcher captures and reduces.
+    pub fn beginSecrets(self: *Worker) void {
+        self.secret_len = 0;
+        if (self.start() != null) return;
+        self.finish();
+        self.job = .secrets;
+        self.pending = true;
+        _ = w.SetEvent(self.wake);
+    }
+
+    /// Waits for the scan started by `beginSecrets`; empty when none ran.
+    pub fn secretRects(self: *Worker) []const display.Rect {
+        self.finish();
+        return self.secret_buf[0..self.secret_len];
+    }
+
+    fn finish(self: *Worker) void {
+        if (!self.pending) return;
+        _ = w.WaitForSingleObject(self.done, w.INFINITE);
+        self.pending = false;
+    }
+
     pub fn deinit(self: *Worker) void {
         const t = self.thread orelse return;
+        self.finish();
         self.job = .quit;
         _ = w.SetEvent(self.wake);
         t.join();
@@ -127,6 +162,7 @@ pub const Worker = struct {
     }
 
     fn run(self: *Worker) void {
+        self.finish();
         _ = w.SetEvent(self.wake);
         _ = w.WaitForSingleObject(self.done, w.INFINITE);
     }
@@ -148,6 +184,7 @@ pub const Worker = struct {
                 .quit => break,
                 .snapshot => |*j| j.out = session.?.snapshot(j.arena, j.hwnd),
                 .act => |*j| j.out = session.?.act(j.arena, j.window, j.key, j.action, j.value),
+                .secrets => self.secret_len = session.?.secrets(&self.secret_buf),
             }
             _ = w.SetEvent(self.done);
         }
@@ -184,6 +221,9 @@ const Session = struct {
     control_view: *w.IUIAutomationCondition,
     /// The window element's own properties, for a partial tree.
     element_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// IsPassword = true, and the properties a masked field needs.
+    password_condition: ?*w.IUIAutomationCondition = null,
+    secret_cache: ?*w.IUIAutomationCacheRequest = null,
     retained: [4]Retained = @splat(.{}),
     clock: u64 = 0,
 
@@ -216,6 +256,8 @@ const Session = struct {
     fn deinit(self: *Session) void {
         for (&self.retained) |*r| r.deinit(self.gpa);
         if (self.element_cache) |c| release(c);
+        if (self.password_condition) |c| release(c);
+        if (self.secret_cache) |c| release(c);
         release(self.subtree);
         release(self.control_view);
         release(self.automation);
@@ -312,6 +354,109 @@ const Session = struct {
         var root: ?*w.IUIAutomationElement = null;
         check(array.vtable.GetElement(array, 0, &root)) catch |e| return classify(e);
         return root.?;
+    }
+
+    /// Rectangles of the on-screen IsPassword elements of the foreground
+    /// window, in one cached round trip under the provider timeout. A
+    /// failure masks nothing and is reported on stderr.
+    fn secrets(self: *Session, out: []display.Rect) usize {
+        const t = target(null);
+        if (t.desktop or t.hwnd == null or w.IsWindow(t.hwnd) == 0 or !responsive(t.hwnd)) return 0;
+        // Chromium builds its web tree only after the first UIA request
+        // (webPending): until the document element shows up, a page's
+        // password fields are on screen but not in the tree. The scan waits
+        // for it, then masks the whole window if it never comes.
+        const chromium = isChromium(t.hwnd);
+        var waited: u32 = 0;
+        while (true) {
+            const found = self.findSecrets(t.hwnd, out) catch |err| {
+                std.debug.print("neo-compute: password field scan of 0x{x} failed ({t}, hr=0x{x}): screenshot not masked\n", .{ @intFromPtr(t.hwnd), err, com.lastHr() });
+                return 0;
+            };
+            if (!chromium or found.document) return found.n;
+            if (waited >= web_wait_ms) {
+                var r: w.RECT = undefined;
+                if (out.len == 0 or w.GetWindowRect(t.hwnd, &r) == 0) return found.n;
+                std.debug.print("neo-compute: web tree of 0x{x} not ready after {d} ms: whole window masked\n", .{ @intFromPtr(t.hwnd), web_wait_ms });
+                out[0] = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
+                return 1;
+            }
+            w.Sleep(web_poll_ms);
+            waited += web_poll_ms;
+        }
+    }
+
+    /// Bound and step of the wait for a Chromium web tree. Measured on a
+    /// fresh Chrome: the document arrives 10 to 30 ms after the first request.
+    const web_wait_ms = 300;
+    const web_poll_ms = 10;
+
+    const Found = struct { n: usize, document: bool };
+
+    fn findSecrets(self: *Session, hwnd: w.HWND, out: []display.Rect) com.Error!Found {
+        if (self.password_condition == null) {
+            var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+            v.Anonymous.Anonymous.vt = w.VT_BOOL;
+            v.Anonymous.Anonymous.Anonymous.boolVal = -1; // VARIANT_TRUE
+            var is_password: ?*w.IUIAutomationCondition = null;
+            try check(self.automation.vtable.CreatePropertyCondition(self.automation, w.UIA_IsPasswordPropertyId, v, &is_password));
+            defer release(is_password.?);
+            // Documents too, in the same round trip: their presence says a
+            // Chromium web tree is built.
+            var d: w.VARIANT = std.mem.zeroes(w.VARIANT);
+            d.Anonymous.Anonymous.vt = w.VT_I4;
+            d.Anonymous.Anonymous.Anonymous.lVal = w.UIA_DocumentControlTypeId;
+            var is_document: ?*w.IUIAutomationCondition = null;
+            try check(self.automation.vtable.CreatePropertyCondition(self.automation, w.UIA_ControlTypePropertyId, d, &is_document));
+            defer release(is_document.?);
+            var either: ?*w.IUIAutomationCondition = null;
+            try check(self.automation.vtable.CreateOrCondition(self.automation, is_password, is_document, &either));
+            defer release(either.?);
+            // Within the control view, as ui_tree: a password field is a
+            // control, and the raw view of a web page is far larger.
+            var cond: ?*w.IUIAutomationCondition = null;
+            try check(self.automation.vtable.CreateAndCondition(self.automation, self.control_view, either, &cond));
+            self.password_condition = cond;
+        }
+        if (self.secret_cache == null) {
+            var cache: ?*w.IUIAutomationCacheRequest = null;
+            try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+            errdefer release(cache.?);
+            try check(cache.?.vtable.AddProperty(cache.?, w.UIA_BoundingRectanglePropertyId));
+            try check(cache.?.vtable.AddProperty(cache.?, w.UIA_IsOffscreenPropertyId));
+            try check(cache.?.vtable.AddProperty(cache.?, w.UIA_ControlTypePropertyId));
+            self.secret_cache = cache;
+        }
+        var live: ?*w.IUIAutomationElement = null;
+        try check(self.automation.vtable.ElementFromHandle(self.automation, hwnd, &live));
+        const el = live orelse return .{ .n = 0, .document = false };
+        defer release(el);
+        var arr: ?*w.IUIAutomationElementArray = null;
+        try check(el.vtable.FindAllBuildCache(el, w.TreeScope_Subtree, self.password_condition, self.secret_cache, &arr));
+        const array = arr orelse return .{ .n = 0, .document = false };
+        defer release(array);
+        var len: i32 = 0;
+        try check(array.vtable.get_Length(array, &len));
+        var n: usize = 0;
+        var document = false;
+        var i: i32 = 0;
+        while (i < len) : (i += 1) {
+            var item: ?*w.IUIAutomationElement = null;
+            if (array.vtable.GetElement(array, i, &item) < 0) continue;
+            const e = item orelse continue;
+            defer release(e);
+            var control_type: w.UIA_CONTROLTYPE_ID = 0;
+            if (e.vtable.get_CachedControlType(e, &control_type) >= 0 and control_type == w.UIA_DocumentControlTypeId) {
+                document = true;
+                continue;
+            }
+            if (n == out.len or cachedBool(e, "get_CachedIsOffscreen")) continue;
+            var r: w.RECT = undefined;
+            if (e.vtable.get_CachedBoundingRectangle(e, &r) < 0 or r.right <= r.left or r.bottom <= r.top) continue;
+            out[n] = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
+            n += 1;
+        }
+        return .{ .n = n, .document = document };
     }
 
     fn elementCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {

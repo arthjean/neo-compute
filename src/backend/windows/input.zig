@@ -167,6 +167,13 @@ fn resolve(combo: keys.Combo, layout: w.HKL) InputError!Resolved {
     return .{ .vk = vk, .mods = mods };
 }
 
+/// Virtual key of the combination's final key on the active layout, for
+/// matching physical key events (the kill switch re-arm shortcut).
+pub fn vkOf(combo: keys.Combo) ?u32 {
+    const r = resolve(combo, activeLayout()) catch return null;
+    return r.vk.vk;
+}
+
 fn keyEvent(vk: Vk, up: bool, layout: w.HKL) w.INPUT {
     const sc = w.MapVirtualKeyExW(vk.vk, w.MAPVK_VK_TO_VSC_EX, layout);
     const ext = vk.extended or (sc >> 8) == 0xE0 or (sc >> 8) == 0xE1;

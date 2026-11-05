@@ -7,6 +7,7 @@ const display = @import("display.zig");
 const image = @import("image.zig");
 const jpeg = @import("jpeg.zig");
 const uitree = @import("uitree.zig");
+const policy = @import("policy.zig");
 const Mapping = display.Mapping;
 
 /// What an action tool returns once the screen has settled (US-015).
@@ -32,6 +33,9 @@ pub const Session = struct {
     ui: uitree.State = .{},
     /// Observation of action tools without `observe`.
     default_observe: Observe = .delta,
+    /// Control level per application (US-017) and its pid cache.
+    policy: *const policy.Policy = &policy.defaults,
+    apps: policy.Cache = .{},
 
     pub fn init(gpa: std.mem.Allocator, long_side: u32) Session {
         return .{ .gpa = gpa, .long_side = long_side };

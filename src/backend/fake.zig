@@ -6,6 +6,7 @@ const display = @import("../core/display.zig");
 const input = @import("../core/input.zig");
 const keys = @import("../core/keys.zig");
 const uitree = @import("../core/uitree.zig");
+const Control = @import("../core/control.zig").Control;
 
 pub const displays_fixture = [_]display.Display{
     .{ .rect = .{ .x = 0, .y = 0, .w = 2560, .h = 1440 }, .name = "FAKE-1" },
@@ -88,6 +89,19 @@ pub const Fake = struct {
     /// Last element action received.
     ui_last_act: ?struct { key: u64, action: uitree.Action, value_len: usize } = null,
 
+    /// Top-level windows, top of the z-order first; tests replace them.
+    windows: []const display.WindowInfo = &windows_fixture,
+    /// Executable name lookups (the policy caches them per window).
+    process_lookups: u32 = 0,
+    /// Password scans started by screenshot and zoom (US-019).
+    secret_scans: u32 = 0,
+    secret_buf: [16]display.Rect = undefined,
+    /// Kill switch state handed over by the server (US-018).
+    control: ?*Control = null,
+    /// Trips the kill switch on the next key press, as a physical Escape
+    /// during the action would.
+    trip_on_press: bool = false,
+
     pub fn releaseAllInputs(self: *Fake) void {
         self.held = 0;
         self.release_calls += 1;
@@ -144,6 +158,10 @@ pub const Fake = struct {
             .press => self.held += 1,
             .release => self.held -|= 1,
         }
+        if (action == .press and self.trip_on_press) if (self.control) |c| {
+            self.trip_on_press = false;
+            _ = c.trip();
+        };
         if (self.key_len < self.key_calls.len) {
             self.key_calls[self.key_len] = .{ .combo = combo, .action = action };
             self.key_len += 1;
@@ -171,30 +189,75 @@ pub const Fake = struct {
         .{ .handle = 0x5e6f, .title = "Paramètres", .exe = "SystemSettings.exe", .pid = 99, .rect = .{ .x = 0, .y = 0, .w = 800, .h = 600 }, .elevated = false, .minimized = false, .cloaked = true },
     };
 
-    /// Window element of each fixture window, for snapshots by handle.
-    const win_roots = blk: {
-        var out: [windows_fixture.len]uitree.Element = undefined;
-        for (windows_fixture, 0..) |win, i| out[i] = .{ .key = win.handle, .depth = 0, .role = .window, .name = win.title, .rect = win.rect };
-        break :blk out;
-    };
-
     pub fn listWindows(self: *Fake, arena: std.mem.Allocator, include_hidden: bool) error{OutOfMemory}![]const display.WindowInfo {
-        _ = self;
         var out: std.ArrayList(display.WindowInfo) = .empty;
-        for (windows_fixture) |win| if (include_hidden or !win.cloaked) try out.append(arena, win);
+        for (self.windows) |win| if (include_hidden or !win.cloaked) try out.append(arena, win);
         return out.items;
     }
 
     /// Rectangle of `window`, else of the foreground (accessibility) window.
     pub fn windowRect(self: *Fake, window: ?u64) ?display.Rect {
-        if (window) |h| for (windows_fixture) |win| if (win.handle == h) return win.rect;
+        if (window) |h| for (self.windows) |win| if (win.handle == h) return win.rect;
         return if (self.ui_elements.len > 0) self.ui_elements[0].rect else null;
     }
 
-    pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64) uitree.SnapshotResult {
+    fn refOf(win: display.WindowInfo) display.WindowRef {
+        return .{ .handle = win.handle, .pid = win.pid };
+    }
+
+    /// Top window under physical point `p`, else the foreground window
+    /// (`ui_window`).
+    pub fn windowAt(self: *Fake, point: ?[2]i32) ?display.WindowRef {
+        const p = point orelse return self.windowRef(self.ui_window) orelse .{ .handle = self.ui_window, .pid = 0 };
+        for (self.windows) |win| if (!win.cloaked and !win.minimized and win.rect.contains(p[0], p[1])) return refOf(win);
+        return null;
+    }
+
+    pub fn windowRef(self: *Fake, handle: u64) ?display.WindowRef {
+        for (self.windows) |win| if (win.handle == handle) return refOf(win);
+        return null;
+    }
+
+    pub fn processName(self: *Fake, arena: std.mem.Allocator, pid: u32) ?[]const u8 {
         _ = arena;
+        self.process_lookups += 1;
+        for (self.windows) |win| if (win.pid == pid) return win.exe;
+        return null;
+    }
+
+    pub fn visibleWindows(self: *Fake, arena: std.mem.Allocator) error{OutOfMemory}![]const display.VisibleWindow {
+        var out: std.ArrayList(display.VisibleWindow) = .empty;
+        for (self.windows) |win| if (!win.cloaked and !win.minimized)
+            try out.append(arena, .{ .handle = win.handle, .pid = win.pid, .rect = win.rect, .solid = true });
+        return out.items;
+    }
+
+    pub fn beginSecretScan(self: *Fake) void {
+        self.secret_scans += 1;
+    }
+
+    /// Rectangles of the on-screen password elements of the foreground tree.
+    pub fn secretRects(self: *Fake) []const display.Rect {
+        var n: usize = 0;
+        for (self.ui_elements) |e| if (e.password and !e.states.offscreen and n < self.secret_buf.len) {
+            self.secret_buf[n] = e.rect;
+            n += 1;
+        };
+        return self.secret_buf[0..n];
+    }
+
+    pub fn startKillSwitch(self: *Fake, control: *Control, rearm: keys.Combo) void {
+        _ = rearm;
+        self.control = control;
+    }
+
+    pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64) uitree.SnapshotResult {
         if (window) |h| if (h != self.ui_window) {
-            for (windows_fixture, 0..) |win, i| if (win.handle == h) return .{ .ok = .{ .window = h, .elements = win_roots[i..][0..1] } };
+            for (self.windows) |win| if (win.handle == h) {
+                const root = arena.alloc(uitree.Element, 1) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+                root[0] = .{ .key = win.handle, .depth = 0, .role = .window, .name = win.title, .rect = win.rect };
+                return .{ .ok = .{ .window = h, .elements = root } };
+            };
             return .{ .err = "Fenêtre fermée : rappelle window_list" };
         };
         self.ui_snapshots += 1;
@@ -224,7 +287,7 @@ pub const Fake = struct {
     }
 
     pub fn focusWindow(self: *Fake, handle: u64) display.FocusResult {
-        for (windows_fixture) |win| if (win.handle == handle) {
+        for (self.windows) |win| if (win.handle == handle) {
             self.focused = handle;
             return .ok;
         };

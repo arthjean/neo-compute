@@ -7,6 +7,7 @@ const input = @import("input.zig");
 const keys = @import("keys.zig");
 const display = @import("display.zig");
 const screen = @import("screen.zig");
+const policy = @import("policy.zig");
 const Result = @import("mcp.zig").Result;
 const fmt = @import("session.zig").fmt;
 
@@ -56,14 +57,21 @@ fn inputError(err: input.InputError) Result {
 const Point = union(enum) { ok: [2]i32, err: Result };
 
 /// Physical point of an optional screenshot coordinate (the cursor when
-/// omitted), after the elevated-target check.
-fn actionPoint(ctx: anytype, coordinate: ?[2]i32) Point {
+/// omitted), after the policy (US-017) and elevated-target checks.
+fn actionPoint(ctx: anytype, coordinate: ?[2]i32, need: policy.Level) Point {
     const p = if (coordinate) |c| switch (screen.toPhysical(ctx, c)) {
         .ok => |p| p,
         .err => |e| return .{ .err = Result.err(e) },
     } else ctx.backend.cursorPosition();
+    if (policy.requireAt(ctx, p, need)) |r| return .{ .err = r };
     if (ctx.backend.targetAt(p) == .elevated) return .{ .err = Result.err(uipi_message) };
     return .{ .ok = p };
+}
+
+/// Level a mouse button needs: a right or middle click pastes in most
+/// terminals, which `click` must not allow.
+fn buttonLevel(btn: input.Button) policy.Level {
+    return if (btn == .left) .click else .full;
 }
 
 /// Sends `events` with `mods` held around them.
@@ -80,7 +88,7 @@ pub fn click(ctx: anytype, coordinate: ?[2]i32, text: ?[]const u8, btn: input.Bu
         .ok => |m| m,
         .err => |e| return Result.err(e),
     };
-    const p = switch (actionPoint(ctx, coordinate)) {
+    const p = switch (actionPoint(ctx, coordinate, buttonLevel(btn))) {
         .ok => |p| p,
         .err => |r| return r,
     };
@@ -98,7 +106,7 @@ pub fn drag(ctx: anytype, start: [2]i32, end: [2]i32, text: ?[]const u8) Result 
         .ok => |m| m,
         .err => |e| return Result.err(e),
     };
-    const a = switch (actionPoint(ctx, start)) {
+    const a = switch (actionPoint(ctx, start, .click)) {
         .ok => |p| p,
         .err => |r| return r,
     };
@@ -106,8 +114,9 @@ pub fn drag(ctx: anytype, start: [2]i32, end: [2]i32, text: ?[]const u8) Result 
         .ok => |p| p,
         .err => |e| return Result.err(e),
     };
-    // The drop reaches the window under the end point: UIPI would drop it
-    // silently there too.
+    // The drop reaches the window under the end point: the policy applies
+    // there, and UIPI would drop it silently there too.
+    if (policy.requireAt(ctx, b, .click)) |r| return r;
     if (ctx.backend.targetAt(b) == .elevated) return Result.err(uipi_message);
     holdMods(ctx, mods, .press) catch |e| return inputError(e);
     ctx.backend.sendMouse(&.{ .{ .move = a }, .{ .down = .left } }) catch |e| return inputError(e);
@@ -131,12 +140,13 @@ pub fn move(ctx: anytype, coordinate: [2]i32) Result {
         .ok => |p| p,
         .err => |e| return Result.err(e),
     };
+    if (policy.requireAt(ctx, p, .click)) |r| return r;
     ctx.backend.sendMouse(&.{.{ .move = p }}) catch |e| return inputError(e);
     return Result.text("ok");
 }
 
 pub fn button(ctx: anytype, down: bool) Result {
-    const p = switch (actionPoint(ctx, null)) {
+    const p = switch (actionPoint(ctx, null, .click)) {
         .ok => |p| p,
         .err => |r| return r,
     };
@@ -161,7 +171,7 @@ pub fn scroll(ctx: anytype, direction: anytype, amount: u32, coordinate: ?[2]i32
         .ok => |m| m,
         .err => |e| return Result.err(e),
     };
-    const p = switch (actionPoint(ctx, coordinate)) {
+    const p = switch (actionPoint(ctx, coordinate, .click)) {
         .ok => |p| p,
         .err => |r| return r,
     };
@@ -192,7 +202,9 @@ pub fn parseCombo(arena: std.mem.Allocator, text: []const u8) ComboResult {
     };
 }
 
+/// Keyboard input reaches the foreground window: it needs `full` there.
 fn foregroundCheck(ctx: anytype) ?Result {
+    if (policy.requireAt(ctx, null, .full)) |r| return r;
     if (ctx.backend.targetAt(null) == .elevated) return Result.err(uipi_message);
     return null;
 }

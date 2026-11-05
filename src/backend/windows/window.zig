@@ -41,14 +41,60 @@ fn processInfo(arena: std.mem.Allocator, cache: *std.ArrayList(ProcessInfo), pid
 }
 
 fn exeName(arena: std.mem.Allocator, pid: u32) ![]const u8 {
-    const process = w.OpenProcess(w.PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) orelse return "?";
+    return try processName(arena, pid) orelse "?";
+}
+
+/// Executable file name of process `pid` (`notepad.exe`), null when the
+/// process cannot be queried.
+pub fn processName(arena: std.mem.Allocator, pid: u32) !?[]const u8 {
+    const process = w.OpenProcess(w.PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) orelse return null;
     defer _ = w.CloseHandle(process);
     var path: [1024:0]u16 = undefined;
     var len: u32 = path.len;
-    if (w.QueryFullProcessImageNameW(process, w.PROCESS_NAME_WIN32, &path, &len) == 0) return "?";
+    if (w.QueryFullProcessImageNameW(process, w.PROCESS_NAME_WIN32, &path, &len) == 0) return null;
     const full = path[0..len];
     const base = if (std.mem.lastIndexOfScalar(u16, full, '\\')) |i| full[i + 1 ..] else full;
-    return utf8(arena, base);
+    return try utf8(arena, base);
+}
+
+fn refOf(hwnd: w.HWND) ?display.WindowRef {
+    if (hwnd == null) return null;
+    var pid: u32 = 0;
+    if (w.GetWindowThreadProcessId(hwnd, &pid) == 0) return null;
+    return .{ .handle = @intFromPtr(hwnd), .pid = pid };
+}
+
+/// Top-level window under physical point `p`, else the foreground window.
+pub fn at(point: ?[2]i32) ?display.WindowRef {
+    const hwnd = if (point) |p| w.WindowFromPoint(.{ .x = p[0], .y = p[1] }) else w.GetForegroundWindow();
+    if (hwnd == null) return null;
+    return refOf(w.GetAncestor(hwnd, w.GA_ROOT) orelse hwnd);
+}
+
+pub fn ref(handle: u64) ?display.WindowRef {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return null;
+    return refOf(hwnd);
+}
+
+/// Visible, non-minimized, non-cloaked top-level windows, top of the
+/// z-order first, for the screenshot blackout of `deny` windows. Layered
+/// and transparent windows are not `solid`.
+pub fn visible(arena: std.mem.Allocator) ![]const display.VisibleWindow {
+    var c: Collect = .{};
+    _ = w.EnumWindows(Collect.callback, @bitCast(@intFromPtr(&c)));
+    var out: std.ArrayList(display.VisibleWindow) = .empty;
+    for (c.hwnds[0..c.len]) |hwnd| {
+        if (w.IsIconic(hwnd) != 0 or isCloaked(hwnd)) continue;
+        const r = rect(hwnd) orelse continue;
+        if (r.w <= 0 or r.h <= 0) continue;
+        var pid: u32 = 0;
+        _ = w.GetWindowThreadProcessId(hwnd, &pid);
+        const ex: u32 = @truncate(@as(usize, @bitCast(w.GetWindowLongPtrW(hwnd, w.GWL_EXSTYLE))));
+        const solid = ex & (w.WS_EX_LAYERED | w.WS_EX_TRANSPARENT) == 0;
+        try out.append(arena, .{ .handle = @intFromPtr(hwnd), .pid = pid, .rect = r, .solid = solid });
+    }
+    return out.items;
 }
 
 pub fn isCloaked(hwnd: w.HWND) bool {

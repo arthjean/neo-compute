@@ -8,6 +8,9 @@ const mcp = @import("core/mcp.zig");
 const tools = @import("core/tools.zig");
 const bench = @import("core/bench.zig");
 const display = @import("core/display.zig");
+const policy = @import("core/policy.zig");
+const audit = @import("core/audit.zig");
+const keys = @import("core/keys.zig");
 
 pub const Backend = if (builtin.os.tag == .windows and !build_options.fake_backend)
     @import("backend/windows.zig").Windows
@@ -18,6 +21,7 @@ pub const Server = mcp.Server(Backend, tools.all);
 
 const usage =
     \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision]
+    \\                   [--policy FILE] [--rearm-key COMBO]
     \\       neo-compute bench <all|transport|diff|capture|snapshot|screenshot|window_list|ui_tree|settle|APP> [--iterations N]
     \\                         [--check BASELINE.json] [--write-baseline FILE]
     \\       neo-compute selftest
@@ -34,6 +38,8 @@ pub fn main(init: std.process.Init) !u8 {
     var trace = false;
     var screenshot_size: u32 = display.default_long_side;
     var mode: mcp.Mode = .a11y;
+    var policy_path: ?[]const u8 = null;
+    var rearm: keys.Combo = default_rearm;
     var i: usize = 1;
     if (i < args.len and std.mem.eql(u8, args[i], "serve")) i += 1;
     while (i < args.len) : (i += 1) {
@@ -55,6 +61,22 @@ pub fn main(init: std.process.Init) !u8 {
                 return 2;
             };
             i += 1;
+        } else if (std.mem.eql(u8, a, "--policy")) {
+            policy_path = if (i + 1 < args.len) args[i + 1] else {
+                std.debug.print("neo-compute: --policy needs a file path\n", .{});
+                return 2;
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--rearm-key")) {
+            const v = if (i + 1 < args.len) args[i + 1] else "";
+            rearm = switch (keys.parse(v)) {
+                .ok => |c| c,
+                else => {
+                    std.debug.print("neo-compute: --rearm-key needs a key combination such as ctrl+alt+shift+r\n", .{});
+                    return 2;
+                },
+            };
+            i += 1;
         } else if (std.mem.eql(u8, a, "--version")) {
             std.debug.print("{s} {s}\n", .{ mcp.server_name, mcp.server_version });
             return 0;
@@ -63,10 +85,38 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         }
     }
-    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size, .mode = mode });
+    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size, .mode = mode }, policy_path, rearm);
 }
 
-fn serve(init: std.process.Init, options: mcp.Options) !u8 {
+/// The only way to lift a kill switch pause (US-018), physical only.
+const default_rearm: keys.Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
+
+fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, rearm: keys.Combo) !u8 {
+    const arena = init.arena.allocator();
+    const env = init.environ_map;
+    var options = base;
+
+    // US-017: %APPDATA%\neo-compute\policy.json unless --policy names a file.
+    const path = policy_path orelse if (env.get("APPDATA")) |d| try std.fs.path.join(arena, &.{ d, "neo-compute", "policy.json" }) else null;
+    const pol: policy.Policy = if (path) |p| policy.load(arena, init.io, p, policy_path != null) else policy.defaults;
+    if (pol.problem) |why| std.debug.print("neo-compute: {s}: every application is limited to observe\n", .{why});
+    options.policy = &pol;
+
+    // US-019: %LOCALAPPDATA%\neo-compute\audit.jsonl.
+    var log: ?audit.Audit = null;
+    if (env.get("LOCALAPPDATA")) |d| {
+        log = audit.Audit.open(init.io, try std.fs.path.join(arena, &.{ d, "neo-compute" })) catch |err| blk: {
+            std.debug.print("neo-compute: audit log unavailable ({t}): tool calls are not recorded\n", .{err});
+            break :blk null;
+        };
+    } else std.debug.print("neo-compute: LOCALAPPDATA is not set: tool calls are not recorded\n", .{});
+    defer if (log) |*l| l.deinit();
+    if (log) |*l| options.audit = l;
+
+    // FR-14: one instance controls the desktop; a second one observes.
+    options.exclusive = if (@hasDecl(Backend, "acquireInstance")) Backend.acquireInstance() else true;
+    if (!options.exclusive) std.debug.print("neo-compute: another neo-compute controls this desktop: this instance refuses actions\n", .{});
+
     // Longest accepted line; longer lines are answered with -32700.
     const in_buf = try init.gpa.alloc(u8, 1024 * 1024);
     defer init.gpa.free(in_buf);
@@ -78,6 +128,8 @@ fn serve(init: std.process.Init, options: mcp.Options) !u8 {
     defer if (@hasDecl(Backend, "deinit")) backend.deinit();
     var server: Server = .init(init.gpa, init.io, &backend, options);
     defer server.deinit();
+    if (options.exclusive and @hasDecl(Backend, "startKillSwitch")) backend.startKillSwitch(&server.control, rearm);
+    defer if (@hasDecl(Backend, "stopKillSwitch")) backend.stopKillSwitch();
     try server.serve(&stdin.interface, &stdout.interface);
     return 0;
 }
@@ -180,4 +232,7 @@ test {
     _ = @import("core/tools_test.zig");
     _ = @import("core/uitree.zig");
     _ = @import("core/a11y_test.zig");
+    _ = @import("core/policy.zig");
+    _ = @import("core/audit.zig");
+    _ = @import("core/security_test.zig");
 }

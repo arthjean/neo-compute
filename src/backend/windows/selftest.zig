@@ -429,6 +429,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
         if (!tested) report.skip("uipi", "no elevated window on display 0; open one to exercise this check", .{});
     }
 
+    securityChecks(&report, gpa, io, arena, &backend, &tw) catch |err| report.fail("security", "{t}", .{err});
+
     // release: the shipped server releases a held key within 50 ms of stdin
     // EOF and exits with code 0.
     releaseCheck(io, &report, arena);
@@ -587,6 +589,228 @@ fn dpiUnaware(report: *Report, caller: *Caller, main: *TestWindow, primary: disp
         worst = @max(worst, @max(@abs(@as(f64, @floatFromInt(c[0])) - ex), @abs(@as(f64, @floatFromInt(c[1])) - ey)));
     }
     if (worst <= 1.0) report.ok("dpi-unaware", "DPI-unaware window at {d} dpi: worst error {d:.2} logical px", .{ dpi, worst }) else report.fail("dpi-unaware", "DPI-unaware window at {d} dpi: click {d:.2} logical px away", .{ dpi, worst });
+}
+
+/// Pixel of the server's last reduced screenshot at physical point (x, y).
+fn shotPixel(server: *Server, m: display.Mapping, x: i32, y: i32) [4]u8 {
+    const s = m.toScreenshot(x, y);
+    const i = (@as(usize, @intCast(s[1])) * m.width + @as(usize, @intCast(s[0]))) * 4;
+    return server.session.reducer.out[i..][0..4].*;
+}
+
+fn black(px: [4]u8) bool {
+    return px[0] == 0 and px[1] == 0 and px[2] == 0;
+}
+
+/// Share of black pixels over `r` (physical), sampled every 4 pixels.
+fn blackShare(server: *Server, m: display.Mapping, r: w.RECT) f64 {
+    var total: u32 = 0;
+    var dark: u32 = 0;
+    var y = r.top;
+    while (y < r.bottom) : (y += 4) {
+        var x = r.left;
+        while (x < r.right) : (x += 4) {
+            total += 1;
+            dark += @intFromBool(black(shotPixel(server, m, x, y)));
+        }
+    }
+    return if (total == 0) 0 else @as(f64, @floatFromInt(dark)) / @as(f64, @floatFromInt(total));
+}
+
+fn injectKeys(vks: []const u16, up: bool) void {
+    var buf: [8]w.INPUT = undefined;
+    for (vks, 0..) |vk, i| buf[i] = .{ .type = w.INPUT_KEYBOARD, .Anonymous = .{ .ki = .{ .wVk = vk, .wScan = 0, .dwFlags = if (up) w.KEYEVENTF_KEYUP else 0, .time = 0, .dwExtraInfo = 0 } } };
+    _ = w.SendInput(@intCast(vks.len), &buf, @sizeOf(w.INPUT));
+}
+
+/// EP-004 against the test window: policy resolution cost, `deny`
+/// blackout and hiding, password field masking, and the kill switch with
+/// real low-level hooks (physical events are fed to the hook logic on its
+/// thread; injected ones go through Windows).
+fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: std.mem.Allocator, backend: *Windows, tw: *TestWindow) !void {
+    const policy = @import("../../core/policy.zig");
+    const control = @import("../../core/control.zig");
+    _ = w.SetForegroundWindow(tw.window());
+    w.Sleep(150);
+    const handle = @intFromPtr(tw.window());
+    const m = display.Mapping.of(0, backend.displays()[0].rect, display.default_long_side);
+    var wr: w.RECT = undefined;
+    _ = w.GetWindowRect(tw.window(), &wr);
+    const cx = @divTrunc(wr.left + wr.right, 2);
+    const cy = @divTrunc(wr.top + wr.bottom, 2);
+
+    // policy-resolve: the target of an action costs < 0.2 ms once cached.
+    {
+        var server: Server = .init(gpa, io, backend, .{});
+        defer server.deinit();
+        var ctx: Server.ToolCtx = .{ .arena = arena, .io = io, .backend = backend, .cancel = &server.control.cancel, .timings = &server.timings, .session = &server.session };
+        const t0 = qpcUs();
+        const first = policy.requireAt(&ctx, .{ cx, cy }, .full);
+        const first_us = qpcUs() - t0;
+        var samples: [1000]u64 = undefined;
+        for (&samples) |*s| {
+            var a: i64 = 0;
+            var b: i64 = 0;
+            var f: i64 = 1;
+            _ = w.QueryPerformanceCounter(&a);
+            _ = policy.requireAt(&ctx, .{ cx, cy }, .full);
+            _ = w.QueryPerformanceCounter(&b);
+            _ = w.QueryPerformanceFrequency(&f);
+            s.* = @intCast(@divTrunc((b - a) * 1_000_000_000, f));
+        }
+        std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+        const p95_ns = samples[949];
+        const exe = if (ctx.target) |*t| t.exe() else "?";
+        if (first == null and std.ascii.eqlIgnoreCase(exe, "neo-compute.exe") and p95_ns < 200_000)
+            report.ok("policy-resolve", "test window resolves to {s} at full; first lookup {d} us, cached p95 {d:.1} us (budget 200 us)", .{ exe, first_us, @as(f64, @floatFromInt(p95_ns)) / 1000 })
+        else
+            report.fail("policy-resolve", "exe {s}, refused {}, first {d} us, cached p95 {d} ns", .{ exe, first != null, first_us, p95_ns });
+    }
+
+    // policy-deny: neo-compute.exe at deny is black in screenshots and
+    // absent from window_list and ui_tree; a click on it is refused.
+    {
+        const pol = policy.parse(arena, "{\"apps\": {\"neo-compute.exe\": \"deny\"}}", "selftest");
+        var server: Server = .init(gpa, io, backend, .{ .policy = &pol });
+        defer server.deinit();
+        var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
+        defer caller.out.deinit();
+        const shot = try caller.call("screenshot", "{{\"display\":0}}", .{});
+        const share = blackShare(&server, m, .{ .left = wr.left + 2, .top = wr.top + 2, .right = wr.right - 2, .bottom = wr.bottom - 2 });
+        const list = try caller.call("window_list", "{{}}", .{});
+        const listed = std.mem.indexOf(u8, list.text, try std.fmt.allocPrint(arena, "0x{x} ", .{handle})) != null;
+        const tree = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{handle});
+        const c = m.toScreenshot(cx, cy);
+        const click = try caller.call("left_click", "{{\"coordinate\":[{d},{d}],\"observe\":\"none\"}}", .{ c[0], c[1] });
+        const refused = tree.is_error and std.mem.indexOf(u8, tree.text, "mode deny") != null and click.is_error and std.mem.indexOf(u8, click.text, "neo-compute.exe est en mode deny") != null;
+        if (!shot.is_error and share == 1 and !listed and refused)
+            report.ok("policy-deny", "test window 100 % black in the screenshot, absent from window_list, ui_tree and left_click refused: `{s}`", .{click.text})
+        else
+            report.fail("policy-deny", "black share {d:.3}, listed {}, ui_tree `{s}`, click `{s}`", .{ share, listed, tree.text, click.text });
+    }
+
+    // password-mask: the ES_PASSWORD field is black before encoding, the
+    // window around it is not.
+    {
+        var server: Server = .init(gpa, io, backend, .{});
+        defer server.deinit();
+        var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
+        defer caller.out.deinit();
+        var pr: w.RECT = undefined;
+        _ = w.GetWindowRect(tw.passwordWindow(), &pr);
+        const t0 = qpcUs();
+        const shot = try caller.call("screenshot", "{{\"display\":0}}", .{});
+        const shot_us = qpcUs() - t0;
+        const field = blackShare(&server, m, .{ .left = pr.left + 1, .top = pr.top + 1, .right = pr.right - 1, .bottom = pr.bottom - 1 });
+        const around = blackShare(&server, m, .{ .left = pr.right + 8, .top = pr.top, .right = pr.right + 60, .bottom = pr.bottom });
+        if (!shot.is_error and field == 1 and around < 0.5)
+            report.ok("password-mask", "password field {d}x{d} 100 % black, beside it {d:.0} % black; screenshot {d} us", .{ pr.right - pr.left, pr.bottom - pr.top, around * 100, shot_us })
+        else
+            report.fail("password-mask", "field black share {d:.3}, beside {d:.3}, error {}", .{ field, around, shot.is_error });
+    }
+
+    // kill-switch: hooks on their own thread; a physical Escape during
+    // hold_key cancels it, releases shift and pauses.
+    var server: Server = .init(gpa, io, backend, .{});
+    defer server.deinit();
+    var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
+    defer caller.out.deinit();
+    backend.startKillSwitch(&server.control, .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } });
+    defer backend.stopKillSwitch();
+    const ks = backend.kill orelse {
+        report.fail("kill-switch", "low-level hooks could not be installed", .{});
+        return;
+    };
+    const Later = struct {
+        tripped_at: std.atomic.Value(u64) = .init(0),
+        fn escape(self: *@This(), k: *@import("hooks.zig").KillSwitch) void {
+            w.Sleep(300);
+            self.tripped_at.store(qpcUs(), .release);
+            k.simulateKey(w.VK_ESCAPE, true);
+            k.simulateKey(w.VK_ESCAPE, false);
+        }
+        fn move(self: *@This(), k: *@import("hooks.zig").KillSwitch) void {
+            w.Sleep(300);
+            self.tripped_at.store(qpcUs(), .release);
+            k.simulateMove(12, 0);
+        }
+    };
+    {
+        var later: Later = .{};
+        const th = try std.Thread.spawn(.{}, Later.escape, .{ &later, ks });
+        const r = try caller.call("hold_key", "{{\"text\":\"shift\",\"duration\":5,\"observe\":\"none\"}}", .{});
+        const end = qpcUs();
+        th.join();
+        const cancel_ms = (end - later.tripped_at.load(.acquire)) / 1000;
+        const released = w.GetAsyncKeyState(w.VK_LSHIFT) >= 0;
+        if (r.is_error and std.mem.eql(u8, r.text, control.paused_message) and cancel_ms < 100 and released and server.control.isPaused())
+            report.ok("kill-escape", "physical Escape during hold_key: cancelled in {d} ms, shift released, `{s}`", .{ cancel_ms, r.text })
+        else
+            report.fail("kill-escape", "after {d} ms: error {} released {} paused {} `{s}`", .{ cancel_ms, r.is_error, released, server.control.isPaused(), r.text });
+    }
+    {
+        const c = m.toScreenshot(cx, cy);
+        const click = try caller.call("left_click", "{{\"coordinate\":[{d},{d}],\"observe\":\"none\"}}", .{ c[0], c[1] });
+        const shot = try caller.call("screenshot", "{{\"display\":0}}", .{});
+        // An injected re-arm shortcut (any SendInput caller) is ignored.
+        const combo = [_]u16{ w.VK_LCONTROL, w.VK_LMENU, w.VK_LSHIFT, 'R' };
+        injectKeys(&combo, false);
+        injectKeys(&combo, true);
+        w.Sleep(150);
+        const still = server.control.isPaused();
+        // The physical shortcut re-arms.
+        for (combo) |vk| ks.simulateKey(if (vk == 'R') 'R' else vk, true);
+        for (combo) |vk| ks.simulateKey(vk, false);
+        w.Sleep(100);
+        const rearmed = !server.control.isPaused();
+        if (click.is_error and std.mem.eql(u8, click.text, control.paused_message) and !shot.is_error and still and rearmed)
+            report.ok("kill-pause", "paused: left_click refused, screenshot served; injected Ctrl+Alt+Shift+R ignored, physical one re-arms", .{})
+        else
+            report.fail("kill-pause", "click `{s}`, screenshot error {}, paused after injected re-arm {}, re-armed {}", .{ click.text, shot.is_error, still, rearmed });
+    }
+    {
+        // An injected Escape (key Escape) during an action never trips.
+        const r = try caller.call("key", "{{\"text\":\"Escape\",\"observe\":\"none\"}}", .{});
+        w.Sleep(100);
+        var later: Later = .{};
+        const th = try std.Thread.spawn(.{}, Later.move, .{ &later, ks });
+        const moved = try caller.call("hold_key", "{{\"text\":\"shift\",\"duration\":5,\"observe\":\"none\"}}", .{});
+        const end = qpcUs();
+        th.join();
+        const cancel_ms = (end - later.tripped_at.load(.acquire)) / 1000;
+        const ok_key = !r.is_error and ks.trips.load(.acquire) == 2;
+        _ = server.control.rearm();
+        const proc_us = @as(f64, @floatFromInt(ks.max_proc_ns.load(.acquire))) / 1000;
+        if (ok_key and moved.is_error and std.mem.eql(u8, moved.text, control.paused_message) and cancel_ms < 100 and proc_us < 1000)
+            report.ok("kill-mouse", "injected Escape ignored; physical 12 px move cancelled hold_key in {d} ms; slowest hook call {d:.1} us (budget 1000 us)", .{ cancel_ms, proc_us })
+        else
+            report.fail("kill-mouse", "key Escape error {} trips {d}; move: `{s}` after {d} ms; slowest hook {d:.1} us", .{ r.is_error, ks.trips.load(.acquire), moved.text, cancel_ms, proc_us });
+    }
+    {
+        // Hooks removed behind our back (LowLevelHooksTimeout) are noticed
+        // at the next input and reinstalled.
+        const before = ks.reinstalls.load(.acquire);
+        ks.simulateRemoval();
+        w.Sleep(300);
+        // A 1 px move and back: a null move is no input at all.
+        var nudge = [_]w.INPUT{
+            .{ .type = w.INPUT_MOUSE, .Anonymous = .{ .mi = .{ .dx = 1, .dy = 0, .mouseData = 0, .dwFlags = w.MOUSEEVENTF_MOVE, .time = 0, .dwExtraInfo = 0 } } },
+            .{ .type = w.INPUT_MOUSE, .Anonymous = .{ .mi = .{ .dx = -1, .dy = 0, .mouseData = 0, .dwFlags = w.MOUSEEVENTF_MOVE, .time = 0, .dwExtraInfo = 0 } } },
+        };
+        _ = w.SendInput(2, &nudge, @sizeOf(w.INPUT));
+        const t0 = qpcUs();
+        while (ks.reinstalls.load(.acquire) == before and qpcUs() - t0 < 3_000_000) w.Sleep(20);
+        const after = ks.reinstalls.load(.acquire);
+        const seen_before = ks.last_event_tick.load(.acquire);
+        w.Sleep(20);
+        _ = w.SendInput(2, &nudge, @sizeOf(w.INPUT));
+        w.Sleep(100);
+        const live = ks.last_event_tick.load(.acquire) != seen_before;
+        if (after > before and live)
+            report.ok("hook-reinstall", "removed hooks reinstalled {d} ms after the missed input, and see input again", .{(qpcUs() - t0) / 1000})
+        else
+            report.fail("hook-reinstall", "reinstalls {d} -> {d}, hooks live {}", .{ before, after, live });
+    }
 }
 
 fn releaseCheck(io: std.Io, report: *Report, arena: std.mem.Allocator) void {

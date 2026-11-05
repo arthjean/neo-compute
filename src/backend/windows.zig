@@ -14,6 +14,8 @@ const input = @import("windows/input.zig");
 const window = @import("windows/window.zig");
 const com = @import("windows/com.zig");
 const uia = @import("windows/uia.zig");
+const hooks = @import("windows/hooks.zig");
+const Control = @import("../core/control.zig").Control;
 const uitree = @import("../core/uitree.zig");
 const Capture = capture_mod.Capture;
 const fmt = @import("../core/session.zig").fmt;
@@ -27,13 +29,17 @@ pub const Windows = struct {
     names: [display.max_displays][96]u8 = undefined,
     displays_len: usize = 0,
     held: input.Held = .{},
+    /// Guards `held`: the kill switch thread releases inputs too (US-018).
+    held_lock: w.SRWLOCK = .{ .Ptr = null },
     ui: uia.Worker,
+    kill: ?*hooks.KillSwitch = null,
 
     pub fn init(gpa: std.mem.Allocator) Windows {
         return .{ .gpa = gpa, .ui = .{ .gpa = gpa } };
     }
 
     pub fn deinit(self: *Windows) void {
+        self.stopKillSwitch();
         self.ui.deinit();
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
@@ -168,6 +174,8 @@ pub const Windows = struct {
     // ------------------------------------------------------------ input
 
     pub fn sendMouse(self: *Windows, events: []const core_input.MouseEvent) core_input.InputError!void {
+        w.AcquireSRWLockExclusive(&self.held_lock);
+        defer w.ReleaseSRWLockExclusive(&self.held_lock);
         return input.sendMouse(&self.held, events);
     }
 
@@ -177,6 +185,8 @@ pub const Windows = struct {
     }
 
     pub fn keyCombo(self: *Windows, combo: keys.Combo, action: core_input.KeyAction) core_input.InputError!void {
+        w.AcquireSRWLockExclusive(&self.held_lock);
+        defer w.ReleaseSRWLockExclusive(&self.held_lock);
         return input.keyCombo(&self.held, combo, action);
     }
 
@@ -197,9 +207,88 @@ pub const Windows = struct {
         return input.targetAt(point);
     }
 
-    /// Lets go of every key and button neo-compute holds (FR-07).
+    /// Lets go of every key and button neo-compute holds (FR-07). Called
+    /// from the dispatcher and from the kill switch thread.
     pub fn releaseAllInputs(self: *Windows) void {
+        w.AcquireSRWLockExclusive(&self.held_lock);
+        defer w.ReleaseSRWLockExclusive(&self.held_lock);
         if (self.held.count() > 0) input.releaseAll(&self.held);
+    }
+
+    // ------------------------------------------------------------ human control (EP-004)
+
+    /// Starts the physical kill switch (US-018) on its own thread. Without
+    /// it (hooks refused) the server runs and says so on stderr.
+    pub fn startKillSwitch(self: *Windows, control: *Control, rearm: keys.Combo) void {
+        const vk = input.vkOf(rearm) orelse {
+            std.debug.print("neo-compute: re-arm key has no virtual key on this layout: the physical kill switch is off\n", .{});
+            return;
+        };
+        const ks = self.gpa.create(hooks.KillSwitch) catch return;
+        ks.* = .{ .control = control, .rearm = .{ .vk = vk, .mods = rearm.mods }, .release_ctx = self, .release = releaseFromHook };
+        ks.start() catch |err| {
+            std.debug.print("neo-compute: kill switch unavailable ({t})\n", .{err});
+            self.gpa.destroy(ks);
+            return;
+        };
+        self.kill = ks;
+    }
+
+    fn releaseFromHook(ctx: *anyopaque) void {
+        const self: *Windows = @ptrCast(@alignCast(ctx));
+        self.releaseAllInputs();
+    }
+
+    pub fn stopKillSwitch(self: *Windows) void {
+        const ks = self.kill orelse return;
+        ks.stop();
+        self.gpa.destroy(ks);
+        self.kill = null;
+    }
+
+    /// Takes the session-wide named mutex (US-019, FR-14). False when
+    /// another neo-compute already controls this desktop. The owner keeps
+    /// the handle until it exits.
+    pub fn acquireInstance() bool {
+        const name = std.unicode.utf8ToUtf16LeStringLiteral("Local\\neo-compute-desktop");
+        const handle = w.CreateMutexW(null, 0, name);
+        if (handle == null) return true;
+        if (w.GetLastError() == w.ERROR_ALREADY_EXISTS) {
+            _ = w.CloseHandle(handle);
+            return false;
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------ policy targets and masking
+
+    pub fn windowAt(self: *Windows, point: ?[2]i32) ?display.WindowRef {
+        _ = self;
+        return window.at(point);
+    }
+
+    pub fn windowRef(self: *Windows, handle: u64) ?display.WindowRef {
+        _ = self;
+        return window.ref(handle);
+    }
+
+    pub fn processName(self: *Windows, arena: std.mem.Allocator, pid: u32) ?[]const u8 {
+        _ = self;
+        return window.processName(arena, pid) catch null;
+    }
+
+    pub fn visibleWindows(self: *Windows, arena: std.mem.Allocator) error{OutOfMemory}![]const display.VisibleWindow {
+        _ = self;
+        return window.visible(arena);
+    }
+
+    /// Starts the foreground window's password field scan on the UIA worker.
+    pub fn beginSecretScan(self: *Windows) void {
+        self.ui.beginSecrets();
+    }
+
+    pub fn secretRects(self: *Windows) []const display.Rect {
+        return self.ui.secretRects();
     }
 
     // ------------------------------------------------------------ accessibility

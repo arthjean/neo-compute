@@ -13,6 +13,7 @@ const display = @import("display.zig");
 const a11y = @import("a11y.zig");
 const uitree = @import("uitree.zig");
 const fmt = @import("session.zig").fmt;
+const policy = @import("policy.zig");
 
 const Point = [2]i32;
 const Observe = a11y.Observe;
@@ -202,6 +203,8 @@ pub const hold_key = struct {
 pub const wait = struct {
     pub const name = "wait";
     pub const description = "Pause for duration seconds.";
+    /// Not an action: allowed while paused and in a second instance.
+    pub const inert = true;
     pub const Args = struct {
         duration: f64,
         pub const field_info = .{ .duration = duration_info };
@@ -302,6 +305,7 @@ pub const window_focus = struct {
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = parseHandle(args.window) orelse
             return Result.err(fmt(ctx.arena, "Handle `{s}` invalide : utilise un handle de window_list (ex. 0x1a2b).", .{args.window}));
+        if (policy.requireWindow(ctx, handle, .click)) |r| return r;
         const r = switch (ctx.backend.focusWindow(handle)) {
             .ok => Result.text(fmt(ctx.arena, "0x{x} au premier plan", .{handle})),
             .closed => Result.err("Fenêtre fermée : rappelle window_list"),
@@ -330,7 +334,11 @@ fn windowList(ctx: anytype, include_hidden: bool) Result {
     ctx.timings.start(ctx.io, .windows);
     const listed = ctx.backend.listWindows(ctx.arena, include_hidden);
     ctx.timings.stop(ctx.io, .windows);
-    const wins = listed catch return Result.err("Mémoire insuffisante : réessaie.");
+    const all_wins = listed catch return Result.err("Mémoire insuffisante : réessaie.");
+    // `deny` applications are absent from the list (US-017).
+    var kept: std.ArrayList(display.WindowInfo) = .empty;
+    for (all_wins) |win| if (ctx.session.policy.levelOf(win.exe) != .deny) kept.append(ctx.arena, win) catch return Result.err("Mémoire insuffisante : réessaie.");
+    const wins = kept.items;
     if (wins.len == 0) return Result.text("Aucune fenêtre visible.");
     const displays = ctx.backend.displays();
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
