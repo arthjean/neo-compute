@@ -29,7 +29,8 @@ pub fn build(b: *std.Build) void {
     registry_mod.addOptions("build_options", buildOptions(b, true));
     for ([_][2][]const u8{
         .{ "tests/compile_errors/long_description.zig", "description is 301 characters, limit is 300" },
-        .{ "tests/compile_errors/definition_budget.zig", "tokens, limit is 3000" },
+        .{ "tests/compile_errors/definition_budget.zig", "tokens, limit is 4500" },
+        .{ "tests/compile_errors/always_load_budget.zig", "tokens with always-loaded tool `tool_9`, limit is 1500" },
     }) |case| {
         const bad = b.addObject(.{
             .name = std.fs.path.stem(case[0]),

@@ -1,4 +1,4 @@
-//! Must fail to compile: tool definitions estimated above 3,000 tokens.
+//! Must fail to compile: tool definitions estimated above 4,500 tokens.
 const std = @import("std");
 const registry = @import("registry");
 

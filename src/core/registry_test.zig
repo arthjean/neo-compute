@@ -160,9 +160,22 @@ test "observation tools are read-only and idempotent; core tools are always load
 }
 
 test "tool definitions stay within the token and description budgets" {
+    try testing.expectEqual(@as(usize, 1500), registry.max_always_load_tokens);
+    try testing.expectEqual(@as(usize, 4500), registry.max_definition_tokens);
+    try testing.expect(Reg.always_load_tokens <= registry.max_always_load_tokens);
     try testing.expect(Reg.definition_tokens <= registry.max_definition_tokens);
+    try testing.expect(Reg.always_load_tokens < Reg.definition_tokens);
     inline for (tools.all) |T| try testing.expect(T.description.len <= registry.max_description_len);
-    std.debug.print("tools/list: {d} bytes, about {d} tokens\n", .{ Reg.list_result.len, Reg.definition_tokens });
+    std.debug.print("tools/list: {d} bytes, about {d} tokens (limit {d}); alwaysLoad definitions about {d} tokens (limit {d})\n", .{
+        Reg.list_result.len, Reg.definition_tokens, registry.max_definition_tokens, Reg.always_load_tokens, registry.max_always_load_tokens,
+    });
+}
+
+test "the tools of the Windows-MCP parity PRD are never always loaded (FR-22)" {
+    for ([_][]const u8{ "window_set", "app_launch", "clipboard", "registry_read" }) |n| {
+        if (!Reg.has(n)) continue;
+        try testing.expect(!Reg.alwaysLoaded(n));
+    }
 }
 
 // A tool that records whether it ran, to prove invalid arguments never reach `run`.

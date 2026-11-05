@@ -10,7 +10,12 @@ const std = @import("std");
 const build_options = @import("build_options");
 
 pub const max_description_len = 300;
-pub const max_definition_tokens = 3000;
+/// Estimated tokens of the `anthropic/alwaysLoad` definitions, sent with
+/// every request (FR-22).
+pub const max_always_load_tokens = 1500;
+/// Estimated tokens of every definition, deferred ones included: Claude Code
+/// loads a deferred definition only through tool search (A12).
+pub const max_definition_tokens = 4500;
 
 pub const Annotations = struct {
     read_only: bool = false,
@@ -155,7 +160,16 @@ pub fn Registry(comptime tools: anytype) type {
         pub const list_result: []const u8 = blk: {
             @setEvalBranchQuota(1_000_000);
             var defs: []const u8 = "";
-            for (tools, 0..) |T, i| defs = defs ++ (if (i == 0) "" else ",") ++ toolDefinition(T);
+            var always: []const u8 = "";
+            for (tools, 0..) |T, i| {
+                const def = toolDefinition(T);
+                defs = defs ++ (if (i == 0) "" else ",") ++ def;
+                if (!annotationsOf(T).always_load) continue;
+                always = always ++ (if (always.len == 0) "" else ",") ++ def;
+                const t = estimateTokens(always.len);
+                if (t > max_always_load_tokens)
+                    @compileError(std.fmt.comptimePrint("alwaysLoad definitions estimate {d} tokens with always-loaded tool `{s}`, limit is {d}", .{ t, T.name, max_always_load_tokens }));
+            }
             const tokens = estimateTokens(defs.len);
             if (tokens > max_definition_tokens)
                 @compileError(std.fmt.comptimePrint("tool definitions estimate {d} tokens, limit is {d}", .{ tokens, max_definition_tokens }));
@@ -163,6 +177,22 @@ pub fn Registry(comptime tools: anytype) type {
         };
 
         pub const definition_tokens = estimateTokens(list_result.len);
+
+        /// Estimated tokens of the `anthropic/alwaysLoad` definitions alone.
+        pub const always_load_tokens = blk: {
+            @setEvalBranchQuota(1_000_000);
+            var always: []const u8 = "";
+            for (tools) |T| if (annotationsOf(T).always_load) {
+                always = always ++ (if (always.len == 0) "" else ",") ++ toolDefinition(T);
+            };
+            break :blk estimateTokens(always.len);
+        };
+
+        /// Whether the named tool carries `anthropic/alwaysLoad`.
+        pub fn alwaysLoaded(name: []const u8) bool {
+            inline for (tools) |T| if (std.mem.eql(u8, T.name, name)) return annotationsOf(T).always_load;
+            return false;
+        }
 
         pub const names = blk: {
             var out: [tools.len][]const u8 = undefined;
