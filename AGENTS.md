@@ -28,7 +28,9 @@ asking. Stop and report to Arthur instead of proceeding when:
 Every change keeps these product invariants (PRD FR-07 to FR-18):
 
 - The server opens no network connection and exposes no command or script
-  tool.
+  tool. Judge a candidate tool by what neo-compute's own code would do: a
+  native file, registry or process tool runs no command, even when another
+  server implements it through PowerShell.
 - stdout carries only JSON-RPC, one message per line, written by the
   dispatcher in `src/core/mcp.zig`. Logs never go to stdout.
 - Password field values never appear in text, images, or logs. Text read from

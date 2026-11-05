@@ -565,7 +565,7 @@ Frame as questions for engineering input, not mandates:
 | Allers-retours modèle par tâche | Mode vision du même serveur (US-016) | -30 %, puis -45 % | Month-1, Month-6 | Runner de US-016 |
 | Taux de réussite sur la suite de référence | Mode vision et Windows-MCP (US-016) | ≥ 80 %, puis ≥ 85 % | Month-1, Month-6 | Runner de US-016 |
 | Temps serveur cumulé par tâche, hors stabilisation | N/A (nouveau) | < 1 s p95 | Month-1 | Durées de `audit.jsonl` |
-| Tokens des définitions d'outils | ≈ 4 500 (overhead du toolset API) | ≤ 3 000 | Month-1 | count_tokens sur `tools/list` |
+| Tokens des définitions d'outils | ≈ 4 500 (overhead du toolset API) | ≤ 3 000 | Month-1 | count_tokens sur `tools/list` ; suite : deux plafonds (`alwaysLoad` ≤ 1 500, total ≤ 4 500) dans `tasks/prd-windows-mcp-parity.md` (US-020) |
 | Taille du binaire et RSS en capture | N/A (nouveau) | ≤ 3 MB et < 80 MB | Month-1 | Build ReleaseFast et `GetProcessMemoryInfo` |
 | Apps de référence couvertes par le selftest et la suite | Aucune | 6 (Bloc-notes, Explorateur, Paramètres, Calculatrice, Edge, VS Code) | Month-1 | `neo-compute selftest` et runner de US-016 |
 
