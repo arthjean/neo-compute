@@ -1,0 +1,37 @@
+{
+  "brand": "neo-compute",
+  "tagline": "Native computer use for Claude Code on Windows",
+  "brief": "A single-binary MCP server that gives Claude Code perception and action on the Windows desktop. It reads the accessibility tree instead of pixels, acts by element instead of coordinates, and answers each action with a compact delta. The mark must work as a 16 px favicon, in a README and in a terminal.",
+  "adjectives": ["native", "precise", "lean", "in control"],
+  "criteria": "Success: distinct from the blue of Windows and of most developer tools, readable at 16 px, works in one colour, says 'acts on the desktop' without drawing a robot or a screen.",
+  "industry": "software",
+  "nav": ["Docs", "Tools", "GitHub"],
+  "brand_color": "#EB4A22",
+  "tile_color": "#141416",
+  "greyscale": false,
+  "final": true,
+  "designer": "Arthur Jean",
+  "round": 2,
+  "concepts": [
+    {
+      "name": "Pointing n",
+      "symbol": "../neo-compute-symbol.svg",
+      "lockup": "../neo-compute-horizontal.svg",
+      "stacked": "../neo-compute-stacked.svg",
+      "avatar": "../neo-compute-symbol.svg",
+      "symbol_on_tile": "../neo-compute-symbol.svg",
+      "stacked_on_tile": "../neo-compute-stacked-reversed.svg",
+      "symbol_on_dark": "../neo-compute-symbol.svg",
+      "lockup_on_dark": "../neo-compute-horizontal-reversed.svg",
+      "stacked_on_dark": "../neo-compute-stacked-reversed.svg",
+      "idea": "The n of neo, whose counter is a pointer tip: the name itself points.",
+      "rationale": [
+        "A letter first, a pointer on second look: a light puzzle, not a pictogram of a mouse",
+        "One solid shape on a 256 grid: a semicircle arch and one exact 45-degree cut",
+        "A dedicated 16 px cut keeps the tip crisp in a browser tab",
+        "Signal vermilion stays clear of Windows blue and of the blue default of developer tools"
+      ]
+    }
+  ],
+  "recommendation": "Pointing n in Signal on Ink: the symbol carries the idea, the custom geometric wordmark stays quiet beside it."
+}
