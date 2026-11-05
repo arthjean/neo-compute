@@ -1,0 +1,318 @@
+{
+  "prd": {
+    "file": "tasks/prd-windows-mcp-parity.md",
+    "title": "neo-compute, parité native avec Windows-MCP",
+    "created_at": "2026-11-05",
+    "status": "READY"
+  },
+  "epics": [
+    {
+      "id": "EP-005",
+      "title": "Socle et perception enrichie",
+      "status": "DONE",
+      "priority": "P0",
+      "stories_total": 6,
+      "stories_done": 6
+    },
+    {
+      "id": "EP-006",
+      "title": "Fenêtres et applications",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 4,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-007",
+      "title": "Attente et ancrage visuel",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 3,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-008",
+      "title": "Contrôle humain visible",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 2,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-009",
+      "title": "Presse-papiers et registre",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 2,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-010",
+      "title": "Mesure de la parité",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 2,
+      "stories_done": 0
+    }
+  ],
+  "stories": [
+    {
+      "id": "US-020",
+      "title": "Budget des définitions par mode de chargement",
+      "epic": "EP-005",
+      "status": "DONE",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [],
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
+    },
+    {
+      "id": "US-021",
+      "title": "Section `system` de la politique",
+      "epic": "EP-005",
+      "status": "DONE",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [],
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
+    },
+    {
+      "id": "US-022",
+      "title": "Plages, défilement et sélection dans `ui_tree`",
+      "epic": "EP-005",
+      "status": "DONE",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [],
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
+    },
+    {
+      "id": "US-023",
+      "title": "Menus, popups et dialogues modaux comme racines du snapshot",
+      "epic": "EP-005",
+      "status": "DONE",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [],
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
+    },
+    {
+      "id": "US-024",
+      "title": "Texte de page web dans `ui_tree`",
+      "epic": "EP-005",
+      "status": "DONE",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-020"
+      ],
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
+    },
+    {
+      "id": "US-025",
+      "title": "Firefox par l'UIA natif ou le repli MSAA",
+      "epic": "EP-005",
+      "status": "DONE",
+      "priority": "P1",
+      "size": "L",
+      "blocked_by": [
+        "US-024"
+      ],
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
+    },
+    {
+      "id": "US-026",
+      "title": "Écrans et bureaux virtuels dans `window_list`",
+      "epic": "EP-006",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-027",
+      "title": "`window_set`, placement, état et fermeture d'une fenêtre",
+      "epic": "EP-006",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-020"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-028",
+      "title": "Catalogue des applications et appariement approximatif",
+      "epic": "EP-006",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-029",
+      "title": "`app_launch`, lancement d'applications et ouverture de documents",
+      "epic": "EP-006",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [
+        "US-020",
+        "US-021",
+        "US-028"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-030",
+      "title": "`ui_find` avec `wait_ms`",
+      "epic": "EP-007",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-020"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-031",
+      "title": "IDs dessinés sur l'image (`ui_tree` `marks`)",
+      "epic": "EP-007",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-020"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-032",
+      "title": "Capture de repli par GDI",
+      "epic": "EP-007",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "M",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-033",
+      "title": "Validate assumption: `WDA_EXCLUDEFROMCAPTURE` masque une fenêtre de DXGI et de GDI",
+      "epic": "EP-008",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-034",
+      "title": "Indicateur « agent aux commandes »",
+      "epic": "EP-008",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-033"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-035",
+      "title": "`clipboard`, lecture et écriture de texte",
+      "epic": "EP-009",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-020",
+        "US-021"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-036",
+      "title": "`registry_read`, lecture du registre",
+      "epic": "EP-009",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-020",
+        "US-021"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-037",
+      "title": "Tâches d'évals de parité",
+      "epic": "EP-010",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-023",
+        "US-027",
+        "US-029",
+        "US-030",
+        "US-035"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-038",
+      "title": "Campagne de parité",
+      "epic": "EP-010",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [
+        "US-037"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    }
+  ]
+}
