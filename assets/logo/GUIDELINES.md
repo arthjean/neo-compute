@@ -105,7 +105,5 @@ as a substitute for the wordmark.
 - Trademark clearance is not done. Run a search in the relevant trademark databases, plus a reverse image
   search, before any public launch.
 - Pantone matching for Signal (see section 5).
-- `mark-focus.svg`, `mark-pointer-window.svg` and `mark-reticle.svg` in this folder predate this kit and are
-  not part of it.
 - The terminal mockup in `presentation/` shows placeholder commands, not neo-compute's real interface.
 - `concepts/` keeps round 1 (three directions) and its explorations, for the record.
