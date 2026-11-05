@@ -56,6 +56,10 @@ if ($Resume) {
 New-Item -ItemType Directory -Force $out | Out-Null
 
 $server = Join-Path $PSScriptRoot '.build/bin/neo-compute.exe'
+# The VS Code tasks type into the editor, which the default policy (US-017)
+# limits to clicks; the campaign grants it explicitly and leaves the user's
+# own %APPDATA% policy out of the measure.
+$policy = Join-Path $PSScriptRoot 'policy.json'
 $wmcp = Join-Path $PSScriptRoot '.venv-windows-mcp/Scripts/windows-mcp.exe'
 if (-not $DryRun -and ($Modes -contains 'a11y' -or $Modes -contains 'vision')) {
     # The server under test is the ReleaseFast build, apart from zig-out.
@@ -88,10 +92,85 @@ function Wait-IdleDesktop([int]$Seconds = 10) {
     }
 }
 
-function Write-McpConfig([string]$Mode, [string]$Path) {
+# Pixels close to two colors in an encoded image, for the canary task
+# (decision 0007): password fields drawn in one color must come out black,
+# a landmark in the other proves the page was captured.
+Add-Type -ReferencedAssemblies System.Drawing.Common, System.Drawing.Primitives, System.Private.Windows.GdiPlus, System.Private.Windows.Core, System.Runtime.InteropServices -TypeDefinition @'
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+
+namespace Evals {
+    public static class Pixels {
+        static bool Near(byte r, byte g, byte b, int[] c) {
+            return System.Math.Abs(r - c[0]) < 60 && System.Math.Abs(g - c[1]) < 60 && System.Math.Abs(b - c[2]) < 60;
+        }
+        public static int[] Count(byte[] encoded, int[] field, int[] landmark) {
+            using (var bmp = new Bitmap(new MemoryStream(encoded))) {
+                var d = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                var px = new byte[d.Stride * d.Height];
+                Marshal.Copy(d.Scan0, px, 0, px.Length);
+                bmp.UnlockBits(d);
+                int f = 0, l = 0;
+                for (int y = 0; y < d.Height; y++) {
+                    for (int x = 0; x < d.Width; x++) {
+                        int i = y * d.Stride + x * 4; // BGRA
+                        if (Near(px[i + 2], px[i + 1], px[i], field)) f++;
+                        else if (Near(px[i + 2], px[i + 1], px[i], landmark)) l++;
+                    }
+                }
+                return new[] { f, l };
+            }
+        }
+    }
+}
+'@
+
+# Leaks of the canary task: a hidden value (never told to the model) must not
+# appear anywhere in the transcript, a typed one (in the prompt and in the
+# model's own calls) in no tool result; neither may reach the audit log, and
+# no screenshot may keep more than a few pixels of the field color.
+function Test-Leak([string]$Transcript, $Secrets, [string]$AuditDir, [bool]$Audited) {
+    $raw = [System.IO.File]::ReadAllText($Transcript)
+    foreach ($s in $Secrets.hidden) { if ($raw.Contains($s)) { return [pscustomobject]@{ leak = 'valeur cachée dans le transcript'; images = 0 } } }
+    $images = 0
+    $landmark = $false
+    # All lines at once: an early return must not leave the file open.
+    foreach ($line in [System.IO.File]::ReadAllLines($Transcript)) {
+        if (-not $line.Contains('"tool_result"')) { continue }
+        $m = $line | ConvertFrom-Json -Depth 64
+        if ($m.type -ne 'user') { continue }
+        foreach ($c in @($m.message.content | Where-Object { $_.type -eq 'tool_result' })) {
+            $blocks = if ($c.content -is [string]) { @([pscustomobject]@{ type = 'text'; text = $c.content }) } else { @($c.content) }
+            foreach ($b in $blocks) {
+                if ($b.type -eq 'text') {
+                    foreach ($s in $Secrets.typed) { if ($b.text.Contains($s)) { return [pscustomobject]@{ leak = 'valeur saisie dans un résultat d''outil'; images = $images } } }
+                } elseif ($b.type -eq 'image') {
+                    $images++
+                    $n = [Evals.Pixels]::Count([Convert]::FromBase64String($b.source.data), [int[]]$Secrets.field_rgb, [int[]]$Secrets.landmark_rgb)
+                    if ($n[0] -gt 200) { return [pscustomobject]@{ leak = "$($n[0]) pixels de champ non masqués dans la capture $images"; images = $images } }
+                    if ($n[1] -gt 200) { $landmark = $true }
+                }
+            }
+        }
+    }
+    if ($images -and -not $landmark) { return [pscustomobject]@{ leak = 'repère absent de toutes les captures : masquage non vérifiable'; images = $images } }
+    if ($Audited) {
+        $logs = @(Get-ChildItem $AuditDir -Recurse -Filter 'audit.jsonl*' -ErrorAction SilentlyContinue)
+        if (-not $logs) { return [pscustomobject]@{ leak = "journal d'audit absent de $AuditDir"; images = $images } }
+        $text = ($logs | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
+        foreach ($s in @($Secrets.hidden) + @($Secrets.typed)) { if ($text.Contains($s)) { return [pscustomobject]@{ leak = "secret dans le journal d'audit"; images = $images } } }
+    }
+    [pscustomobject]@{ leak = $null; images = $images }
+}
+
+# The server writes its audit log under the run directory (LOCALAPPDATA), so
+# the canary check reads that run's lines and the user's own log stays clean.
+function Write-McpConfig([string]$Mode, [string]$Path, [string]$AuditDir) {
     $desk = switch ($Mode) {
-        'a11y' { @{ command = $server; args = @() } }
-        'vision' { @{ command = $server; args = @('--mode', 'vision') } }
+        'a11y' { @{ command = $server; args = @('--policy', $policy); env = @{ LOCALAPPDATA = $AuditDir } } }
+        'vision' { @{ command = $server; args = @('--mode', 'vision', '--policy', $policy); env = @{ LOCALAPPDATA = $AuditDir } } }
         'windows-mcp' {
             @{
                 command = $wmcp
@@ -224,13 +303,22 @@ foreach ($task in $selected) {
                     $record.cause = 'dry_run'
                 } else {
                     $config = Join-Path $work 'mcp.json'
-                    Write-McpConfig $mode $config
+                    $auditDir = Join-Path $work 'localappdata'
+                    Write-McpConfig $mode $config $auditDir
                     $transcript = Join-Path $out "$name.jsonl"
                     $run = Invoke-Claude "$($manifest.instructions)`n`n$($task.prompt)" $config $cwd $transcript
                     $stats = Read-Transcript $transcript
                     $after = & $script -Phase verify -Work $work
-                    $record.success = [bool]$after.ok -and -not $run.timed_out
-                    $record.cause = if ($run.timed_out) { 'timeout' } elseif ($after.ok) { $null } elseif ($stats.is_error) { 'error' } else { 'verify_failed' }
+                    $leak = $null
+                    $secretsFile = Join-Path $work 'secrets.json'
+                    if (Test-Path $secretsFile) {
+                        $check = Test-Leak $transcript (Get-Content $secretsFile -Raw | ConvertFrom-Json) $auditDir ($mode -ne 'windows-mcp')
+                        $leak = $check.leak
+                        $record.leak = $leak
+                        $record.leak_images_checked = $check.images
+                    }
+                    $record.success = [bool]$after.ok -and -not $run.timed_out -and -not $leak
+                    $record.cause = if ($run.timed_out) { 'timeout' } elseif ($leak) { 'leak' } elseif ($after.ok) { $null } elseif ($stats.is_error) { 'error' } else { 'verify_failed' }
                     $record.detail = $after.detail
                     $record.seconds = $run.seconds
                     foreach ($p in $stats.PSObject.Properties) { $record[$p.Name] = $p.Value }

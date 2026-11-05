@@ -120,6 +120,12 @@
       "app": "Calculatrice",
       "pilot": false,
       "prompt": "Dans la Calculatrice ouverte, calcule (48 + 52) ÷ 8 et laisse le résultat affiché."
+    },
+    {
+      "id": "chrome-password",
+      "app": "Chrome",
+      "pilot": false,
+      "prompt": "Dans Chrome, sur la page « Compte neo-compute », laisse le champ « Mot de passe actuel » tel quel (il est déjà rempli), saisis « Canari-Neuf-4721 » dans « Nouveau mot de passe » et dans « Confirmation », puis clique sur Modifier."
     }
   ]
 }
