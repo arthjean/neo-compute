@@ -295,8 +295,15 @@ pub const Windows = struct {
 
     /// Tree of `window` (the foreground window when null), read on the UIA
     /// worker thread.
-    pub fn uiSnapshot(self: *Windows, arena: std.mem.Allocator, hwnd: ?u64) uitree.SnapshotResult {
-        return self.ui.snapshot(arena, hwnd);
+    pub fn uiSnapshot(self: *Windows, arena: std.mem.Allocator, hwnd: ?u64, request: uitree.Request) uitree.SnapshotResult {
+        return self.ui.snapshot(arena, hwnd, request);
+    }
+
+    /// Menus, popups and owned windows read with `hwnd`'s tree (US-023),
+    /// from Win32 on the dispatcher thread.
+    pub fn uiRoots(self: *Windows, arena: std.mem.Allocator, hwnd: ?u64) []const uitree.RootWindow {
+        _ = self;
+        return window.extraRoots(arena, hwnd);
     }
 
     pub fn uiAct(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
@@ -324,6 +331,8 @@ pub const Windows = struct {
     // ------------------------------------------------------------ tooling
 
     pub const selftest = @import("windows/selftest.zig").run;
+    /// `selftest-stall`: the out-of-process provider the selftest times out on.
+    pub const stallProvider = @import("windows/stall_provider.zig").run;
 
     pub fn benchScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name: []const u8, iterations: ?usize) !bench.Outcome {
         return @import("windows/bench.zig").run(gpa, io, counter, name, iterations);

@@ -52,10 +52,18 @@ pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: b
     .{ .scenario = "ui_tree", .ms = 50 },
     // US-011 and US-014, on the reference applications (bench <app>).
     .{ .scenario = "notepad", .ms = 50 },
+    // US-023: Notepad with its context menu open, read as a second root.
+    .{ .scenario = "notepad-menu", .ms = 50 },
     .{ .scenario = "explorer", .ms = 50, .provider_bound = true },
     .{ .scenario = "settings", .ms = 50 },
     .{ .scenario = "calculator", .ms = 50 },
     .{ .scenario = "chrome", .ms = 120 },
+    // US-024: the reference page with its text (ui_tree text: true).
+    .{ .scenario = "chrome-text", .ms = 120 },
+    // US-025: the reference page in Firefox, through native UIA or MSAA.
+    .{ .scenario = "firefox", .ms = 150 },
+    // US-025: the same page with Firefox's native UIA off (MSAA proxy).
+    .{ .scenario = "firefox-msaa", .ms = 150 },
     .{ .scenario = "vscode", .ms = 120 },
 };
 
@@ -369,7 +377,7 @@ pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "snaps
 
 /// Scenarios that open applications on the desktop: run on request only
 /// (`neo-compute bench chrome`), never by `all`.
-pub const app_scenarios = [_][]const u8{ "notepad", "explorer", "settings", "calculator", "chrome", "vscode" };
+pub const app_scenarios = [_][]const u8{ "notepad", "notepad-menu", "explorer", "settings", "calculator", "chrome", "chrome-text", "firefox", "firefox-msaa", "vscode" };
 
 /// Runs `which` ("all" or one scenario name). Platform scenarios come from
 /// `Backend.benchScenario`; a backend without them reports them unsupported.

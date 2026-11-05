@@ -51,6 +51,10 @@ pub const ui_fixture = [_]uitree.Element{
 
 pub const KeyCall = struct { combo: keys.Combo, action: input.KeyAction };
 
+/// A root served with the foreground tree: its window and its elements
+/// (the first at depth 0).
+pub const ExtraRoot = struct { window: uitree.RootWindow, modal: bool = false, elements: []const uitree.Element };
+
 pub const Fake = struct {
     /// Inputs currently held (keys or buttons), as a count.
     held: u32 = 0,
@@ -85,6 +89,19 @@ pub const Fake = struct {
     ui_partial: bool = false,
     ui_desktop: bool = false,
     ui_web_pending: bool = false,
+    /// A Firefox window with its accessibility off (US-025).
+    ui_firefox_no_tree: bool = false,
+    /// The foreground root is modal (US-023).
+    ui_modal: bool = false,
+    /// Served in place of `ui_elements` when the text of a web page is
+    /// requested (US-024); null: the window has no web document.
+    ui_web: ?[]const uitree.Element = null,
+    ui_page: ?uitree.Page = null,
+    /// Menus, popups and owned windows listed with the foreground window
+    /// (US-023); tests set them.
+    ui_extra: []const ExtraRoot = &.{},
+    /// Extra roots requested by the last snapshot.
+    ui_requested: usize = 0,
     ui_snapshots: u32 = 0,
     /// Last element action received.
     ui_last_act: ?struct { key: u64, action: uitree.Action, value_len: usize } = null,
@@ -251,7 +268,15 @@ pub const Fake = struct {
         self.control = control;
     }
 
-    pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64) uitree.SnapshotResult {
+    /// Extra roots of the foreground window (`ui_window`).
+    pub fn uiRoots(self: *Fake, arena: std.mem.Allocator, window: ?u64) []const uitree.RootWindow {
+        if (window) |h| if (h != self.ui_window) return &.{};
+        const out = arena.alloc(uitree.RootWindow, self.ui_extra.len) catch return &.{};
+        for (self.ui_extra, out) |x, *o| o.* = x.window;
+        return out;
+    }
+
+    pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64, request: uitree.Request) uitree.SnapshotResult {
         if (window) |h| if (h != self.ui_window) {
             for (self.windows) |win| if (win.handle == h) {
                 const root = arena.alloc(uitree.Element, 1) catch return .{ .err = "Mémoire insuffisante : réessaie." };
@@ -261,15 +286,34 @@ pub const Fake = struct {
             return .{ .err = "Fenêtre fermée : rappelle window_list" };
         };
         self.ui_snapshots += 1;
-        return .{ .ok = .{ .window = self.ui_window, .elements = self.ui_elements, .partial = self.ui_partial, .desktop = self.ui_desktop, .web_pending = self.ui_web_pending } };
+        self.ui_requested = request.extra_roots.len;
+        var snap: uitree.Snapshot = .{ .window = self.ui_window, .elements = self.ui_elements, .partial = self.ui_partial, .desktop = self.ui_desktop, .web_pending = self.ui_web_pending, .firefox_no_tree = self.ui_firefox_no_tree };
+        // Chromium's web tree is not built yet: its text is not read.
+        if (request.text and !self.ui_web_pending) {
+            if (self.ui_web) |web| {
+                snap.elements = web;
+                snap.web_text = .read;
+                snap.page = self.ui_page;
+            } else snap.web_text = .no_document;
+        }
+        if (request.extra_roots.len == 0 and !self.ui_modal) return .{ .ok = snap };
+        var els: std.ArrayList(uitree.Element) = .empty;
+        var roots: std.ArrayList(uitree.Root) = .empty;
+        roots.append(arena, .{ .start = 0, .handle = self.ui_window, .modal = self.ui_modal }) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+        els.appendSlice(arena, snap.elements) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+        for (request.extra_roots) |r| for (self.ui_extra) |x| if (x.window.handle == r.handle) {
+            roots.append(arena, .{ .start = @intCast(els.items.len), .handle = r.handle, .modal = x.modal }) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+            els.appendSlice(arena, x.elements) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+        };
+        snap.elements = els.items;
+        snap.roots = roots.items;
+        return .{ .ok = snap };
     }
 
     pub fn uiAct(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
         _ = arena;
         _ = window;
-        const e = for (self.ui_elements) |el| {
-            if (el.key == key) break el;
-        } else return .gone;
+        const e = self.findElement(key) orelse return .gone;
         if (e.states.disabled) return .disabled;
         if (e.states.offscreen and action != .scroll_into_view) return .offscreen;
         const supported = switch (action) {
@@ -284,6 +328,12 @@ pub const Fake = struct {
         if (!supported) return .{ .unsupported = e.rect };
         self.ui_last_act = .{ .key = key, .action = action, .value_len = if (value) |v| v.len else 0 };
         return .ok;
+    }
+
+    fn findElement(self: *Fake, key: u64) ?uitree.Element {
+        for (self.ui_elements) |el| if (el.key == key) return el;
+        for (self.ui_extra) |x| for (x.elements) |el| if (el.key == key) return el;
+        return null;
     }
 
     pub fn focusWindow(self: *Fake, handle: u64) display.FocusResult {

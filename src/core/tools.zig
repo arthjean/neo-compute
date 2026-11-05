@@ -223,13 +223,15 @@ pub const ui_tree = struct {
     pub const Args = struct {
         window: ?[]const u8 = null,
         since: ?enum { last } = null,
+        /// US-024: a web page's visible text nodes, in reading order.
+        text: bool = false,
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = switch (optionalHandle(ctx, args.window)) {
             .ok => |h| h,
             .err => |r| return r,
         };
-        return a11y.tree(ctx, handle, args.since != null);
+        return a11y.tree(ctx, handle, args.since != null, args.text);
     }
 };
 

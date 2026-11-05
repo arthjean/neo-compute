@@ -84,8 +84,31 @@ pub const Actions = packed struct(u8) {
     }
 };
 
-/// One element as a backend reads it. A backend never fills `value` for a
-/// password field; the formatter masks it regardless (FR-09).
+/// RangeValue of a slider, spinner or progress bar (US-022).
+pub const Range = struct {
+    value: f64,
+    min: f64,
+    max: f64,
+    read_only: bool = false,
+};
+
+/// Scroll position of a container in percent (US-022); null on an axis that
+/// does not scroll (UIA_ScrollPatternNoScroll).
+pub const Scroll = struct {
+    v: ?f32 = null,
+    h: ?f32 = null,
+
+    pub fn any(s: Scroll) bool {
+        return s.v != null or s.h != null;
+    }
+};
+
+/// Characters of a selection shown on the focused element's line.
+pub const max_selection_chars = 100;
+
+/// One element as a backend reads it. A backend never fills `value` or
+/// `selection` for a password field; the formatter masks them regardless
+/// (FR-09).
 pub const Element = struct {
     /// Hash of the platform's runtime identifier (UIA RuntimeId).
     key: u64,
@@ -99,12 +122,51 @@ pub const Element = struct {
     actions: Actions = .{},
     /// Physical desktop pixels.
     rect: Rect,
+    range: ?Range = null,
+    scroll: ?Scroll = null,
+    /// Selected text of the element with the keyboard focus, at most
+    /// `max_selection_chars` characters.
+    selection: ?[]const u8 = null,
+};
+
+/// A top-level window read along with the target window (US-023): one it
+/// owns, a menu, or a popup of its process.
+pub const RootWindow = struct { handle: u64, pid: u32 };
+
+/// A root of a snapshot: its element and the elements after it, up to the
+/// next root, are its tree.
+pub const Root = struct {
+    /// Index of the root element in `Snapshot.elements`.
+    start: u32,
+    handle: u64,
+    /// WindowPattern.IsModal, or an owner window that is disabled.
+    modal: bool = false,
+};
+
+/// What a snapshot reads beyond the target window's tree.
+pub const Request = struct {
+    /// Further roots, top of the z-order first, after the policy kept them.
+    extra_roots: []const RootWindow = &.{},
+    /// The web document's text nodes too (US-024).
+    text: bool = false,
+};
+
+/// Outcome of `Request.text` (US-024).
+pub const WebText = enum {
+    not_requested,
+    /// The web document's subtree holds its text nodes, in reading order.
+    read,
+    /// The window has no web document.
+    no_document,
 };
 
 pub const Snapshot = struct {
     window: u64,
-    /// Pre-order; element 0 is the window.
+    /// Pre-order; element 0 is the window, and every root element (depth
+    /// 0) starts its own tree.
     elements: []const Element,
+    /// Empty: a single root, the window.
+    roots: []const Root = &.{},
     /// The provider timed out: only part of the tree was read.
     partial: bool = false,
     /// No window was active: this is the taskbar's tree.
@@ -112,6 +174,25 @@ pub const Snapshot = struct {
     /// A Chromium or Electron window whose web content is not in the tree
     /// yet: Chromium builds it after the first UIA request.
     web_pending: bool = false,
+    /// A Firefox window that exposes only its frame: its accessibility is
+    /// off (`accessibility.force_disabled`, US-025).
+    firefox_no_tree: bool = false,
+    web_text: WebText = .not_requested,
+    /// Vertical scroll position of the web document, when its text was read.
+    page: ?Page = null,
+
+    /// The roots; the window alone, in `single`, when the backend listed
+    /// none.
+    pub fn rootList(self: *const Snapshot, single: *[1]Root) []const Root {
+        if (self.roots.len > 0) return self.roots;
+        single.* = .{.{ .start = 0, .handle = self.window }};
+        return single;
+    }
+
+    /// End (exclusive) of root `i`'s elements.
+    pub fn rootEnd(self: *const Snapshot, roots: []const Root, i: usize) u32 {
+        return if (i + 1 < roots.len) roots[i + 1].start else @intCast(self.elements.len);
+    }
 };
 
 pub const SnapshotResult = union(enum) { ok: Snapshot, err: []const u8 };
@@ -139,6 +220,9 @@ pub const Limits = struct {
     depth: u16 = 25,
     nodes: usize = 1500,
     chars: usize = 8000,
+    /// A web page's text is read (US-024): a wrapper whose name holds more
+    /// than its one kept descendant's name stays, since that name is text.
+    text: bool = false,
 };
 
 /// Raw elements beyond this count are not read (arena bound for huge trees).
@@ -156,6 +240,10 @@ pub const Kept = struct {
 /// providers expose it on nearly every element. An empty value counts only
 /// for a field the model can type into.
 fn actionable(e: Element) bool {
+    // A slider or a scrollable container: its position is what the model
+    // reads (US-022).
+    if (e.range != null) return true;
+    if (e.scroll) |sc| if (sc.any()) return true;
     var a = e.actions;
     a.scroll = false;
     a.value = false;
@@ -168,6 +256,8 @@ fn actionable(e: Element) bool {
 /// expose Invoke on every element with a click handler (VS Code wraps each
 /// button in such divs), and the line says nothing the model can act on.
 fn weakInvoke(e: Element) bool {
+    if (e.range != null) return false;
+    if (e.scroll) |sc| if (sc.any()) return false;
     switch (e.role) {
         .group, .pane, .text, .custom, .unknown => {},
         else => return false,
@@ -233,7 +323,7 @@ pub fn prune(arena: std.mem.Allocator, elements: []const Element, viewport: Rect
         const has_name = named(e);
         const act = actionable(e) and (has_name or !weakInvoke(e));
         var k = i == 0 or (visible and (has_name or act)) or (has_name and below[i] > 0);
-        if (k and i != 0 and !act and below[i] == 1) k = false;
+        if (k and i != 0 and !act and below[i] == 1 and !(limits.text and e.name.len > elements[rep[i]].name.len)) k = false;
         if (k and i != 0 and !act and below[i] == 0 and std.mem.eql(u8, e.name, elements[parent[i]].name)) k = false;
         // A wrapper around one actionable element of the same name (web
         // status bars: group "LF" > button "LF"): the element stays.
@@ -294,21 +384,75 @@ pub fn parseId(text: []const u8) ?u32 {
 
 pub const password_mask = "•••";
 
-/// `<id> <role> "<name>" [=value] {states} @x,y,w,h` (US-011), the rectangle
-/// in screenshot pixels of `m`'s display.
+/// A number with at most two decimals, trailing zeros dropped.
+fn writeNumber(w: *std.Io.Writer, x: f64) !void {
+    if (!std.math.isFinite(x) or @abs(x) > 1e15) return w.writeByte('?');
+    const r = @round(x * 100) / 100;
+    if (r == @round(r)) return w.print("{d}", .{@as(i64, @intFromFloat(r))});
+    var buf: [40]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{d:.2}", .{r}) catch return w.writeByte('?');
+    try w.writeAll(std.mem.trimEnd(u8, text, "0"));
+}
+
+fn percent(p: f32) i32 {
+    if (!std.math.isFinite(p)) return 0;
+    return @intFromFloat(@round(std.math.clamp(p, 0, 100)));
+}
+
+/// `<id> <role> "<name>" [=value] sel="<text>" {states} scroll=<v>%,h<h>%
+/// @x,y,w,h` (US-011, US-022), the rectangle in screenshot pixels of `m`'s
+/// display. A range shows as `[=<value>/<min>..<max>]` in place of a value.
 pub fn writeLine(w: *std.Io.Writer, indent: u16, id: u32, e: Element, m: Mapping) !void {
+    return writeLineMax(w, indent, id, e, m, max_name_chars, null);
+}
+
+/// Characters of a text node's name in a web page's text (US-024).
+pub const max_text_chars = 400;
+
+/// A web document's vertical position (US-024).
+pub const Page = union(enum) {
+    /// Scrolled to this percent of its height.
+    at: f32,
+    /// Shorter than its viewport: nothing to scroll.
+    fits,
+};
+
+/// A line of a web page's text (US-024): a text node, or an element that
+/// is not actionable and carries text under its name, as a Chromium list
+/// item whose name joins its link and the text after it.
+pub fn textLine(e: Element) bool {
+    return e.role == .text or (!actionable(e) and named(e));
+}
+
+/// `writeLine` with a name limit, and for a web document the page
+/// position (` page=<p>%`, then ` début` or ` fin` at an end, US-024).
+pub fn writeLineMax(w: *std.Io.Writer, indent: u16, id: u32, e: Element, m: Mapping, name_max: usize, page: ?Page) !void {
     try w.splatByteAll(' ', @as(usize, indent) * 2);
     try writeId(w, id);
     try w.print(" {t} \"", .{e.role});
-    try writeText(w, e.name, max_name_chars);
+    try writeText(w, e.name, name_max);
     try w.writeByte('"');
     // A link's value is its URL: costly, and the name is enough to act.
     if (e.password) {
         try w.writeAll(" [=" ++ password_mask ++ "]");
+    } else if (e.range) |r| {
+        try w.writeAll(" [=");
+        try writeNumber(w, r.value);
+        try w.writeByte('/');
+        try writeNumber(w, r.min);
+        try w.writeAll("..");
+        try writeNumber(w, r.max);
+        try w.writeByte(']');
     } else if (e.value) |v| if (v.len > 0 and e.role != .link) {
         try w.writeAll(" [=");
         try writeText(w, v, max_value_chars);
         try w.writeByte(']');
+    };
+    // FR-09: a password field never shows a selection.
+    if (!e.password) if (e.selection) |sel| if (sel.len > 0) {
+        try w.writeAll(" sel=\"");
+        try writeText(w, sel, max_selection_chars);
+        try w.writeByte('"');
     };
     if (e.states.bits() != 0) {
         try w.writeAll(" {");
@@ -320,13 +464,34 @@ pub fn writeLine(w: *std.Io.Writer, indent: u16, id: u32, e: Element, m: Mapping
         };
         try w.writeByte('}');
     }
+    if (e.scroll) |sc| if (sc.any()) {
+        try w.writeAll(" scroll=");
+        if (sc.v) |v| try w.print("{d}%", .{percent(v)});
+        if (sc.h) |h| try w.print("{s}h{d}%", .{ if (sc.v != null) "," else "", percent(h) });
+    };
+    if (page) |pg| switch (pg) {
+        .at => |p| {
+            try w.print(" page={d}%", .{percent(p)});
+            if (p <= 0) try w.writeAll(" début") else if (p >= 100) try w.writeAll(" fin");
+        },
+        // Not scrollable: the top and the bottom are both in view.
+        .fits => try w.writeAll(" page=0% début fin"),
+    };
     const r = m.rectToScreenshot(e.rect);
     try w.print(" @{d},{d},{d},{d}\n", .{ r.x, r.y, r.w, r.h });
 }
 
+/// `display=<n> scale=<s> window=0x<handle>`. The root element's line that
+/// follows gives the root's role and name.
 pub fn writeHeader(w: *std.Io.Writer, m: Mapping, window: u64) !void {
     var sbuf: [32]u8 = undefined;
     try w.print("display={d} scale={s} window=0x{x}", .{ m.display, display.scaleText(&sbuf, m.scale), window });
+}
+
+/// The header of a root, ` {modal}` after it for a modal one (US-023).
+pub fn writeRootHeader(w: *std.Io.Writer, m: Mapping, root: Root) !void {
+    try writeHeader(w, m, root.handle);
+    if (root.modal) try w.writeAll(" {modal}");
 }
 
 // ---------------------------------------------------------------- ids
@@ -337,7 +502,10 @@ pub const Ids = struct {
     by_key: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     owners: std.ArrayList(Owner) = .empty,
 
-    pub const Owner = struct { key: u64, window: u64 };
+    /// `window`: the root the element belongs to, which the policy checks
+    /// and the action targets; `tree`: the window whose tree listed it,
+    /// which the post-action observation reads (a menu closes once used).
+    pub const Owner = struct { key: u64, window: u64, tree: u64 };
 
     pub fn deinit(self: *Ids, gpa: std.mem.Allocator) void {
         self.by_key.deinit(gpa);
@@ -345,12 +513,18 @@ pub const Ids = struct {
     }
 
     pub fn assign(self: *Ids, gpa: std.mem.Allocator, key: u64, window: u64) !u32 {
+        return self.assignIn(gpa, key, window, window);
+    }
+
+    pub fn assignIn(self: *Ids, gpa: std.mem.Allocator, key: u64, window: u64, tree: u64) !u32 {
         const gop = try self.by_key.getOrPut(gpa, key);
         if (gop.found_existing) {
-            self.owners.items[gop.value_ptr.* - 1].window = window;
+            const o = &self.owners.items[gop.value_ptr.* - 1];
+            o.window = window;
+            o.tree = tree;
             return gop.value_ptr.*;
         }
-        self.owners.append(gpa, .{ .key = key, .window = window }) catch |err| {
+        self.owners.append(gpa, .{ .key = key, .window = window, .tree = tree }) catch |err| {
             self.by_key.removeByPtr(gop.key_ptr);
             return err;
         };
@@ -385,7 +559,39 @@ pub fn shownOf(id: u32, e: Element, m: Mapping) Shown {
     const value: []const u8 = if (e.password) password_mask else e.value orelse "";
     var states = e.states;
     states.offscreen = false; // scrolling must not flood deltas with state changes
-    return .{ .id = id, .role = e.role, .states = states, .name_hash = hashText(e.name), .value_hash = hashText(value), .rect = m.rectToScreenshot(e.rect) };
+    return .{ .id = id, .role = e.role, .states = states, .name_hash = hashText(e.name), .value_hash = valueHash(e, value), .rect = m.rectToScreenshot(e.rect) };
+}
+
+/// Hash of what the line shows besides the name: value, range, scroll
+/// position and selection (US-022), as formatted, so a change too small to
+/// show does not count.
+fn valueHash(e: Element, value: []const u8) u64 {
+    if (e.range == null and e.scroll == null and e.selection == null) return hashText(value);
+    var h: std.hash.Wyhash = .init(0);
+    h.update(value);
+    if (e.range) |r| {
+        var buf: [128]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        writeNumber(&w, r.value) catch {};
+        w.writeByte('/') catch {};
+        writeNumber(&w, r.min) catch {};
+        w.writeByte('/') catch {};
+        writeNumber(&w, r.max) catch {};
+        h.update("\x01");
+        h.update(w.buffered());
+    }
+    if (e.scroll) |sc| {
+        const v: i32 = if (sc.v) |x| percent(x) else -1;
+        const hz: i32 = if (sc.h) |x| percent(x) else -1;
+        h.update("\x02");
+        h.update(std.mem.asBytes(&v));
+        h.update(std.mem.asBytes(&hz));
+    }
+    if (!e.password) if (e.selection) |sel| {
+        h.update("\x03");
+        h.update(sel);
+    };
+    return h.final();
 }
 
 /// Position changes up to this many screenshot pixels are ignored.
@@ -436,20 +642,40 @@ pub const Store = struct {
     last_window: ?u64 = null,
 
     const slot_count = 4;
-    const Slot = struct { window: u64 = 0, used: u64 = 0, nodes: std.ArrayList(Shown) = .empty };
+    const Slot = struct {
+        window: u64 = 0,
+        used: u64 = 0,
+        nodes: std.ArrayList(Shown) = .empty,
+        /// Handles of the roots shown, the window first (US-023).
+        roots: std.ArrayList(u64) = .empty,
+    };
+
+    pub const Last = struct { nodes: []const Shown, roots: []const u64 };
 
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
-        for (&self.slots) |*s| s.nodes.deinit(gpa);
+        for (&self.slots) |*s| {
+            s.nodes.deinit(gpa);
+            s.roots.deinit(gpa);
+        }
     }
 
     pub fn get(self: *const Store, window: u64) ?[]const Shown {
-        for (&self.slots) |*s| if (s.used != 0 and s.window == window) return s.nodes.items;
+        const last = self.getLast(window) orelse return null;
+        return last.nodes;
+    }
+
+    pub fn getLast(self: *const Store, window: u64) ?Last {
+        for (&self.slots) |*s| if (s.used != 0 and s.window == window) return .{ .nodes = s.nodes.items, .roots = s.roots.items };
         return null;
     }
 
     /// Records `nodes` as the last tree of `window`, evicting the least
     /// recently used window. Capacity is retained across calls.
     pub fn put(self: *Store, gpa: std.mem.Allocator, window: u64, nodes: []const Shown) !void {
+        return self.putRoots(gpa, window, nodes, &.{window});
+    }
+
+    pub fn putRoots(self: *Store, gpa: std.mem.Allocator, window: u64, nodes: []const Shown, roots: []const u64) !void {
         var slot = &self.slots[0];
         for (&self.slots) |*s| {
             if (s.used != 0 and s.window == window) {
@@ -462,7 +688,9 @@ pub const Store = struct {
         slot.window = window;
         slot.used = self.clock;
         slot.nodes.clearRetainingCapacity();
+        slot.roots.clearRetainingCapacity();
         try slot.nodes.appendSlice(gpa, nodes);
+        try slot.roots.appendSlice(gpa, roots);
         self.last_window = window;
     }
 };

@@ -5,6 +5,25 @@
 //! cached round trip (FindAllBuildCache with at most 12 properties and the
 //! actionable patterns) under a 200 ms provider timeout (IUIAutomation2), and
 //! keeps the element references so ui_act reaches an element directly.
+//!
+//! Each root of a snapshot (the window, then its menus, popups and owned
+//! windows, US-023) is read the same way. The main cache also carries the
+//! RangeValue and Scroll patterns (patterns, not properties: the 12
+//! properties stay), so the elements that have them are known; one cached
+//! round trip per such element then adds their positions (US-022). A single
+//! FindAllBuildCache over the subtree costs as much as the main read on a
+//! large tree (A7, docs/decisions/0009). The focused element's selection is
+//! read live through TextPattern.
+//!
+//! With `text` (US-024), a web document's subtree is read again in the
+//! content view, which holds its text nodes, and replaces the control-view
+//! subtree in place: reading order is the tree order.
+//!
+//! A Firefox window whose native UIA is off is served by UIA's MSAA proxy,
+//! detected from the document's provider description. Its `edit` elements
+//! are checked against MSAA's role and state (labels, protected fields),
+//! hidden preloaded pages are dropped, and `invoke` runs the element's MSAA
+//! default action (US-025, docs/decisions/0009).
 
 const std = @import("std");
 const w = @import("win32");
@@ -30,6 +49,11 @@ comptime {
     std.debug.assert(properties.len <= 12);
 }
 
+/// MSAA's role and state, added to the main properties only for a Firefox
+/// window served by UIA's MSAA proxy, which derives every property from
+/// them anyway (US-025): the main cache stays at 12.
+const msaa_properties = [_]w.UIA_PROPERTY_ID{ w.UIA_LegacyIAccessibleRolePropertyId, w.UIA_LegacyIAccessibleStatePropertyId };
+
 const patterns = [_]struct { id: w.UIA_PATTERN_ID, field: []const u8 }{
     .{ .id = w.UIA_InvokePatternId, .field = "invoke" },
     .{ .id = w.UIA_ValuePatternId, .field = "value" },
@@ -39,12 +63,24 @@ const patterns = [_]struct { id: w.UIA_PATTERN_ID, field: []const u8 }{
     .{ .id = w.UIA_ScrollItemPatternId, .field = "scroll" },
 };
 
+/// Patterns cached only to find the elements whose position is read after
+/// the walk, and to reach the focused element's selection without a lookup
+/// (US-022).
+const position_patterns = [_]w.UIA_PATTERN_ID{ w.UIA_RangeValuePatternId, w.UIA_ScrollPatternId, w.UIA_TextPatternId };
+
+/// Elements whose position is read after the walk, at most this many per
+/// snapshot (a long list of sliders is rare).
+const max_positioned = 64;
+
 /// Name and value lengths read from providers, in UTF-16 units: a document
 /// can expose its whole text as a name.
 const max_name_units = 256;
+/// Name length of a web page's text nodes (US-024): a paragraph.
+const max_text_units = 1024;
 const max_value_units = 256;
 
 pub const closed_message = "Fenêtre fermée : rappelle window_list";
+const msaa_set_value_message = "Action set_value indisponible sur cet élément Firefox : clique puis utilise type";
 const hung_message = "L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot.";
 
 /// Whether the window's thread answers within the provider timeout. UI
@@ -76,7 +112,7 @@ fn hungRoot(arena: std.mem.Allocator, hwnd: w.HWND, desktop: bool) uitree.Snapsh
 }
 
 const Job = union(enum) {
-    snapshot: struct { arena: std.mem.Allocator, hwnd: ?u64, out: uitree.SnapshotResult = undefined },
+    snapshot: struct { arena: std.mem.Allocator, hwnd: ?u64, request: uitree.Request, out: uitree.SnapshotResult = undefined },
     act: struct { arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8, out: uitree.ActResult = undefined },
     /// Rectangles of the visible password fields of the foreground window,
     /// into `Worker.secret_buf` (no arena: the dispatcher keeps using its
@@ -100,10 +136,31 @@ pub const Worker = struct {
     secret_len: usize = 0,
     /// Why the worker could not start UI Automation, if it failed.
     init_error: ?[]const u8 = null,
+    /// Range and scroll round trips of the last snapshot, written by the
+    /// worker before it signals `done`.
+    extras_ns: u64 = 0,
+    /// The last snapshot read Firefox through UIA's MSAA proxy (US-025).
+    msaa_proxy: bool = false,
+    msaa_ns: u64 = 0,
 
-    pub fn snapshot(self: *Worker, arena: std.mem.Allocator, hwnd: ?u64) uitree.SnapshotResult {
+    /// Time of the MSAA corrections of the last snapshot (US-025).
+    pub fn lastMsaaNs(self: *const Worker) u64 {
+        return self.msaa_ns;
+    }
+
+    /// Whether the last snapshot read Firefox through the MSAA proxy.
+    pub fn lastMsaaProxy(self: *const Worker) bool {
+        return self.msaa_proxy;
+    }
+
+    /// Time of the range and scroll round trips of the last snapshot (A7).
+    pub fn lastExtrasNs(self: *const Worker) u64 {
+        return self.extras_ns;
+    }
+
+    pub fn snapshot(self: *Worker, arena: std.mem.Allocator, hwnd: ?u64, request: uitree.Request) uitree.SnapshotResult {
         if (self.start()) |msg| return .{ .err = msg };
-        self.job = .{ .snapshot = .{ .arena = arena, .hwnd = hwnd } };
+        self.job = .{ .snapshot = .{ .arena = arena, .hwnd = hwnd, .request = request } };
         self.run();
         return self.job.snapshot.out;
     }
@@ -182,7 +239,13 @@ pub const Worker = struct {
             _ = w.WaitForSingleObject(self.wake, w.INFINITE);
             switch (self.job) {
                 .quit => break,
-                .snapshot => |*j| j.out = session.?.snapshot(j.arena, j.hwnd),
+                .snapshot => |*j| {
+                    session.?.extras_ns = 0;
+                    j.out = session.?.snapshot(j.arena, j.hwnd, j.request);
+                    self.extras_ns = session.?.extras_ns;
+                    self.msaa_proxy = session.?.last_msaa;
+                    self.msaa_ns = session.?.msaa_ns;
+                },
                 .act => |*j| j.out = session.?.act(j.arena, j.window, j.key, j.action, j.value),
                 .secrets => self.secret_len = session.?.secrets(&self.secret_buf),
             }
@@ -199,11 +262,20 @@ const Retained = struct {
     used: u64 = 0,
     keys: std.ArrayList(u64) = .empty,
     elements: std.ArrayList(*w.IUIAutomationElement) = .empty,
+    /// Read through UIA's MSAA proxy: a Firefox without native UIA (US-025).
+    msaa_proxy: bool = false,
 
     fn clear(self: *Retained) void {
         for (self.elements.items) |el| release(el);
         self.elements.clearRetainingCapacity();
         self.keys.clearRetainingCapacity();
+        self.msaa_proxy = false;
+    }
+
+    /// The retained element of `key`, if this snapshot read it.
+    fn find(self: *const Retained, key: u64) ?*w.IUIAutomationElement {
+        for (self.keys.items, 0..) |k, i| if (k == key) return self.elements.items[i];
+        return null;
     }
 
     fn deinit(self: *Retained, gpa: std.mem.Allocator) void {
@@ -224,6 +296,24 @@ const Session = struct {
     /// IsPassword = true, and the properties a masked field needs.
     password_condition: ?*w.IUIAutomationCondition = null,
     secret_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// RangeValue and Scroll properties of one element (US-022).
+    extras_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// RuntimeIds of a window element and its children (US-023).
+    probe_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// The main cache over the content view, and that view's condition:
+    /// a web document with its text nodes (US-024).
+    content_cache: ?*w.IUIAutomationCacheRequest = null,
+    content_view: ?*w.IUIAutomationCondition = null,
+    /// The main cache plus MSAA's role and state, over the on-screen
+    /// control view: a Firefox window served by the MSAA proxy (US-025).
+    msaa_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// The last snapshot came through the MSAA proxy, and the time of its
+    /// corrections.
+    last_msaa: bool = false,
+    msaa_ns: u64 = 0,
+    /// Name length `read` keeps, in UTF-16 units.
+    name_units: usize = max_name_units,
+    extras_ns: u64 = 0,
     retained: [4]Retained = @splat(.{}),
     clock: u64 = 0,
 
@@ -248,6 +338,7 @@ const Session = struct {
         errdefer release(cache.?);
         for (properties) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
         for (patterns) |p| try check(cache.?.vtable.AddPattern(cache.?, p.id));
+        for (position_patterns) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
         try check(cache.?.vtable.put_TreeScope(cache.?, w.TreeScope_Subtree));
         try check(cache.?.vtable.put_TreeFilter(cache.?, cond.?));
         return .{ .gpa = gpa, .automation = automation, .subtree = cache.?, .control_view = cond.? };
@@ -258,6 +349,11 @@ const Session = struct {
         if (self.element_cache) |c| release(c);
         if (self.password_condition) |c| release(c);
         if (self.secret_cache) |c| release(c);
+        if (self.extras_cache) |c| release(c);
+        if (self.probe_cache) |c| release(c);
+        if (self.content_cache) |c| release(c);
+        if (self.content_view) |c| release(c);
+        if (self.msaa_cache) |c| release(c);
         release(self.subtree);
         release(self.control_view);
         release(self.automation);
@@ -291,19 +387,38 @@ const Session = struct {
 
     /// Chromium answers the first UIA request with its frame only and builds
     /// the web tree afterward: no document element yet.
+    /// A Firefox window with its accessibility off exposes only the frame
+    /// Windows builds for it: no toolbar and no document (US-025).
+    fn firefoxNoTree(hwnd: w.HWND, elements: []const uitree.Element) bool {
+        if (!isFirefox(hwnd)) return false;
+        for (elements) |e| if (e.role == .document or e.role == .toolbar) return false;
+        return true;
+    }
+
+    fn isFirefox(hwnd: w.HWND) bool {
+        var class: [64:0]u16 = undefined;
+        const n = w.GetClassNameW(hwnd, &class, class.len);
+        if (n <= 0) return false;
+        return std.mem.eql(u16, class[0..@intCast(n)], std.unicode.utf8ToUtf16LeStringLiteral("MozillaWindowClass"));
+    }
+
     fn webPending(hwnd: w.HWND, elements: []const uitree.Element) bool {
         if (!isChromium(hwnd)) return false;
         for (elements) |e| if (e.role == .document) return false;
         return true;
     }
 
-    fn snapshot(self: *Session, arena: std.mem.Allocator, hwnd: ?u64) uitree.SnapshotResult {
+    fn snapshot(self: *Session, arena: std.mem.Allocator, hwnd: ?u64, request: uitree.Request) uitree.SnapshotResult {
         const t = target(hwnd);
         if (t.hwnd == null or w.IsWindow(t.hwnd) == 0) return .{ .err = if (t.desktop) "Aucune fenêtre active et barre des tâches introuvable : utilise screenshot." else closed_message };
         const window: u64 = @intFromPtr(t.hwnd);
         if (!responsive(t.hwnd)) return hungRoot(arena, t.hwnd, t.desktop);
         var partial = false;
-        const root = self.readRoot(t.hwnd, &partial) catch |err| return .{ .err = switch (err) {
+        // Firefox with its native UIA off: UIA serves it through its MSAA
+        // proxy, read with MSAA's role and state and on-screen only (US-025).
+        self.last_msaa = isFirefox(t.hwnd) and self.windowProxied(t.hwnd);
+        const cache = if (self.last_msaa) self.msaaCache() catch self.subtree else self.subtree;
+        const root = self.readRootWith(t.hwnd, cache, &partial) catch |err| return .{ .err = switch (err) {
             error.ElementNotAvailable => closed_message,
             error.Timeout => hung_message,
             else => fail(arena, "lecture de l'arbre"),
@@ -311,15 +426,416 @@ const Session = struct {
         defer release(root);
         const slot = self.slotFor(window);
         var out: std.ArrayList(uitree.Element) = .empty;
-        self.walk(arena, root, slot, &out) catch return .{ .err = "Mémoire insuffisante : réessaie." };
-        return .{ .ok = .{ .window = window, .elements = out.items, .partial = partial, .desktop = t.desktop, .web_pending = webPending(t.hwnd, out.items) } };
+        var roots: std.ArrayList(uitree.Root) = .empty;
+        var positioned: std.ArrayList(Positioned) = .empty;
+        // Keys already read: a XAML popup also shows inside its window's
+        // tree, and is read once.
+        var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        const oom: uitree.SnapshotResult = .{ .err = "Mémoire insuffisante : réessaie." };
+        roots.append(arena, .{ .start = 0, .handle = window }) catch return oom;
+        self.walk(arena, root, slot, &out, &positioned, &seen) catch return oom;
+        // The window itself: Win32 only, a modal dialog disables its owner.
+        roots.items[0].modal = @import("window.zig").ownerDisabled(t.hwnd);
+        var web_text: uitree.WebText = .not_requested;
+        var page: ?uitree.Page = null;
+        // A Chromium tree without its document yet: not read (web_pending).
+        if (request.text and !webPending(t.hwnd, out.items)) {
+            const doc: ?usize = if (isBrowser(t.hwnd)) for (out.items, 0..) |e, i| {
+                if (e.role == .document) break i;
+            } else null else null;
+            if (doc) |d| {
+                page = self.readWebText(arena, slot, &out, &positioned, &seen, d) catch return oom;
+                web_text = .read;
+            } else web_text = .no_document;
+        }
+        self.msaa_ns = 0;
+        if (self.last_msaa) {
+            const t0 = qpc();
+            defer self.msaa_ns = qpcNs(qpc() - t0);
+            slot.msaa_proxy = true;
+            fixMsaa(arena, slot, &out, &positioned) catch return oom;
+        }
+        // Menus, popups and owned windows (US-023). One that closes or
+        // stops answering meanwhile is left out.
+        for (request.extra_roots) |r| {
+            const h: w.HWND = @ptrFromInt(r.handle);
+            if (w.IsWindow(h) == 0 or w.IsWindowVisible(h) == 0 or !responsive(h)) continue;
+            if (self.alreadyRead(h, &seen)) continue;
+            var extra_partial = false;
+            const el = self.readRoot(h, &extra_partial) catch continue;
+            defer release(el);
+            const start = out.items.len;
+            self.walk(arena, el, slot, &out, &positioned, &seen) catch return oom;
+            // A nameless host whose content was already read adds nothing.
+            if (out.items.len == start + 1 and !named(out.items[start].name)) {
+                out.items.len = start;
+                while (positioned.items.len > 0 and positioned.items[positioned.items.len - 1].index >= start) positioned.items.len -= 1;
+            }
+            if (out.items.len == start) continue;
+            out.items[start].depth = 0;
+            partial = partial or extra_partial;
+            roots.append(arena, .{ .start = @intCast(start), .handle = r.handle, .modal = modal(h, el, out.items[start..]) }) catch return oom;
+        }
+        self.readPositions(positioned.items, out.items, roots.items, &partial);
+        // A provider that stopped answering is not asked again.
+        if (!partial) self.readSelection(arena, slot, out.items);
+        const single = roots.items.len == 1 and !roots.items[0].modal;
+        return .{ .ok = .{ .window = window, .elements = out.items, .roots = if (single) &.{} else roots.items, .partial = partial, .desktop = t.desktop, .web_pending = webPending(t.hwnd, out.items), .firefox_no_tree = firefoxNoTree(t.hwnd, out.items), .web_text = web_text, .page = page } };
+    }
+
+    /// Whether the window is served by UIA's MSAA proxy (its provider
+    /// description names `Microsoft: MSAA Proxy`), not by Firefox's native
+    /// UIA (`xul.dll`). One live read on the window element.
+    fn windowProxied(self: *Session, hwnd: w.HWND) bool {
+        var found: ?*w.IUIAutomationElement = null;
+        if (self.automation.vtable.ElementFromHandle(self.automation, hwnd, &found) < 0) return false;
+        const el = found orelse return false;
+        defer release(el);
+        var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+        if (el.vtable.GetCurrentPropertyValue(el, w.UIA_ProviderDescriptionPropertyId, &v) < 0) return false;
+        defer _ = w.VariantClear(&v);
+        if (vt(&v) != w.VT_BSTR) return false;
+        const b = v.Anonymous.Anonymous.Anonymous.bstrVal orelse return false;
+        const text = b[0..w.SysStringLen(b)];
+        return std.mem.indexOf(u16, text, std.unicode.utf8ToUtf16LeStringLiteral("MSAA Proxy")) != null;
+    }
+
+    /// The main cache with MSAA's role and state added, over the on-screen
+    /// control view: a preloaded page hidden in the window, often larger
+    /// than the visible one, is never read (US-025).
+    fn msaaCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.msaa_cache) |c| return c;
+        var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+        v.Anonymous.Anonymous.vt = w.VT_BOOL;
+        v.Anonymous.Anonymous.Anonymous.boolVal = 0; // VARIANT_FALSE
+        var on_screen: ?*w.IUIAutomationCondition = null;
+        try check(self.automation.vtable.CreatePropertyCondition(self.automation, w.UIA_IsOffscreenPropertyId, v, &on_screen));
+        defer release(on_screen.?);
+        var filter: ?*w.IUIAutomationCondition = null;
+        try check(self.automation.vtable.CreateAndCondition(self.automation, self.control_view, on_screen, &filter));
+        defer release(filter.?);
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        for (properties ++ msaa_properties) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        for (patterns) |p| try check(cache.?.vtable.AddPattern(cache.?, p.id));
+        for (position_patterns) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
+        try check(cache.?.vtable.put_TreeScope(cache.?, w.TreeScope_Subtree));
+        try check(cache.?.vtable.put_TreeFilter(cache.?, filter));
+        self.msaa_cache = cache;
+        return cache.?;
+    }
+
+    /// Corrects a tree read through the MSAA proxy (US-025), from MSAA's
+    /// role and state cached with each `edit`:
+    /// - a text leaf (ROLE_SYSTEM_TEXT, not focusable) that the proxy maps to
+    ///   Edit becomes `text`, so a label never looks like a field;
+    /// - STATE_SYSTEM_PROTECTED marks a password, value dropped (FR-09);
+    /// - an offscreen subtree without a rectangle (a preloaded New Tab
+    ///   page that the on-screen filter let through) is dropped.
+    fn fixMsaa(arena: std.mem.Allocator, slot: *Retained, out: *std.ArrayList(uitree.Element), positioned: *std.ArrayList(Positioned)) !void {
+        const items = out.items;
+        const keep = try arena.alloc(bool, items.len);
+        var i: usize = 0;
+        while (i < items.len) {
+            const e = items[i];
+            if (i != 0 and e.states.offscreen and e.rect.w <= 0 and e.rect.h <= 0) {
+                var end = i + 1;
+                while (end < items.len and items[end].depth > e.depth) end += 1;
+                @memset(keep[i..end], false);
+                i = end;
+                continue;
+            }
+            keep[i] = true;
+            i += 1;
+        }
+        for (items, keep) |*e, k| {
+            if (!k or e.role != .edit) continue;
+            const el = slot.find(e.key) orelse continue;
+            const msaa_role: u32 = @bitCast(cachedInt(el, w.UIA_LegacyIAccessibleRolePropertyId) orelse continue);
+            const state: u32 = @bitCast(cachedInt(el, w.UIA_LegacyIAccessibleStatePropertyId) orelse continue);
+            if (state & w.STATE_SYSTEM_PROTECTED != 0) {
+                e.password = true;
+                e.value = null;
+            } else if (msaa_role == w.ROLE_SYSTEM_TEXT and state & w.STATE_SYSTEM_FOCUSABLE == 0) {
+                e.role = .text;
+                e.actions.value = false;
+                e.value = null;
+            }
+        }
+        // Compaction: kept elements in order, positions remapped.
+        const gone = std.math.maxInt(u32);
+        const map = try arena.alloc(u32, items.len);
+        var n: u32 = 0;
+        for (items, keep, map) |e, k, *m| {
+            m.* = if (k) n else gone;
+            if (!k) continue;
+            items[n] = e;
+            n += 1;
+        }
+        out.items.len = n;
+        var kept: usize = 0;
+        for (positioned.items) |p| {
+            if (map[p.index] == gone) continue;
+            var q = p;
+            q.index = map[p.index];
+            positioned.items[kept] = q;
+            kept += 1;
+        }
+        positioned.items.len = kept;
+    }
+
+    /// Whether `window`'s retained tree came through the MSAA proxy.
+    fn msaaWindow(self: *const Session, window: u64) bool {
+        for (&self.retained) |*r| if (r.used != 0 and r.hwnd == window) return r.msaa_proxy;
+        return false;
+    }
+
+    /// Chrome, Edge, Electron and Firefox top-level windows.
+    fn isBrowser(hwnd: w.HWND) bool {
+        return isChromium(hwnd) or isFirefox(hwnd);
+    }
+
+    /// Replaces the control-view subtree of the web document `doc` in `out`
+    /// by its content-view subtree, which holds the text nodes, in one
+    /// cached round trip (US-024). Returns the document's vertical scroll
+    /// position, when it exposes one.
+    fn readWebText(self: *Session, arena: std.mem.Allocator, slot: *Retained, out: *std.ArrayList(uitree.Element), positioned: *std.ArrayList(Positioned), seen: *std.AutoHashMapUnmanaged(u64, void), doc: usize) !?uitree.Page {
+        const key = out.items[doc].key;
+        const doc_el = slot.find(key) orelse return null;
+        const page = documentPage(doc_el);
+        const cache = self.contentCache() catch return page;
+        var arr: ?*w.IUIAutomationElementArray = null;
+        check(doc_el.vtable.FindAllBuildCache(doc_el, w.TreeScope_Element, self.content_view, cache, &arr)) catch return page;
+        const array = arr orelse return page;
+        defer release(array);
+        var len: i32 = 0;
+        if (array.vtable.get_Length(array, &len) < 0 or len == 0) return page;
+        var first: ?*w.IUIAutomationElement = null;
+        if (array.vtable.GetElement(array, 0, &first) < 0) return page;
+        const root = first orelse return page;
+        defer release(root);
+        var tmp: std.ArrayList(uitree.Element) = .empty;
+        var tmp_positioned: std.ArrayList(Positioned) = .empty;
+        var tmp_seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        self.name_units = max_text_units;
+        defer self.name_units = max_name_units;
+        try self.walk(arena, root, slot, &tmp, &tmp_positioned, &tmp_seen);
+        if (tmp.items.len == 0) return page;
+        // Splice: the document keeps its place and depth.
+        const depth = out.items[doc].depth;
+        var end = doc + 1;
+        while (end < out.items.len and out.items[end].depth > depth) end += 1;
+        for (tmp.items) |*e| e.depth +|= depth;
+        try out.replaceRange(arena, doc, end - doc, tmp.items);
+        const shift: isize = @as(isize, @intCast(tmp.items.len)) - @as(isize, @intCast(end - doc));
+        var kept: usize = 0;
+        for (positioned.items) |p| {
+            if (p.index >= doc and p.index < end) continue;
+            var q = p;
+            if (p.index >= end) q.index = @intCast(@as(isize, p.index) + shift);
+            positioned.items[kept] = q;
+            kept += 1;
+        }
+        positioned.items.len = kept;
+        for (tmp_positioned.items) |p| {
+            var q = p;
+            q.index += @intCast(doc);
+            try positioned.append(arena, q);
+        }
+        for (tmp.items) |e| try seen.put(arena, e.key, {});
+        return page;
+    }
+
+    fn contentCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.content_cache) |c| return c;
+        if (self.content_view == null) {
+            var cond: ?*w.IUIAutomationCondition = null;
+            try check(self.automation.vtable.get_ContentViewCondition(self.automation, &cond));
+            self.content_view = cond;
+        }
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        for (properties) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        for (patterns) |p| try check(cache.?.vtable.AddPattern(cache.?, p.id));
+        for (position_patterns) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
+        try check(cache.?.vtable.put_TreeScope(cache.?, w.TreeScope_Subtree));
+        try check(cache.?.vtable.put_TreeFilter(cache.?, self.content_view));
+        self.content_cache = cache;
+        return cache.?;
+    }
+
+    /// The web document's vertical scroll position, read live: Chrome
+    /// exposes ScrollPattern on its document.
+    fn documentPage(el: *w.IUIAutomationElement) ?uitree.Page {
+        var raw: ?*anyopaque = null;
+        if (el.vtable.GetCurrentPatternAs(el, w.UIA_ScrollPatternId, &w.IUIAutomationScrollPattern.iid, &raw) < 0) return null;
+        const sp: *w.IUIAutomationScrollPattern = @ptrCast(@alignCast(raw orelse return null));
+        defer release(sp);
+        // A page shorter than its viewport reports no vertical scroll.
+        var scrollable: w.BOOL = 0;
+        if (sp.vtable.get_CurrentVerticallyScrollable(sp, &scrollable) < 0) return null;
+        if (scrollable == 0) return .fits;
+        var v: f64 = 0;
+        if (sp.vtable.get_CurrentVerticalScrollPercent(sp, &v) < 0) return null;
+        return .{ .at = scrollPercent(v) orelse return null };
+    }
+
+    /// Whether the window's element or one of its children was read under
+    /// an earlier root: a XAML popup also shows inside its window's tree.
+    /// One small cached round trip (RuntimeIds only) instead of a walk.
+    fn alreadyRead(self: *Session, hwnd: w.HWND, seen: *const std.AutoHashMapUnmanaged(u64, void)) bool {
+        const cache = self.probeCache() catch return false;
+        var found: ?*w.IUIAutomationElement = null;
+        if (self.automation.vtable.ElementFromHandleBuildCache(self.automation, hwnd, cache, &found) < 0) return false;
+        const el = found orelse return false;
+        defer release(el);
+        if (runtimeKey(el)) |k| if (seen.contains(k)) return true;
+        var children: ?*w.IUIAutomationElementArray = null;
+        if (el.vtable.GetCachedChildren(el, &children) < 0) return false;
+        const arr = children orelse return false;
+        defer release(arr);
+        var len: i32 = 0;
+        if (arr.vtable.get_Length(arr, &len) < 0) return false;
+        var i: i32 = 0;
+        while (i < len) : (i += 1) {
+            var child: ?*w.IUIAutomationElement = null;
+            if (arr.vtable.GetElement(arr, i, &child) < 0) continue;
+            const c = child orelse continue;
+            defer release(c);
+            if (runtimeKey(c)) |k| if (seen.contains(k)) return true;
+        }
+        return false;
+    }
+
+    fn probeCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.probe_cache) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        try check(cache.?.vtable.AddProperty(cache.?, w.UIA_RuntimeIdPropertyId));
+        try check(cache.?.vtable.put_TreeScope(cache.?, w.TreeScope_Element | w.TreeScope_Children));
+        try check(cache.?.vtable.put_TreeFilter(cache.?, self.control_view));
+        self.probe_cache = cache;
+        return cache.?;
+    }
+
+    /// A modal root: its owner is disabled, or a window element reports
+    /// WindowPattern.IsModal (read live, once per root).
+    fn modal(hwnd: w.HWND, el: *w.IUIAutomationElement, elements: []const uitree.Element) bool {
+        if (@import("window.zig").ownerDisabled(hwnd)) return true;
+        if (elements.len == 0 or elements[0].role != .window) return false;
+        var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+        if (el.vtable.GetCurrentPropertyValue(el, w.UIA_WindowIsModalPropertyId, &v) < 0) return false;
+        defer _ = w.VariantClear(&v);
+        return vt(&v) == w.VT_BOOL and v.Anonymous.Anonymous.Anonymous.boolVal != 0;
+    }
+
+    /// RangeValue and Scroll of the elements whose cached patterns showed
+    /// them, one cached round trip each (US-022). A provider that times out
+    /// leaves the remaining fields out and marks the tree partial. UI
+    /// Automation does not time out a round trip to a window whose thread
+    /// stopped after the main read (measured: it waits until the thread
+    /// answers), so each round trip first checks that the element's root
+    /// window answers within the provider timeout.
+    fn readPositions(self: *Session, list: []const Positioned, elements: []uitree.Element, roots: []const uitree.Root, partial: *bool) void {
+        if (list.len == 0) return;
+        const t0 = qpc();
+        defer self.extras_ns += qpcNs(qpc() - t0);
+        const cache = self.extrasCache() catch return;
+        for (list) |p| {
+            var root = roots[0];
+            for (roots) |r| if (r.start <= p.index and r.start >= root.start) {
+                root = r;
+            };
+            if (!responsive(@ptrFromInt(root.handle))) {
+                partial.* = true;
+                return;
+            }
+            var updated: ?*w.IUIAutomationElement = null;
+            check(p.el.vtable.BuildUpdatedCache(p.el, cache, &updated)) catch {
+                if (com.lastWas(w.UIA_E_TIMEOUT)) {
+                    partial.* = true;
+                    return;
+                }
+                continue;
+            };
+            const el = updated orelse continue;
+            defer release(el);
+            const e = &elements[p.index];
+            if (p.range) {
+                const value = cachedDouble(el, w.UIA_RangeValueValuePropertyId);
+                const min = cachedDouble(el, w.UIA_RangeValueMinimumPropertyId);
+                const max = cachedDouble(el, w.UIA_RangeValueMaximumPropertyId);
+                if (value != null and min != null and max != null)
+                    e.range = .{ .value = value.?, .min = min.?, .max = max.?, .read_only = cachedFlag(el, w.UIA_RangeValueIsReadOnlyPropertyId) };
+            }
+            if (p.scroll) {
+                const sc: uitree.Scroll = .{
+                    .v = scrollPercent(cachedDouble(el, w.UIA_ScrollVerticalScrollPercentPropertyId)),
+                    .h = scrollPercent(cachedDouble(el, w.UIA_ScrollHorizontalScrollPercentPropertyId)),
+                };
+                if (sc.any()) e.scroll = sc;
+            }
+        }
+    }
+
+    fn extrasCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.extras_cache) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        for ([_]w.UIA_PROPERTY_ID{
+            w.UIA_RangeValueValuePropertyId,      w.UIA_RangeValueMinimumPropertyId,           w.UIA_RangeValueMaximumPropertyId,
+            w.UIA_RangeValueIsReadOnlyPropertyId, w.UIA_ScrollVerticalScrollPercentPropertyId, w.UIA_ScrollHorizontalScrollPercentPropertyId,
+        }) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        self.extras_cache = cache;
+        return cache.?;
+    }
+
+    /// The selected text of the element with the keyboard focus, through
+    /// TextPattern (US-022). Never read for a password field (FR-09).
+    fn readSelection(self: *Session, arena: std.mem.Allocator, slot: *Retained, elements: []uitree.Element) void {
+        _ = self;
+        // The innermost element with the focus: the last one in pre-order
+        // (a window may report the focus of its child too).
+        var found: ?*uitree.Element = null;
+        for (elements) |*e| if (e.states.focused) {
+            found = e;
+        };
+        const focused = found orelse return;
+        if (focused.password) return;
+        const el = slot.find(focused.key) orelse return;
+        var raw: ?*anyopaque = null;
+        // Cached with the subtree; a Win32 proxy serves it live only.
+        if (el.vtable.GetCachedPatternAs(el, w.UIA_TextPatternId, &w.IUIAutomationTextPattern.iid, &raw) < 0 or raw == null)
+            if (el.vtable.GetCurrentPatternAs(el, w.UIA_TextPatternId, &w.IUIAutomationTextPattern.iid, &raw) < 0) return;
+        const tp: *w.IUIAutomationTextPattern = @ptrCast(@alignCast(raw orelse return));
+        defer release(tp);
+        var ranges: ?*w.IUIAutomationTextRangeArray = null;
+        if (tp.vtable.GetSelection(tp, &ranges) < 0) return;
+        const arr = ranges orelse return;
+        defer release(arr);
+        var len: i32 = 0;
+        if (arr.vtable.get_Length(arr, &len) < 0 or len == 0) return;
+        var range: ?*w.IUIAutomationTextRange = null;
+        if (arr.vtable.GetElement(arr, 0, &range) < 0) return;
+        const r = range orelse return;
+        defer release(r);
+        var text: w.BSTR = null;
+        // One unit more than shown, so the formatter marks a cut.
+        if (r.vtable.GetText(r, uitree.max_selection_chars + 1, &text) < 0) return;
+        defer w.SysFreeString(text);
+        const sel = bstrText(arena, text, uitree.max_selection_chars + 1) catch return;
+        if (sel.len > 0) focused.selection = sel;
     }
 
     const ReadError = error{ ElementNotAvailable, Timeout, ComCallFailed };
 
     fn classify(err: com.Error) ReadError {
         if (err == error.ElementNotAvailable) return error.ElementNotAvailable;
-        if (com.lastHr() == w.UIA_E_TIMEOUT) return error.Timeout;
+        if (com.lastWas(w.UIA_E_TIMEOUT)) return error.Timeout;
         return error.ComCallFailed;
     }
 
@@ -327,12 +843,16 @@ const Session = struct {
     /// round trip. When the provider times out, the window element alone
     /// (a partial tree).
     fn readRoot(self: *Session, hwnd: w.HWND, partial: *bool) ReadError!*w.IUIAutomationElement {
+        return self.readRootWith(hwnd, self.subtree, partial);
+    }
+
+    fn readRootWith(self: *Session, hwnd: w.HWND, cache: *w.IUIAutomationCacheRequest, partial: *bool) ReadError!*w.IUIAutomationElement {
         var live: ?*w.IUIAutomationElement = null;
         check(self.automation.vtable.ElementFromHandle(self.automation, hwnd, &live)) catch |e| return classify(e);
         const el = live orelse return error.ElementNotAvailable;
         defer release(el);
         var arr: ?*w.IUIAutomationElementArray = null;
-        check(el.vtable.FindAllBuildCache(el, w.TreeScope_Element, self.control_view, self.subtree, &arr)) catch |e| {
+        check(el.vtable.FindAllBuildCache(el, w.TreeScope_Element, self.control_view, cache, &arr)) catch |e| {
             const c = classify(e);
             if (c != error.Timeout) return c;
             partial.* = true;
@@ -348,7 +868,7 @@ const Session = struct {
         if (len == 0) {
             // The window is outside the control view: cache from it directly.
             var root: ?*w.IUIAutomationElement = null;
-            check(self.automation.vtable.ElementFromHandleBuildCache(self.automation, hwnd, self.subtree, &root)) catch |e| return classify(e);
+            check(self.automation.vtable.ElementFromHandleBuildCache(self.automation, hwnd, cache, &root)) catch |e| return classify(e);
             return root orelse error.ElementNotAvailable;
         }
         var root: ?*w.IUIAutomationElement = null;
@@ -486,8 +1006,9 @@ const Session = struct {
     }
 
     /// Pre-order walk of the cached subtree. Element references move into
-    /// `slot`; `root` stays owned by the caller.
-    fn walk(self: *Session, arena: std.mem.Allocator, root: *w.IUIAutomationElement, slot: *Retained, out: *std.ArrayList(uitree.Element)) !void {
+    /// `slot`; `root` stays owned by the caller. Elements with a cached
+    /// RangeValue or Scroll pattern are listed in `positioned`.
+    fn walk(self: *Session, arena: std.mem.Allocator, root: *w.IUIAutomationElement, slot: *Retained, out: *std.ArrayList(uitree.Element), positioned: *std.ArrayList(Positioned), seen: *std.AutoHashMapUnmanaged(u64, void)) !void {
         const Item = struct { el: *w.IUIAutomationElement, depth: u16 };
         var stack: std.ArrayList(Item) = .empty;
         _ = root.vtable.AddRef(root);
@@ -497,10 +1018,15 @@ const Session = struct {
                 release(item.el);
                 continue;
             }
-            const e = read(arena, item.el, item.depth) catch {
+            const e = read(arena, item.el, item.depth, self.name_units) catch {
                 release(item.el);
                 continue;
             };
+            // Read already under another root: skipped with its subtree.
+            if ((try seen.getOrPut(arena, e.key)).found_existing) {
+                release(item.el);
+                continue;
+            }
             try out.append(arena, e);
             slot.elements.append(self.gpa, item.el) catch {
                 release(item.el);
@@ -511,6 +1037,11 @@ const Session = struct {
                 release(item.el);
                 continue;
             };
+            if (positioned.items.len < max_positioned) {
+                const range = hasCachedPattern(item.el, w.UIA_RangeValuePatternId);
+                const scroll = hasCachedPattern(item.el, w.UIA_ScrollPatternId);
+                if (range or scroll) try positioned.append(arena, .{ .index = @intCast(out.items.len - 1), .el = item.el, .range = range, .scroll = scroll });
+            }
             var children: ?*w.IUIAutomationElementArray = null;
             if (item.el.vtable.GetCachedChildren(item.el, &children) < 0) continue;
             const arr = children orelse continue;
@@ -533,9 +1064,12 @@ const Session = struct {
         if (!responsive(hwnd)) return .{ .failed = hung_message };
         const el = self.find(window, key) orelse blk: {
             // Not in a retained snapshot (evicted): read the window again.
-            if (self.snapshot(arena, window) == .err) return .gone;
+            if (self.snapshot(arena, window, .{}) == .err) return .gone;
             break :blk self.find(window, key) orelse return .gone;
         };
+        // MSAA elements (US-025): Firefox refuses accValue writes.
+        const msaa = self.msaaWindow(window);
+        if (msaa and action == .set_value) return .{ .failed = msaa_set_value_message };
         var enabled: w.BOOL = 0;
         check(el.vtable.get_CurrentIsEnabled(el, &enabled)) catch |e| return actError(arena, e);
         if (enabled == 0) return .disabled;
@@ -549,7 +1083,12 @@ const Session = struct {
         const rect: display.Rect = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
         const hr = switch (action) {
             .focus => el.vtable.SetFocus(el),
-            .invoke => call(el, w.IUIAutomationInvokePattern, w.UIA_InvokePatternId, "Invoke", .{}),
+            // Through the MSAA proxy, the element's default action is
+            // accDoDefaultAction (US-025).
+            .invoke => if (msaa)
+                call(el, w.IUIAutomationLegacyIAccessiblePattern, w.UIA_LegacyIAccessiblePatternId, "DoDefaultAction", .{})
+            else
+                call(el, w.IUIAutomationInvokePattern, w.UIA_InvokePatternId, "Invoke", .{}),
             .toggle => call(el, w.IUIAutomationTogglePattern, w.UIA_TogglePatternId, "Toggle", .{}),
             .select => call(el, w.IUIAutomationSelectionItemPattern, w.UIA_SelectionItemPatternId, "Select", .{}),
             .expand => call(el, w.IUIAutomationExpandCollapsePattern, w.UIA_ExpandCollapsePatternId, "Expand", .{}),
@@ -575,6 +1114,22 @@ const Session = struct {
         return null;
     }
 };
+
+fn named(name: []const u8) bool {
+    return std.mem.trim(u8, name, " \t").len > 0;
+}
+
+/// An element whose position is read after the walk; `el` is owned by the
+/// retained slot.
+const Positioned = struct { index: u32, el: *w.IUIAutomationElement, range: bool, scroll: bool };
+
+fn hasCachedPattern(el: *w.IUIAutomationElement, id: w.UIA_PATTERN_ID) bool {
+    var unk: ?*w.IUnknown = null;
+    if (el.vtable.GetCachedPattern(el, id, &unk) < 0) return false;
+    const u = unk orelse return false;
+    release(u);
+    return true;
+}
 
 /// Sentinel HRESULT for a read-only Value pattern (never returned by UIA).
 const read_only_hr: w.HRESULT = @bitCast(@as(u32, 0xA0000001));
@@ -666,6 +1221,39 @@ fn cachedBool(el: *w.IUIAutomationElement, comptime getter: []const u8) bool {
     return b != 0;
 }
 
+fn cachedDouble(el: *w.IUIAutomationElement, id: w.UIA_PROPERTY_ID) ?f64 {
+    var v = cachedVariant(el, id) orelse return null;
+    defer _ = w.VariantClear(&v);
+    return if (vt(&v) == w.VT_R8) v.Anonymous.Anonymous.Anonymous.dblVal else null;
+}
+
+fn cachedFlag(el: *w.IUIAutomationElement, id: w.UIA_PROPERTY_ID) bool {
+    var v = cachedVariant(el, id) orelse return false;
+    defer _ = w.VariantClear(&v);
+    return vt(&v) == w.VT_BOOL and v.Anonymous.Anonymous.Anonymous.boolVal != 0;
+}
+
+/// A scroll percentage; UIA_ScrollPatternNoScroll (-1) means the axis does
+/// not scroll.
+fn scrollPercent(p: ?f64) ?f32 {
+    const x = p orelse return null;
+    if (x == w.UIA_ScrollPatternNoScroll or x < 0 or !std.math.isFinite(x)) return null;
+    return @floatCast(@min(x, 100));
+}
+
+fn qpc() i64 {
+    var t: i64 = 0;
+    _ = w.QueryPerformanceCounter(&t);
+    return t;
+}
+
+fn qpcNs(ticks: i64) u64 {
+    var f: i64 = 0;
+    _ = w.QueryPerformanceFrequency(&f);
+    if (f <= 0 or ticks <= 0) return 0;
+    return @intCast(@divTrunc(@as(i128, ticks) * std.time.ns_per_s, f));
+}
+
 fn cachedInt(el: *w.IUIAutomationElement, id: w.UIA_PROPERTY_ID) ?i32 {
     var v = cachedVariant(el, id) orelse return null;
     defer _ = w.VariantClear(&v);
@@ -673,7 +1261,7 @@ fn cachedInt(el: *w.IUIAutomationElement, id: w.UIA_PROPERTY_ID) ?i32 {
 }
 
 /// One element from its cached properties and patterns.
-fn read(arena: std.mem.Allocator, el: *w.IUIAutomationElement, depth: u16) !uitree.Element {
+fn read(arena: std.mem.Allocator, el: *w.IUIAutomationElement, depth: u16, name_units: usize) !uitree.Element {
     var name: w.BSTR = null;
     try check(el.vtable.get_CachedName(el, &name));
     defer w.SysFreeString(name);
@@ -686,7 +1274,7 @@ fn read(arena: std.mem.Allocator, el: *w.IUIAutomationElement, depth: u16) !uitr
         .key = runtimeKey(el) orelse @intFromPtr(el),
         .depth = depth,
         .role = role(control_type),
-        .name = try bstrText(arena, name, max_name_units),
+        .name = try bstrText(arena, name, name_units),
         .password = password,
         .rect = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top },
     };

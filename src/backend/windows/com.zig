@@ -22,3 +22,10 @@ pub fn release(obj: anytype) void {
 pub fn lastHr() u32 {
     return @bitCast(last_hr);
 }
+
+/// Whether the last failed call returned `code`, a metadata constant typed
+/// `u32` (UIA_E_*). Taking `u32` rejects a signed HRESULT at compile time:
+/// a u32/i32 comparison compiles in Zig and is never true for an error.
+pub fn lastWas(code: u32) bool {
+    return lastHr() == code;
+}

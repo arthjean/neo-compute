@@ -11,6 +11,7 @@ const com = @import("com.zig");
 const uitree = @import("../../core/uitree.zig");
 const TestWindow = @import("test_window.zig").TestWindow;
 const test_window = @import("test_window.zig");
+const stall_provider = @import("stall_provider.zig");
 const Windows = @import("../windows.zig").Windows;
 const mcp = @import("../../core/mcp.zig");
 const tools = @import("../../core/tools.zig");
@@ -246,7 +247,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
 
     // accessibility: the UIA worker reads the button with the rectangle
     // Win32 reports.
-    const snap = backend.uiSnapshot(arena, @intFromPtr(tw.window()));
+    const snap = backend.uiSnapshot(arena, @intFromPtr(tw.window()), .{});
     if (snap == .err) {
         report.fail("accessibility", "snapshot failed: {s}", .{snap.err});
         return report.failed;
@@ -395,6 +396,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
     }
 
     uiChecks(&report, &caller, &backend, &tw) catch |err| report.fail("ui", "{t}", .{err});
+    rangeTimeoutCheck(io, &report, &caller, &backend, arena);
 
     // windows: window_list reports the test window; window_focus restores it.
     {
@@ -467,6 +469,18 @@ fn uiChecks(report: *Report, caller: *Caller, backend: *Windows, tw: *TestWindow
         report.fail("ui-tree", "button id {?s}, password leaked: {}, tree:\n{s}", .{ button_id, leaked, tree.text });
     const id = button_id orelse return;
 
+    // ui-range (US-022): the trackbar's RangeValue, read by the second
+    // cached round trip, on its line.
+    {
+        const want = std.fmt.comptimePrint("[={d}/{d}..{d}]", .{ test_window.slider_pos, test_window.slider_min, test_window.slider_max });
+        var lines = std.mem.splitScalar(u8, tree.text, '\n');
+        const line = while (lines.next()) |l| {
+            if (std.mem.indexOf(u8, l, " slider ") != null) break l;
+        } else "";
+        const extras_us = backend.ui.lastExtrasNs() / 1000;
+        if (std.mem.indexOf(u8, line, want) != null) report.ok("ui-range", "`{s}`, range and scroll round trip {d} us", .{ std.mem.trim(u8, line, " "), extras_us }) else report.fail("ui-range", "no slider line with {s}, tree:\n{s}", .{ want, tree.text });
+    }
+
     // ui-find: by role and accent-insensitive name words.
     const found = try caller.call("ui_find", "{{\"query\":\"role:button SELFTEST\",\"window\":\"0x{x}\"}}", .{handle});
     if (!found.is_error and std.mem.indexOf(u8, found.text, button_line) != null) report.ok("ui-find", "role:button SELFTEST finds {s}", .{id}) else report.fail("ui-find", "{s}", .{found.text});
@@ -480,6 +494,63 @@ fn uiChecks(report: *Report, caller: *Caller, backend: *Windows, tw: *TestWindow
         }
     }.f, .{ tw, before }, 1000);
     if (!invoked.is_error and clicked) report.ok("ui-act", "{s}", .{invoked.text}) else report.fail("ui-act", "error={} BN_CLICKED={} {s}", .{ invoked.is_error, clicked, invoked.text });
+
+    // ui-selection (US-022): the focused field's selection, through its
+    // TextPattern; focus goes back to the window afterward.
+    {
+        tw.select(true);
+        w.Sleep(150);
+        const t = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{handle});
+        tw.select(false);
+        w.Sleep(50);
+        const want = "sel=\"" ++ test_window.note_selected ++ "\" {focused}";
+        var lines = std.mem.splitScalar(u8, t.text, '\n');
+        const line = while (lines.next()) |l| {
+            if (std.mem.indexOf(u8, l, " sel=") != null) break l;
+        } else "";
+        if (std.mem.indexOf(u8, line, want) != null and std.mem.indexOf(u8, t.text, test_window.secret) == null) report.ok("ui-selection", "`{s}`", .{std.mem.trim(u8, line, " ")}) else report.fail("ui-selection", "no line with {s}, tree:\n{s}", .{ want, t.text });
+    }
+
+    // ui-menu (US-023): a popup menu of the window is a root of its tree,
+    // its item is invoked by id, and once the menu is closed the same id
+    // is refused without any action.
+    {
+        var wr: w.RECT = undefined;
+        _ = w.GetWindowRect(tw.window(), &wr);
+        tw.openMenu(wr.left + 60, wr.top + 200);
+        const menu_class = std.unicode.utf8ToUtf16LeStringLiteral("#32768");
+        const opened = waitFor(struct {
+            fn f(class: [*:0]const u16) bool {
+                const m = w.FindWindowW(class, null);
+                return m != null and w.IsWindowVisible(m) != 0;
+            }
+        }.f, .{menu_class}, 2000);
+        const menu = w.FindWindowW(menu_class, null);
+        const t = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{handle});
+        const header = try std.fmt.allocPrint(caller.arena, "window=0x{x}", .{@intFromPtr(menu)});
+        const item = "menuitem \"" ++ test_window.menu_items[1] ++ "\"";
+        const item_id = idOf(t.text, item);
+        if (!opened or item_id == null or std.mem.indexOf(u8, t.text, header) == null) {
+            report.fail("ui-menu", "menu open={} id={?s}, tree:\n{s}", .{ opened, item_id, t.text });
+            if (menu != null) _ = w.PostMessageW(menu, w.WM_KEYDOWN, w.VK_ESCAPE, 0);
+        } else {
+            const r = try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{item_id.?});
+            const chosen = waitFor(struct {
+                fn f(x: *TestWindow) bool {
+                    return x.menuChoice() == 2 and !x.menuOpen();
+                }
+            }.f, .{tw}, 2000);
+            const again = try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{item_id.?});
+            const gone = try std.fmt.allocPrint(caller.arena, "Élément {s} introuvable : rappelle ui_tree", .{item_id.?});
+            if (!r.is_error and chosen and again.is_error and std.mem.eql(u8, again.text, gone)) report.ok("ui-menu", "menu 0x{x} is a root, {s} invoked by id, then `{s}`", .{ @intFromPtr(menu), item_id.?, again.text }) else report.fail("ui-menu", "invoke `{s}` chosen={} after close `{s}`", .{ r.text, chosen, again.text });
+            if (tw.menuOpen()) _ = w.PostMessageW(menu, w.WM_KEYDOWN, w.VK_ESCAPE, 0);
+        }
+        _ = waitFor(struct {
+            fn f(x: *TestWindow) bool {
+                return !x.menuOpen();
+            }
+        }.f, .{tw}, 1000);
+    }
 
     // ui-set-value: the password field takes the value, which no output shows.
     if (idOf(tree.text, "[=" ++ uitree.password_mask ++ "]")) |pid| {
@@ -811,6 +882,53 @@ fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: st
         else
             report.fail("hook-reinstall", "reinstalls {d} -> {d}, hooks live {}", .{ before, after, live });
     }
+}
+
+/// ui-range-timeout (US-022): a slider whose provider, in a process of its
+/// own (`selftest-stall`), answers the main read but stalls past the
+/// provider timeout on its RangeValue value. The tree comes back partial,
+/// with the slider and without its range.
+fn rangeTimeoutCheck(io: std.Io, report: *Report, caller: *Caller, backend: *Windows, arena: std.mem.Allocator) void {
+    const name = "ui-range-timeout";
+    var path_w: [1024:0]u16 = undefined;
+    const n = w.GetModuleFileNameW(null, &path_w, path_w.len);
+    const path = arena.alloc(u8, n * 3) catch return;
+    const exe = path[0..std.unicode.wtf16LeToWtf8(path, path_w[0..n])];
+    var child = std.process.spawn(io, .{ .argv = &.{ exe, "selftest-stall" }, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore }) catch |err| {
+        report.fail(name, "cannot start {s} selftest-stall: {t}", .{ exe, err });
+        return;
+    };
+    defer child.kill(io);
+    var hwnd: w.HWND = null;
+    var waited: u32 = 0;
+    while (waited < 3000) : (waited += 20) {
+        hwnd = w.FindWindowW(std.unicode.utf8ToUtf16LeStringLiteral(stall_provider.class_name), null);
+        if (hwnd != null) break;
+        w.Sleep(20);
+    }
+    if (hwnd == null) return report.fail(name, "no stalled provider window after 3 s", .{});
+    w.Sleep(100);
+    const t0 = qpcUs();
+    const tree = caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{@intFromPtr(hwnd)}) catch |err| return report.fail(name, "{t}", .{err});
+    const ms = (qpcUs() - t0) / 1000;
+    // Both trackbars come from the main read (one thumb each); only the
+    // first keeps its range. The second, nameless and without a range, is
+    // pruned from the output.
+    var thumbs: usize = 0;
+    var ranged: usize = 0;
+    var line: []const u8 = "";
+    var lines = std.mem.splitScalar(u8, tree.text, '\n');
+    while (lines.next()) |l| {
+        if (std.mem.indexOf(u8, l, " thumb ") != null) thumbs += 1;
+        if (std.mem.indexOf(u8, l, " slider ") == null or std.mem.indexOf(u8, l, "[=") == null) continue;
+        ranged += 1;
+        line = l;
+    }
+    const partial = std.mem.startsWith(u8, tree.text, "{partial: timeout}");
+    if (!tree.is_error and partial and thumbs == 2 and ranged == 1 and ms < 1000)
+        report.ok(name, "second range round trip refused after the main read: tree in {d} ms, `{s}`, 1 of 2 sliders with `{s}`", .{ ms, std.mem.sliceTo(tree.text, '\n'), std.mem.trim(u8, line, " ") })
+    else
+        report.fail(name, "{d} ms, range round trip {d} us, partial={}, tree:\n{s}", .{ ms, backend.ui.lastExtrasNs() / 1000, partial, tree.text });
 }
 
 fn releaseCheck(io: std.Io, report: *Report, arena: std.mem.Allocator) void {

@@ -49,7 +49,7 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig` |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates |
-| `zig build bench -- <app>` | One application scenario (`notepad`, `explorer`, `settings`, `calculator`, `chrome`, `vscode`): opens the app, times `ui_tree`, closes it; figures in `bench/apps.md` |
+| `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 tasks: scripted setup, final-state check and cleanup without `claude -p`. Without `-DryRun` it runs the campaign (see Boundaries); `evals/report.ps1` writes `evals/reports/<date>.md` |
 
 A story is done when its PRD acceptance criteria hold and the first five
@@ -77,7 +77,14 @@ reads the taskbar and raises a topmost test window (`settle`). Run them one at a
   `bindings/windows.zon` (a trailing `*` matches a function prefix) and
   rebuild; do not hand-write vtables or Win32 declarations, since the manual
   US-001 vtable was off by one slot. Check HRESULTs with `com.check` in
-  `src/backend/windows/com.zig`: the metadata types `UIA_E_*` as `u32`.
+  `src/backend/windows/com.zig`: the metadata types `UIA_E_*` as `u32`, and a
+  `u32`/`i32` comparison compiles but is never true for an error, so test a
+  failed call's code with `com.lastWas(w.UIA_E_*)`.
+- UIA's `TransactionTimeout` does not bound a call to a window whose thread
+  stops after the element was read, nor a slow provider call: the call waits
+  until the thread answers. Before a UIA round trip that must stay bounded,
+  check the window with `responsive` in `uia.zig` (selftest
+  `ui-range-timeout` proves it through `neo-compute selftest-stall`).
 - Zig 0.17's std (`std.Io`, `std.process.Init`, `std.lang.Optimize`) differs
   from older releases. Verify APIs against the installed std (`std_dir` in
   `zig env`) or against Ghostty, which pins the same version (`C:/dev/ghostty`

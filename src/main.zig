@@ -34,6 +34,8 @@ pub fn main(init: std.process.Init) !u8 {
     if (@hasDecl(Backend, "initProcess")) Backend.initProcess();
     if (args.len > 1 and std.mem.eql(u8, args[1], "bench")) return benchCommand(init, args[2..]);
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest")) return selftestCommand(init);
+    // Started by selftest only: a provider that stalls (US-022 timeout).
+    if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-stall") and @hasDecl(Backend, "stallProvider")) return Backend.stallProvider();
 
     var trace = false;
     var screenshot_size: u32 = display.default_long_side;

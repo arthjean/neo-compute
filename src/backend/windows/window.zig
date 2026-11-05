@@ -187,3 +187,79 @@ pub fn focus(handle: u64) display.FocusResult {
     if (w.IsWindow(hwnd) == 0) return .closed;
     return if (w.GetForegroundWindow() == hwnd) .ok else .refused;
 }
+
+// ---------------------------------------------------------------- snapshot roots
+
+/// Further roots read with a window's tree (US-023), at most this many.
+pub const max_extra_roots = 8;
+
+fn className(hwnd: w.HWND, buf: *[64:0]u16) []const u16 {
+    const n = w.GetClassNameW(hwnd, buf, buf.len);
+    return if (n > 0) buf[0..@intCast(n)] else &.{};
+}
+
+fn isDesktopClass(class: []const u16) bool {
+    const L = std.unicode.utf8ToUtf16LeStringLiteral;
+    for ([_][]const u16{ L("Progman"), L("WorkerW"), L("Shell_TrayWnd"), L("Shell_SecondaryTrayWnd") }) |c| if (std.mem.eql(u16, class, c)) return true;
+    return false;
+}
+
+/// Whether `owner` is up `hwnd`'s GW_OWNER chain.
+fn ownedBy(hwnd: w.HWND, owner: w.HWND) bool {
+    var h = hwnd;
+    var depth: u32 = 0;
+    while (depth < 8) : (depth += 1) {
+        h = w.GetWindow(h, w.GW_OWNER) orelse return false;
+        if (h == owner) return true;
+    }
+    return false;
+}
+
+fn style(hwnd: w.HWND) u32 {
+    return @truncate(@as(usize, @bitCast(w.GetWindowLongPtrW(hwnd, w.GWL_STYLE))));
+}
+
+/// The visible top-level windows read with `target`'s tree (the foreground
+/// window when null), top of the z-order first: the windows it owns
+/// (GW_OWNER chain), menus (`#32768`), and the popups of its UI thread, such
+/// as XAML context menus and drop-down lists. A popup is captionless and
+/// asks for no taskbar button, so another top-level window of the same
+/// process (a second browser window) is never one. The desktop and the
+/// taskbar have none.
+pub fn extraRoots(arena: std.mem.Allocator, target_handle: ?u64) []const @import("../../core/uitree.zig").RootWindow {
+    const RootWindow = @import("../../core/uitree.zig").RootWindow;
+    const target: w.HWND = if (target_handle) |h| @ptrFromInt(h) else w.GetForegroundWindow();
+    if (target == null or w.IsWindow(target) == 0) return &.{};
+    var cbuf: [64:0]u16 = undefined;
+    if (isDesktopClass(className(target, &cbuf))) return &.{};
+    var target_pid: u32 = 0;
+    const target_thread = w.GetWindowThreadProcessId(target, &target_pid);
+    var c: Collect = .{};
+    _ = w.EnumWindows(Collect.callback, @bitCast(@intFromPtr(&c)));
+    var out: std.ArrayList(RootWindow) = .empty;
+    const menu_class = std.unicode.utf8ToUtf16LeStringLiteral("#32768");
+    for (c.hwnds[0..c.len]) |hwnd| {
+        if (hwnd == target or w.IsIconic(hwnd) != 0 or isCloaked(hwnd)) continue;
+        const r = rect(hwnd) orelse continue;
+        if (r.w < 4 or r.h < 4) continue;
+        var pid: u32 = 0;
+        const thread = w.GetWindowThreadProcessId(hwnd, &pid);
+        const class = className(hwnd, &cbuf);
+        const keep = ownedBy(hwnd, target) or std.mem.eql(u16, class, menu_class) or blk: {
+            if (thread != target_thread or isDesktopClass(class)) break :blk false;
+            const st = style(hwnd);
+            const ex: u32 = @truncate(@as(usize, @bitCast(w.GetWindowLongPtrW(hwnd, w.GWL_EXSTYLE))));
+            break :blk st & w.WS_POPUP != 0 and st & w.WS_CHILD == 0 and st & w.WS_CAPTION != w.WS_CAPTION and ex & w.WS_EX_APPWINDOW == 0;
+        };
+        if (!keep) continue;
+        out.append(arena, .{ .handle = @intFromPtr(hwnd), .pid = pid }) catch break;
+        if (out.items.len == max_extra_roots) break;
+    }
+    return out.items;
+}
+
+/// A modal root: its owner window is disabled while it is open.
+pub fn ownerDisabled(hwnd: w.HWND) bool {
+    const owner = w.GetWindow(hwnd, w.GW_OWNER) orelse return false;
+    return w.IsWindowEnabled(owner) == 0;
+}

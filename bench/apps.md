@@ -35,3 +35,26 @@ language (PRD, Rust Switch Gate, last paragraph).
 
 Edge is not installed on the reference machine: Chrome stands in for it
 (decision 0004).
+
+## EP-005 scenarios (US-022 to US-025)
+
+Measured on 2026-11-05 during the EP-005 review, same protocol. The range and
+scroll round trip (US-022, assumption A7), with its check that the window
+still answers, is timed apart inside each snapshot; decision 0009 records why
+it replaced a second `FindAllBuildCache` (25 ms p95 in Notepad).
+
+| Scenario | Reference window | Raw elements | First ui_tree | Steady p95 | Range and scroll p95 | Budget | Lines |
+|---|---|---|---|---|---|---|---|
+| notepad | Notepad window | 55 | 196 ms | 32.9 ms | 518 µs | 50 ms | 42 |
+| notepad-menu | Notepad, context menu open (right click at its center), `ui_tree` without `window` | 88 | 203 ms | 44.8 ms | 969 µs | 50 ms | 58 |
+| chrome | `bench/pages/reference.html`, isolated profile | 150 | 192 ms | 23.7 ms | 341 µs | 120 ms | 79 |
+| chrome-text | the same page, `ui_tree` `text: true` | 150 | 187 ms | 31.0 ms | 336 µs | 120 ms | 119 |
+| firefox | the same page, fresh profile, Firefox 157 (native UIA) | 488 to 492 | 223 to 233 ms | 36.1 to 44.4 ms | 0 µs | 150 ms | 154 |
+| firefox-msaa | the same page, `accessibility.uia.enable = 0`: UIA's MSAA proxy, on-screen elements with MSAA role and state | 214 | 284 ms | 131.6 ms | 0 µs | 150 ms | 151 |
+
+Notepad's context menu is a XAML popup that its window's own tree already
+holds: it is read once, inside that tree, not as a further root.
+
+`firefox-msaa` costs what UIA's MSAA proxy costs: about 130 ms to read the
+on-screen control view of the page, against 24 ms through Firefox's native
+UIA (decision 0009). The MSAA corrections themselves take under 0.1 ms.

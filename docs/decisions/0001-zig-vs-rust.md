@@ -53,7 +53,7 @@ Zig et C paient le même coût, à la variance du système près : le goulot est
 |---|---|---|
 | 1 | US-001 échoue après 2 tentatives sur un critère bloquant | Non : un crash de vtable (erreur de transcription), corrigé à la première correction |
 | 2 | Dérive > 5 MB ou handles > 0 sur 10 000 itérations | Non : +3,2 MB, -5 handles |
-| 3 | 3 défauts distincts imputables à la couche COM Zig, chacun > 2 tentatives | Compteur : 2 défauts (index de vtable, type de `UIA_E_ELEMENTNOTAVAILABLE`), 1 tentative chacun, donc 0 défaut au-delà de 2 tentatives. À tenir à jour jusqu'à la fin du PRD |
+| 3 | 3 défauts distincts imputables à la couche COM Zig, chacun > 2 tentatives | Compteur : 3 défauts (index de vtable, type de `UIA_E_ELEMENTNOTAVAILABLE`, comparaison signée de `UIA_E_TIMEOUT` en revue EP-005), 1 tentative chacun, donc 0 défaut au-delà de 2 tentatives. À tenir à jour jusqu'à la fin du PRD |
 | 4 | Le générateur US-005 ne produit pas les interfaces requises en 2 sessions | Faux : toutes les interfaces de la liste sont générées en 1 session (section US-005) |
 
 ## Décision
@@ -72,3 +72,7 @@ Le test de layout (`tests/layout_test.zig`) compare 29 structs générées, plus
 2. **Deuxième défaut COM, corrigé à la première tentative.** Après la bascule, la sonde comptait 0/100 erreurs typées : la metadata type `UIA_E_ELEMENTNOTAVAILABLE` en `u32` (0x80040201) alors que `HRESULT` est un `i32`. La comparaison se fait désormais sur les bits (`@as(u32, @bitCast(hr))`), dans la sonde et dans `src/backend/windows/com.zig`. Compté au titre de la condition 3, avec 1 tentative.
 
 Conclusion US-005 : la condition 4 est fausse, la condition 3 compte 2 défauts résolus chacun en 1 tentative. La décision « rester sur Zig 0.17.0 » tient.
+
+## Revue EP-005 : troisième défaut COM
+
+La revue de EP-005 (2026-11-05) a trouvé dans `readPositions` (`src/backend/windows/uia.zig`, US-022) la comparaison `com.lastHr() == @as(w.HRESULT, @bitCast(@as(u32, w.UIA_E_TIMEOUT)))` : un `u32` comparé à un `i32` négatif. Zig compile cette comparaison entre signes différents et la rend toujours fausse (sonde : `false`), si bien qu'un timeout du provider ne posait jamais `{partial: timeout}`. Même cause que le deuxième défaut (metadata `UIA_E_*` en `u32`, `HRESULT` en `i32`), nouvelle occurrence : comptée au titre de la condition 3, corrigée à la première tentative. `com.lastWas(code: u32)` remplace la comparaison à la main ; un `HRESULT` signé passé à sa place est refusé à la compilation.

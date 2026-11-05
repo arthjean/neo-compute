@@ -43,15 +43,38 @@ const SnapshotScenario = struct {
     backend: *Windows,
     hwnd: u64,
     arena: std.heap.ArenaAllocator,
+    extras: Extras = .{},
 
     pub fn step(self: *SnapshotScenario, t: *Timings) !void {
         _ = self.arena.reset(.retain_capacity);
         t.start(self.io, .accessibility);
         defer t.stop(self.io, .accessibility);
-        switch (self.backend.uiSnapshot(self.arena.allocator(), self.hwnd)) {
+        switch (self.backend.uiSnapshot(self.arena.allocator(), self.hwnd, .{})) {
             .ok => {},
             .err => return error.SnapshotFailed,
         }
+        self.extras.add(self.backend);
+    }
+};
+
+/// Time of the range and scroll round trips inside each snapshot (US-022,
+/// assumption A7), printed apart: it is part of the accessibility stage.
+const Extras = struct {
+    ns: [4096]u64 = undefined,
+    len: usize = 0,
+
+    fn add(self: *Extras, backend: *Windows) void {
+        if (self.len == self.ns.len) return;
+        self.ns[self.len] = backend.ui.lastExtrasNs();
+        self.len += 1;
+    }
+
+    fn report(self: *Extras, name: []const u8) void {
+        if (self.len == 0) return;
+        const s = self.ns[0..self.len];
+        std.mem.sort(u64, s, {}, std.sort.asc(u64));
+        const p95 = s[@min(s.len - 1, (s.len * 95 + 99) / 100 - 1)];
+        std.debug.print("bench: {s} range and scroll round trip p50 {d} us, p95 {d} us over {d} snapshots (A7)\n", .{ name, s[s.len / 2] / 1000, p95 / 1000, s.len });
     }
 };
 
@@ -64,9 +87,11 @@ const ToolScenario = struct {
     line: []const u8,
     sink_buf: [64 * 1024]u8 = undefined,
     sink: std.Io.Writer.Discarding = undefined,
+    extras: Extras = .{},
 
     pub fn step(self: *ToolScenario, t: *Timings) !void {
         try self.server.handleMessage(self.line, &self.sink.writer);
+        self.extras.add(self.server.backend);
         for (0..timing.stage_count) |s| {
             t.ns[s] += self.server.timings.ns[s];
             t.allocs[s] += self.server.timings.allocs[s];
@@ -156,7 +181,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
         if (hwnd == null) return unsupported(gpa, "reference window Shell_TrayWnd (taskbar) not found", .{});
         var arena: std.heap.ArenaAllocator = .init(gpa);
         defer arena.deinit();
-        switch (backend.uiSnapshot(arena.allocator(), @intFromPtr(hwnd))) {
+        switch (backend.uiSnapshot(arena.allocator(), @intFromPtr(hwnd), .{})) {
             .ok => {},
             .err => |msg| return unsupported(gpa, "UI Automation unavailable: {s}", .{msg}),
         }
@@ -165,9 +190,13 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
             const line = try std.fmt.allocPrint(arena.allocator(), "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_tree\",\"arguments\":{{\"window\":\"0x{x}\",\"since\":\"last\"}}}}}}", .{@intFromPtr(hwnd)});
             return runTool(gpa, io, counter, &backend, line, iterations orelse 200);
         }
-        var s: SnapshotScenario = .{ .io = io, .backend = &backend, .hwnd = @intFromPtr(hwnd), .arena = .init(gpa) };
+        const s = try gpa.create(SnapshotScenario);
+        defer gpa.destroy(s);
+        s.* = .{ .io = io, .backend = &backend, .hwnd = @intFromPtr(hwnd), .arena = .init(gpa) };
         defer s.arena.deinit();
-        return bench.measure(gpa, io, &s, iterations orelse SnapshotScenario.default_iterations, counter);
+        const outcome = try bench.measure(gpa, io, s, iterations orelse SnapshotScenario.default_iterations, counter);
+        s.extras.report("snapshot");
+        return outcome;
     }
     if (std.mem.eql(u8, name, "settle")) {
         // An action on a still window this scenario creates, observed with
@@ -192,7 +221,7 @@ const App = struct {
     name: []const u8,
     /// `{page}` is replaced by the absolute path of bench/pages/reference.html,
     /// `{page_url}` by its file URL, `{root}` by the repository root and
-    /// `{profile}` by a scratch directory.
+    /// `{profile}` by a scratch directory, `{firefox_profile}` by another.
     argv: []const []const u8,
     /// Executable of the window, compared without case; null for any.
     exe: ?[]const u8 = null,
@@ -201,18 +230,55 @@ const App = struct {
     title_contains: bool = false,
     /// Also time the C witness probe on the window (provider-bound budget).
     witness: bool = false,
+    /// Open the window's context menu (right click at its center) and time
+    /// ui_tree without `window`, which reads the menu as a further root
+    /// (US-023).
+    context_menu: bool = false,
+    /// Time ui_tree with `text: true` (US-024).
+    text: bool = false,
+    /// Written to `{firefox_profile}\user.js` before the launch.
+    user_js: ?[]const u8 = null,
+    /// Directory of `{firefox_profile}` under `.zig-cache`.
+    firefox_profile: []const u8 = "bench-firefox-profile",
+    /// The window must be read through UIA's MSAA proxy (US-025).
+    msaa: bool = false,
+    /// Reported when the executable is missing, in place of the generic
+    /// message.
+    absent: ?[]const u8 = null,
 };
+
+/// A fresh Firefox profile without its first-run pages, default-browser
+/// prompt or updates (US-025).
+const firefox_user_js =
+    \\user_pref("browser.shell.checkDefaultBrowser", false);
+    \\user_pref("browser.aboutwelcome.enabled", false);
+    \\user_pref("browser.startup.homepage_override.mstone", "ignore");
+    \\user_pref("startup.homepage_welcome_url", "");
+    \\user_pref("startup.homepage_welcome_url.additional", "");
+    \\user_pref("browser.startup.firstrunSkipsHomepage", true);
+    \\user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+    \\user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+    \\user_pref("browser.tabs.warnOnClose", false);
+    \\user_pref("app.update.auto", false);
+    \\user_pref("browser.sessionstore.resume_from_crash", false);
+    \\
+;
 
 const page = "bench/pages/reference.html";
 
 const apps = [_]App{
     .{ .name = "notepad", .argv = &.{"notepad.exe"}, .exe = "notepad.exe" },
+    .{ .name = "notepad-menu", .argv = &.{"notepad.exe"}, .exe = "notepad.exe", .context_menu = true },
     .{ .name = "calculator", .argv = &.{"calc.exe"}, .titles = &.{ "Calculatrice", "Calculator" } },
     // A folder of a few entries: the budget is stated for at most 400 nodes.
     .{ .name = "explorer", .argv = &.{ "explorer.exe", "{root}\\bench" }, .exe = "explorer.exe", .titles = &.{"bench"}, .title_contains = true, .witness = true },
     .{ .name = "settings", .argv = &.{ "explorer.exe", "ms-settings:" }, .titles = &.{ "Paramètres", "Settings" } },
     // A profile of its own: no extension, restored tab or sign-in page.
     .{ .name = "chrome", .argv = &.{ "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check", "--new-window", "{page_url}" }, .exe = "chrome.exe", .titles = &.{"neo-compute reference page"}, .title_contains = true },
+    .{ .name = "chrome-text", .argv = &.{ "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check", "--new-window", "{page_url}" }, .exe = "chrome.exe", .titles = &.{"neo-compute reference page"}, .title_contains = true, .text = true },
+    .{ .name = "firefox", .argv = &.{ "C:\\Program Files\\Mozilla Firefox\\firefox.exe", "-profile", "{firefox_profile}", "-no-remote", "-new-window", "{page_url}" }, .exe = "firefox.exe", .titles = &.{"neo-compute reference page"}, .title_contains = true, .user_js = firefox_user_js, .absent = "Firefox absent de la machine" },
+    // Native UIA off: UIA reads Firefox through its MSAA proxy (US-025).
+    .{ .name = "firefox-msaa", .argv = &.{ "C:\\Program Files\\Mozilla Firefox\\firefox.exe", "-profile", "{firefox_profile}", "-no-remote", "-new-window", "{page_url}" }, .exe = "firefox.exe", .titles = &.{"neo-compute reference page"}, .title_contains = true, .user_js = firefox_user_js ++ "user_pref(\"accessibility.uia.enable\", 0);\n", .firefox_profile = "bench-firefox-msaa-profile", .msaa = true, .absent = "Firefox absent de la machine" },
     .{ .name = "vscode", .argv = &.{ "cmd.exe", "/c", "code", "--new-window", "{page}" }, .exe = "Code.exe", .titles = &.{"reference.html"}, .title_contains = true },
 };
 
@@ -236,7 +302,7 @@ fn findApp(backend: *Windows, app: App) ?u64 {
     return null;
 }
 
-fn expandArgs(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]const []const u8 {
+fn expandArgs(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8, firefox_profile: []const u8) ![]const []const u8 {
     const out = try arena.dupe([]const u8, argv);
     const abs = std.Io.Dir.cwd().realPathFileAlloc(io, page, arena) catch return error.PageNotFound;
     const root = std.Io.Dir.cwd().realPathFileAlloc(io, ".", arena) catch return error.PageNotFound;
@@ -244,6 +310,7 @@ fn expandArgs(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![
         var arg = a.*;
         arg = try std.mem.replaceOwned(u8, arena, arg, "{page_url}", try std.fmt.allocPrint(arena, "file:///{s}", .{abs}));
         arg = try std.mem.replaceOwned(u8, arena, arg, "{page}", abs);
+        arg = try std.mem.replaceOwned(u8, arena, arg, "{firefox_profile}", try std.fmt.allocPrint(arena, "{s}\\.zig-cache\\{s}", .{ root, firefox_profile }));
         arg = try std.mem.replaceOwned(u8, arena, arg, "{profile}", try std.fmt.allocPrint(arena, "{s}\\.zig-cache\\bench-chrome-profile", .{root}));
         arg = try std.mem.replaceOwned(u8, arena, arg, "{root}", root);
         a.* = arg;
@@ -267,8 +334,17 @@ fn appScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, 
     var launched = false;
     var hwnd = findApp(backend, app);
     if (hwnd == null) {
-        const argv = expandArgs(arena, io, app.argv) catch
+        const argv = expandArgs(arena, io, app.argv, app.firefox_profile) catch
             return unsupported(gpa, "{s} not found: run the bench from the repository root", .{page});
+        if (app.absent) |msg| std.Io.Dir.cwd().access(io, argv[0], .{}) catch return unsupported(gpa, "{s}", .{msg});
+        if (app.user_js) |prefs| {
+            const sub = try std.fmt.allocPrint(arena, ".zig-cache\\{s}", .{app.firefox_profile});
+            var dir = std.Io.Dir.cwd().createDirPathOpen(io, sub, .{}) catch |err|
+                return unsupported(gpa, "{s}: profile cannot be created ({t})", .{ app.name, err });
+            defer dir.close(io);
+            dir.writeFile(io, .{ .sub_path = "user.js", .data = prefs }) catch |err|
+                return unsupported(gpa, "{s}: user.js cannot be written ({t})", .{ app.name, err });
+        }
         _ = std.process.spawn(io, .{ .argv = argv, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore }) catch |err|
             return unsupported(gpa, "{s} cannot be started ({t})", .{ app.argv[0], err });
         var waited: u32 = 0;
@@ -285,8 +361,31 @@ fn appScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, 
     };
     if (window.focus(h) != .ok) std.debug.print("bench: {s}: window 0x{x} not brought to the foreground\n", .{ app.name, h });
     w.Sleep(1500); // let the application render and its provider settle
+    // Menu items shown before the context menu opens (the menu bar's).
+    var closed_items: usize = 0;
+    if (app.context_menu) {
+        switch (backend.uiSnapshot(arena, h, .{})) {
+            .ok => |snap| for (snap.elements) |e| {
+                closed_items += @intFromBool(e.role == .menuitem);
+            },
+            .err => {},
+        }
+        const r = window.rect(@ptrFromInt(h)) orelse return unsupported(gpa, "{s}: window 0x{x} has no rectangle", .{ app.name, h });
+        const center = [2]i32{ r.x + @divTrunc(r.w, 2), r.y + @divTrunc(r.h, 2) };
+        backend.sendMouse(&.{ .{ .move = center }, .{ .down = .right }, .{ .up = .right } }) catch
+            return unsupported(gpa, "{s}: right click refused by Windows", .{app.name});
+        w.Sleep(800);
+    }
+    defer if (app.context_menu) {
+        // Escape closes the menu before the window is closed.
+        backend.keyCombo(.{ .key = .{ .key = .escape } }, .tap) catch {};
+        w.Sleep(200);
+    };
 
-    const line = try std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_tree\",\"arguments\":{{\"window\":\"0x{x}\"}}}}}}", .{h});
+    const line = if (app.context_menu)
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ui_tree\",\"arguments\":{}}}"
+    else
+        try std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_tree\",\"arguments\":{{\"window\":\"0x{x}\"{s}}}}}}}", .{ h, if (app.text) ",\"text\":true" else "" });
     const s = try gpa.create(ToolScenario);
     defer gpa.destroy(s);
     s.* = .{ .server = .init(counter.allocator(), io, backend, .{}), .line = line };
@@ -298,17 +397,35 @@ fn appScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, 
     try s.server.handleMessage(line, &first.writer);
     const first_us = @divTrunc(timing.now(io) - t0, std.time.ns_per_us);
     const text = treeText(arena, first.written());
+    if (app.context_menu) {
+        // The menu's items must be in the tree, as a further root (Win32
+        // menus) or inside the window's own tree (XAML popups, read once).
+        const roots = std.mem.count(u8, text, " window=0x");
+        const items = std.mem.count(u8, text, " menuitem ");
+        if (items <= closed_items) {
+            std.debug.print("{s}\n", .{text});
+            return unsupported(gpa, "{s}: the context menu is not in ui_tree ({d} menu items, {d} before it opened)", .{ app.name, items, closed_items });
+        }
+        std.debug.print("bench: {s} context menu in ui_tree: {d} menu items ({d} before it opened), {d} root(s)\n", .{ app.name, items, closed_items, roots });
+    }
     std.debug.print("bench: {s} first ui_tree {d}.{d:0>3} ms, {d} lines ({s} window)\n", .{ app.name, @divTrunc(first_us, 1000), @as(u64, @intCast(@mod(first_us, 1000))), std.mem.count(u8, text, "\n") + 1, if (launched) "new" else "existing" });
     if (launched) std.debug.print("{s}\n", .{text});
     // The witness runs before and after the series and is averaged, so a
     // provider that speeds up or slows down meanwhile weighs on both sides.
     const witness_before = if (app.witness) witnessP95(arena, io, h) else null;
+    s.extras.len = 0;
     var outcome = try bench.measure(gpa, io, s, iterations, counter);
+    s.extras.report(app.name);
+    if (app.msaa) {
+        // A profile whose pref was ignored would time native UIA instead.
+        if (!backend.ui.lastMsaaProxy()) return unsupported(gpa, "{s}: Firefox still serves native UIA (accessibility.uia.enable ignored)", .{app.name});
+        std.debug.print("bench: {s} read through the MSAA proxy: {d} edit and {d} text lines in the first ui_tree, corrections {d} us in the last snapshot\n", .{ app.name, std.mem.count(u8, text, " edit \""), std.mem.count(u8, text, " text \""), backend.ui.lastMsaaNs() / 1000 });
+    }
     if (witness_before) |before| if (witnessP95(arena, io, h)) |after| if (outcome == .ok) {
         outcome.ok.witness_p95_ns = (before + after) / 2;
     };
     // Raw element count (before pruning), against the 400-node statement.
-    switch (backend.uiSnapshot(arena, h)) {
+    switch (backend.uiSnapshot(arena, h, .{})) {
         .ok => |snap| std.debug.print("bench: {s} window has {d} UIA elements\n", .{ app.name, snap.elements.len }),
         .err => {},
     }
