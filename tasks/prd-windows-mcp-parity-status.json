@@ -17,10 +17,10 @@
     {
       "id": "EP-006",
       "title": "Fenêtres et applications",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 4,
-      "stories_done": 0
+      "stories_done": 4
     },
     {
       "id": "EP-007",
@@ -136,45 +136,45 @@
       "id": "US-026",
       "title": "Écrans et bureaux virtuels dans `window_list`",
       "epic": "EP-006",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": [],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
     },
     {
       "id": "US-027",
       "title": "`window_set`, placement, état et fermeture d'une fenêtre",
       "epic": "EP-006",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-020"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
     },
     {
       "id": "US-028",
       "title": "Catalogue des applications et appariement approximatif",
       "epic": "EP-006",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
     },
     {
       "id": "US-029",
       "title": "`app_launch`, lancement d'applications et ouverture de documents",
       "epic": "EP-006",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": [
@@ -182,9 +182,9 @@
         "US-021",
         "US-028"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-05",
+      "completed_at": "2026-11-05",
+      "reviewed_at": "2026-11-05"
     },
     {
       "id": "US-030",
