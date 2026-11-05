@@ -7,6 +7,7 @@ const input = @import("../core/input.zig");
 const keys = @import("../core/keys.zig");
 const uitree = @import("../core/uitree.zig");
 const Control = @import("../core/control.zig").Control;
+const apps = @import("../core/apps.zig");
 
 pub const displays_fixture = [_]display.Display{
     .{ .rect = .{ .x = 0, .y = 0, .w = 2560, .h = 1440 }, .name = "FAKE-1" },
@@ -108,8 +109,60 @@ pub const Fake = struct {
 
     /// Top-level windows, top of the z-order first; tests replace them.
     windows: []const display.WindowInfo = &windows_fixture,
+    /// IVirtualDesktopManager answers (false: Explorer restarted, US-026).
+    virtual_desktops: bool = true,
+
+    // window_set (US-027)
+    /// Windows closed (or whose process ended) since the test started.
+    gone_buf: [16]u64 = undefined,
+    gone_len: usize = 0,
+    placed: ?display.Rect = null,
+    shown: ?display.ShowState = null,
+    set_calls: u32 = 0,
+    close_calls: u32 = 0,
+    /// What a close request does: close the window, open a save dialog, or
+    /// nothing (a window that ignores it).
+    on_close: enum { closes, dialog, stays } = .closes,
+    /// The smallest frame the application accepts.
+    min_size: ?[2]i32 = null,
+    hung: bool = false,
+    /// neo-compute's pid and its ancestors.
+    ancestors: []const u32 = &.{ 9000, 8000 },
+    terminated: ?u32 = null,
+    dead_pids: []const u32 = &.{},
+    /// UWP frames and the pid of the application each hosts.
+    hosted: []const struct { u64, u32 } = &.{},
+
+    // app_launch (US-028, US-029)
+    catalog: []const apps.App = &apps.fixture,
+    catalog_calls: u32 = 0,
+    /// Shortcut targets `appExe` resolves: AUMID and executable.
+    shortcut_targets: []const struct { []const u8, []const u8 } = &.{},
+    exe_lookups: u32 = 0,
+    launched: ?apps.App = null,
+    launch_calls: u32 = 0,
+    launch_result: apps.Launch = .{ .ok = 7000 },
+    /// The windows once the launch happened (the new window among them).
+    after_launch: ?[]const display.WindowInfo = null,
+    /// Set on launch, as `notifications/cancelled` would during the wait.
+    cancel_on_launch: ?*std.atomic.Value(bool) = null,
+    opened_buf: [256]u8 = undefined,
+    opened_len: usize = 0,
+    files: []const []const u8 = &.{ "C:\\Users\\arthur\\notes.txt", "C:\\Users\\arthur\\coffre.kdbx", "C:\\Users\\arthur\\script.ps1" },
+    folders: []const []const u8 = &.{"C:\\Users\\arthur"},
+    /// 8.3 names and the long paths they resolve to.
+    short_names: []const [2][]const u8 = &.{
+        .{ "C:\\Users\\arthur\\DEPLOY~1.APP", "C:\\Users\\arthur\\deploy.appref-ms" },
+        .{ "C:\\Users\\arthur\\MODULE~1.PSM", "C:\\Users\\arthur\\module.psm1" },
+        .{ "C:\\Users\\arthur\\jeu.pif", "C:\\Users\\arthur\\jeu.pif" },
+        .{ "C:\\Users\\arthur\\meteo.gadget", "C:\\Users\\arthur\\meteo.gadget" },
+    },
+    path_lookups: u32 = 0,
     /// Executable name lookups (the policy caches them per window).
     process_lookups: u32 = 0,
+    /// Processes without a top-level window of their own (the application
+    /// a UWP frame hosts): pid and executable.
+    processes: []const struct { u32, []const u8 } = &.{},
     /// Password scans started by screenshot and zoom (US-019).
     secret_scans: u32 = 0,
     secret_buf: [16]display.Rect = undefined,
@@ -126,6 +179,15 @@ pub const Fake = struct {
 
     pub fn displays(self: *Fake) []const display.Display {
         return displays_fixture[0..self.displays_len];
+    }
+
+    /// Primary display, DPI and work area (the taskbar takes 48 px at the
+    /// bottom of the primary display).
+    pub fn displayInfo(self: *Fake, index: usize) display.DisplayInfo {
+        _ = self;
+        const r = displays_fixture[index].rect;
+        if (index == 0) return .{ .primary = true, .dpi = 192, .work = .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h - 96 } };
+        return .{ .primary = false, .dpi = 96, .work = r };
     }
 
     pub fn foregroundDisplay(self: *Fake) ?usize {
@@ -206,9 +268,20 @@ pub const Fake = struct {
         .{ .handle = 0x5e6f, .title = "Paramètres", .exe = "SystemSettings.exe", .pid = 99, .rect = .{ .x = 0, .y = 0, .w = 800, .h = 600 }, .elevated = false, .minimized = false, .cloaked = true },
     };
 
+    /// Windows on another virtual desktop are `other_desktop` in the
+    /// fixtures; without IVirtualDesktopManager (Explorer restarted) the
+    /// Windows backend reports them as plain `cloaked` (US-026).
     pub fn listWindows(self: *Fake, arena: std.mem.Allocator, include_hidden: bool) error{OutOfMemory}![]const display.WindowInfo {
         var out: std.ArrayList(display.WindowInfo) = .empty;
-        for (self.windows) |win| if (include_hidden or !win.cloaked) try out.append(arena, win);
+        for (self.windows) |listed| {
+            if (self.live(listed.handle) == null) continue;
+            var win = listed;
+            if (win.other_desktop and !self.virtual_desktops) {
+                win.other_desktop = false;
+                win.cloaked = true;
+            }
+            if (include_hidden or !(win.cloaked or win.other_desktop)) try out.append(arena, win);
+        }
         return out.items;
     }
 
@@ -231,13 +304,13 @@ pub const Fake = struct {
     }
 
     pub fn windowRef(self: *Fake, handle: u64) ?display.WindowRef {
-        for (self.windows) |win| if (win.handle == handle) return refOf(win);
-        return null;
+        return refOf(self.live(handle) orelse return null);
     }
 
     pub fn processName(self: *Fake, arena: std.mem.Allocator, pid: u32) ?[]const u8 {
         _ = arena;
         self.process_lookups += 1;
+        for (self.processes) |p| if (p[0] == pid) return p[1];
         for (self.windows) |win| if (win.pid == pid) return win.exe;
         return null;
     }
@@ -278,6 +351,12 @@ pub const Fake = struct {
 
     pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64, request: uitree.Request) uitree.SnapshotResult {
         if (window) |h| if (h != self.ui_window) {
+            // An owned dialog read by its own handle.
+            for (self.ui_extra) |x| if (x.window.handle == h) {
+                const roots = arena.alloc(uitree.Root, 1) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+                roots[0] = .{ .start = 0, .handle = h, .modal = x.modal };
+                return .{ .ok = .{ .window = h, .elements = x.elements, .roots = if (x.modal) roots else &.{} } };
+            };
             for (self.windows) |win| if (win.handle == h) {
                 const root = arena.alloc(uitree.Element, 1) catch return .{ .err = "Mémoire insuffisante : réessaie." };
                 root[0] = .{ .key = win.handle, .depth = 0, .role = .window, .name = win.title, .rect = win.rect };
@@ -342,5 +421,167 @@ pub const Fake = struct {
             return .ok;
         };
         return .closed;
+    }
+
+    // ------------------------------------------------------------ window_set (US-027)
+
+    fn live(self: *Fake, handle: u64) ?display.WindowInfo {
+        if (std.mem.indexOfScalar(u64, self.gone_buf[0..self.gone_len], handle) != null) return null;
+        for (self.windows) |win| if (win.handle == handle) return win;
+        return null;
+    }
+
+    fn markGone(self: *Fake, handle: u64) void {
+        if (self.gone_len < self.gone_buf.len) {
+            self.gone_buf[self.gone_len] = handle;
+            self.gone_len += 1;
+        }
+    }
+
+    pub fn windowPlacement(self: *Fake, handle: u64) ?display.Placement {
+        const win = self.live(handle) orelse return null;
+        return .{ .frame = win.rect, .pid = win.pid, .minimized = win.minimized, .maximized = false, .elevated = win.elevated };
+    }
+
+    /// Places the frame, as large as `min_size` at least.
+    pub fn placeWindow(self: *Fake, handle: u64, frame: display.Rect) display.SetResult {
+        _ = self.live(handle) orelse return .closed;
+        if (self.hung) return .hung;
+        var got = frame;
+        if (self.min_size) |m| {
+            got.w = @max(got.w, m[0]);
+            got.h = @max(got.h, m[1]);
+        }
+        self.placed = got;
+        self.set_calls += 1;
+        return .{ .ok = got };
+    }
+
+    pub fn showWindow(self: *Fake, handle: u64, state: display.ShowState) display.SetResult {
+        const win = self.live(handle) orelse return .closed;
+        if (self.hung) return .hung;
+        self.shown = state;
+        self.set_calls += 1;
+        const r = self.placed orelse win.rect;
+        return .{ .ok = if (state == .maximized) displays_fixture[0].rect else r };
+    }
+
+    pub fn closeWindow(self: *Fake, handle: u64) display.SetResult {
+        _ = self.live(handle) orelse return .closed;
+        self.close_calls += 1;
+        switch (self.on_close) {
+            .closes => self.markGone(handle),
+            .dialog => self.ui_extra = &close_dialog,
+            .stays => {},
+        }
+        return .{ .ok = .{ .x = 0, .y = 0, .w = 0, .h = 0 } };
+    }
+
+    /// A save dialog of Notepad (pid 4242) owned by the window.
+    const close_dialog = [_]ExtraRoot{.{
+        .window = .{ .handle = 0x9a9a, .pid = 4242 },
+        .modal = true,
+        .elements = &.{
+            .{ .key = 900, .depth = 0, .role = .window, .name = "Bloc-notes", .rect = .{ .x = 400, .y = 300, .w = 500, .h = 200 } },
+            .{ .key = 901, .depth = 1, .role = .button, .name = "Enregistrer", .actions = .{ .invoke = true }, .rect = .{ .x = 450, .y = 450, .w = 100, .h = 30 } },
+            .{ .key = 902, .depth = 1, .role = .button, .name = "Ne pas enregistrer", .actions = .{ .invoke = true }, .rect = .{ .x = 600, .y = 450, .w = 150, .h = 30 } },
+        },
+    }};
+
+    pub fn appPid(self: *Fake, handle: u64) ?u32 {
+        const win = self.live(handle) orelse return null;
+        for (self.hosted) |h| if (h[0] == handle) return h[1];
+        return win.pid;
+    }
+
+    pub fn processAncestors(self: *Fake, arena: std.mem.Allocator) []const u32 {
+        _ = arena;
+        return self.ancestors;
+    }
+
+    pub fn processAlive(self: *Fake, pid: u32) bool {
+        if (self.terminated == pid) return false;
+        return std.mem.indexOfScalar(u32, self.dead_pids, pid) == null;
+    }
+
+    pub fn terminateProcess(self: *Fake, pid: u32) bool {
+        self.terminated = pid;
+        for (self.windows) |win| if (win.pid == pid) self.markGone(win.handle);
+        return true;
+    }
+
+    // ------------------------------------------------------------ app_launch (US-028, US-029)
+
+    pub fn appCatalog(self: *Fake, arena: std.mem.Allocator, cancel: *const std.atomic.Value(bool)) apps.CatalogResult {
+        _ = arena;
+        _ = cancel;
+        self.catalog_calls += 1;
+        return .{ .ok = self.catalog };
+    }
+
+    pub fn launchApp(self: *Fake, arena: std.mem.Allocator, app: apps.App, cancel: *const std.atomic.Value(bool)) apps.Launch {
+        _ = arena;
+        _ = cancel;
+        self.launched = app;
+        self.launch_calls += 1;
+        if (self.cancel_on_launch) |c| c.store(true, .release);
+        if (self.after_launch) |wins| self.windows = wins;
+        return self.launch_result;
+    }
+
+    /// Executable a non-packaged entry's shortcut targets, from
+    /// `shortcut_targets`.
+    pub fn appExe(self: *Fake, arena: std.mem.Allocator, app: apps.App) ?[]const u8 {
+        _ = arena;
+        self.exe_lookups += 1;
+        for (self.shortcut_targets) |t| if (std.mem.eql(u8, t[0], app.aumid)) return t[1];
+        return null;
+    }
+
+    pub fn openPath(self: *Fake, path: []const u8, cancel: *const std.atomic.Value(bool)) apps.Launch {
+        _ = cancel;
+        self.opened_len = @min(path.len, self.opened_buf.len);
+        @memcpy(self.opened_buf[0..self.opened_len], path[0..self.opened_len]);
+        self.launch_calls += 1;
+        if (self.after_launch) |wins| self.windows = wins;
+        return self.launch_result;
+    }
+
+    pub fn opened(self: *const Fake) []const u8 {
+        return self.opened_buf[0..self.opened_len];
+    }
+
+    pub fn defaultApp(self: *Fake, arena: std.mem.Allocator, ext: []const u8) ?[]const u8 {
+        _ = self;
+        _ = arena;
+        if (std.mem.eql(u8, ext, ".txt")) return "notepad.exe";
+        if (std.mem.eql(u8, ext, ".kdbx")) return "KeePassXC.exe";
+        return null;
+    }
+
+    /// A fixture file system: `files` and `folders`, absolute; `Z:` is a
+    /// mapped network drive.
+    pub fn pathInfo(self: *Fake, arena: std.mem.Allocator, path: []const u8) apps.PathInfo {
+        _ = arena;
+        self.path_lookups += 1;
+        if (std.ascii.startsWithIgnoreCase(path, "Z:")) return .{ .kind = .remote, .full = path };
+        for (self.short_names) |s| if (std.ascii.eqlIgnoreCase(s[0], path)) return .{ .kind = .file, .full = s[1] };
+        for (self.files) |f| if (std.ascii.eqlIgnoreCase(f, path)) return .{ .kind = .file, .full = f };
+        for (self.folders) |f| if (std.ascii.eqlIgnoreCase(f, path)) return .{ .kind = .directory, .full = f };
+        return .{ .kind = .missing, .full = path };
+    }
+
+    /// `.pif` and `.scr` open as `"%1" %*`: the file runs as a program.
+    /// `.gadget` stands for a type only AssocIsDangerous refuses.
+    pub fn unsafeType(self: *Fake, ext: []const u8) bool {
+        _ = self;
+        for ([_][]const u8{ ".pif", ".scr", ".gadget" }) |e| if (std.mem.eql(u8, ext, e)) return true;
+        return false;
+    }
+
+    pub fn pathExtensions(self: *Fake, arena: std.mem.Allocator) []const u8 {
+        _ = self;
+        _ = arena;
+        return ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY";
     }
 };

@@ -15,6 +15,8 @@ const window = @import("windows/window.zig");
 const com = @import("windows/com.zig");
 const uia = @import("windows/uia.zig");
 const hooks = @import("windows/hooks.zig");
+const shell_mod = @import("windows/shell.zig");
+const apps = @import("../core/apps.zig");
 const Control = @import("../core/control.zig").Control;
 const uitree = @import("../core/uitree.zig");
 const Capture = capture_mod.Capture;
@@ -32,15 +34,18 @@ pub const Windows = struct {
     /// Guards `held`: the kill switch thread releases inputs too (US-018).
     held_lock: w.SRWLOCK = .{ .Ptr = null },
     ui: uia.Worker,
+    /// Shell APIs on their own STA thread (EP-006).
+    shell: shell_mod.Shell,
     kill: ?*hooks.KillSwitch = null,
 
     pub fn init(gpa: std.mem.Allocator) Windows {
-        return .{ .gpa = gpa, .ui = .{ .gpa = gpa } };
+        return .{ .gpa = gpa, .ui = .{ .gpa = gpa }, .shell = .init(gpa) };
     }
 
     pub fn deinit(self: *Windows) void {
         self.stopKillSwitch();
         self.ui.deinit();
+        self.shell.deinit();
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
     }
@@ -83,6 +88,25 @@ pub const Windows = struct {
     pub fn displays(self: *Windows) []const display.Display {
         if (self.ensure() == null) return &.{};
         return self.displays_buf[0..self.displays_len];
+    }
+
+    /// Primary flag, effective DPI and work area of display `index`
+    /// (US-026), read when asked: the work area moves with the taskbar.
+    pub fn displayInfo(self: *Windows, index: usize) display.DisplayInfo {
+        const r = if (index < self.displays_len) self.displays_buf[index].rect else display.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        var info: display.DisplayInfo = .{ .primary = index == 0, .dpi = 96, .work = r };
+        const c = self.ensure() orelse return info;
+        if (index >= self.displays_len) return info;
+        const mon = c.outputs.items[index].desc.Monitor;
+        var mi: w.MONITORINFO = .{ .cbSize = @sizeOf(w.MONITORINFO), .rcMonitor = undefined, .rcWork = undefined, .dwFlags = 0 };
+        if (w.GetMonitorInfoW(mon, &mi) != 0) {
+            info.primary = mi.dwFlags & w.MONITORINFOF_PRIMARY != 0;
+            info.work = .{ .x = mi.rcWork.left, .y = mi.rcWork.top, .w = mi.rcWork.right - mi.rcWork.left, .h = mi.rcWork.bottom - mi.rcWork.top };
+        }
+        var dx: u32 = 96;
+        var dy: u32 = 96;
+        if (w.GetDpiForMonitor(mon, w.MDT_EFFECTIVE_DPI, &dx, &dy) >= 0) info.dpi = dx;
+        return info;
     }
 
     pub fn foregroundDisplay(self: *Windows) ?usize {
@@ -318,14 +342,155 @@ pub const Windows = struct {
         return window.rect(if (hwnd) |h| @ptrFromInt(h) else w.GetForegroundWindow());
     }
 
+    /// With `include_hidden`, a cloaked window on another virtual desktop
+    /// is flagged `other_desktop` instead (US-026); without
+    /// IVirtualDesktopManager it stays `cloaked`.
     pub fn listWindows(self: *Windows, arena: std.mem.Allocator, include_hidden: bool) error{OutOfMemory}![]const display.WindowInfo {
-        _ = self;
-        return window.list(arena, include_hidden);
+        const wins = try window.list(arena, include_hidden);
+        if (!include_hidden) return wins;
+        var cloaked: std.ArrayList(u64) = .empty;
+        for (wins) |win| if (win.cloaked) try cloaked.append(arena, win.handle);
+        if (cloaked.items.len == 0) return wins;
+        const other = try arena.alloc(bool, cloaked.items.len);
+        if (!self.shell.otherDesktops(cloaked.items, other)) return wins;
+        const out = try arena.dupe(display.WindowInfo, wins);
+        var k: usize = 0;
+        for (out) |*win| if (win.cloaked) {
+            if (other[k]) {
+                win.other_desktop = true;
+                win.cloaked = false;
+            }
+            k += 1;
+        };
+        return out;
     }
 
     pub fn focusWindow(self: *Windows, handle: u64) display.FocusResult {
         _ = self;
         return window.focus(handle);
+    }
+
+    // ------------------------------------------------------------ window_set (US-027)
+
+    pub fn windowPlacement(self: *Windows, handle: u64) ?display.Placement {
+        _ = self;
+        return window.placement(handle);
+    }
+
+    pub fn placeWindow(self: *Windows, handle: u64, frame: display.Rect) display.SetResult {
+        _ = self;
+        return window.place(handle, frame);
+    }
+
+    pub fn showWindow(self: *Windows, handle: u64, state: display.ShowState) display.SetResult {
+        _ = self;
+        return window.show(handle, state);
+    }
+
+    pub fn closeWindow(self: *Windows, handle: u64) display.SetResult {
+        _ = self;
+        return window.close(handle);
+    }
+
+    /// Process of the application a window shows (a UWP frame's hosted
+    /// application rather than ApplicationFrameHost.exe).
+    pub fn appPid(self: *Windows, handle: u64) ?u32 {
+        _ = self;
+        return window.appPid(handle);
+    }
+
+    pub fn processAncestors(self: *Windows, arena: std.mem.Allocator) []const u32 {
+        _ = self;
+        return window.ancestors(arena);
+    }
+
+    pub fn processAlive(self: *Windows, pid: u32) bool {
+        _ = self;
+        return window.alive(pid);
+    }
+
+    pub fn terminateProcess(self: *Windows, pid: u32) bool {
+        _ = self;
+        return window.terminate(pid);
+    }
+
+    // ------------------------------------------------------------ app_launch (US-028, US-029)
+
+    pub fn appCatalog(self: *Windows, arena: std.mem.Allocator, cancel: *const std.atomic.Value(bool)) apps.CatalogResult {
+        return self.shell.catalog(arena, cancel);
+    }
+
+    /// A packaged application through IApplicationActivationManager, which
+    /// gives its pid; any other through `shell:AppsFolder\<AUMID>`.
+    pub fn launchApp(self: *Windows, arena: std.mem.Allocator, app: apps.App, cancel: *const std.atomic.Value(bool)) apps.Launch {
+        if (app.packaged) return self.shell.activate(app.aumid, cancel);
+        const file = std.fmt.allocPrint(arena, "shell:AppsFolder\\{s}", .{app.aumid}) catch return .{ .unavailable = "Mémoire insuffisante : réessaie." };
+        return self.shell.execute(file, cancel);
+    }
+
+    /// Executable a non-packaged Start menu entry's shortcut starts, read
+    /// for the chosen entry so the policy applies before the launch.
+    pub fn appExe(self: *Windows, arena: std.mem.Allocator, app: apps.App) ?[]const u8 {
+        return self.shell.targetExe(arena, app.aumid);
+    }
+
+    /// Opens a document or folder with its default application.
+    pub fn openPath(self: *Windows, path: []const u8, cancel: *const std.atomic.Value(bool)) apps.Launch {
+        return self.shell.execute(path, cancel);
+    }
+
+    /// Executable of the default application of extension `ext`.
+    pub fn defaultApp(self: *Windows, arena: std.mem.Allocator, ext: []const u8) ?[]const u8 {
+        return self.shell.defaultExe(arena, ext);
+    }
+
+    /// Absolute form of `path` and what it names, from kernel32 only (no
+    /// shell call): a file, a folder, nothing, or a network location.
+    pub fn pathInfo(self: *Windows, arena: std.mem.Allocator, path: []const u8) apps.PathInfo {
+        _ = self;
+        var wide: [1024:0]u16 = undefined;
+        const n = std.unicode.wtf8ToWtf16Le(&wide, path) catch return .{ .kind = .missing, .full = path };
+        if (n >= wide.len) return .{ .kind = .missing, .full = path };
+        wide[n] = 0;
+        var full_w: [1024:0]u16 = undefined;
+        const len = w.GetFullPathNameW(&wide, full_w.len, @ptrCast(&full_w), null);
+        if (len == 0 or len >= full_w.len) return .{ .kind = .missing, .full = path };
+        full_w[len] = 0;
+        const buf = arena.alloc(u8, len * 3) catch return .{ .kind = .missing, .full = path };
+        const full = buf[0..std.unicode.wtf16LeToWtf8(buf, full_w[0..len])];
+        const backslash: u16 = '\\';
+        if (full_w[0] == backslash and full_w[1] == backslash) return .{ .kind = .remote, .full = full };
+        // A mapped network drive: reading it would open a connection.
+        if (len >= 3 and full_w[1] == ':') {
+            var root = [_:0]u16{ full_w[0], ':', backslash };
+            if (w.GetDriveTypeW(&root) == w.DRIVE_REMOTE) return .{ .kind = .remote, .full = full };
+        }
+        const attrs = w.GetFileAttributesW(&full_w);
+        if (attrs == w.INVALID_FILE_ATTRIBUTES) return .{ .kind = .missing, .full = full };
+        const kind: @FieldType(apps.PathInfo, "kind") = if (attrs & w.FILE_ATTRIBUTE_DIRECTORY != 0) .directory else .file;
+        // The long form of 8.3 components: the shell opens `DEPLOY~1.APP` as
+        // the `.appref-ms` it names, so the core checks this name.
+        var long_w: [1024:0]u16 = undefined;
+        const ln = w.GetLongPathNameW(&full_w, @ptrCast(&long_w), long_w.len);
+        if (ln == 0 or ln >= long_w.len) return .{ .kind = kind, .full = full };
+        const lbuf = arena.alloc(u8, ln * 3) catch return .{ .kind = .missing, .full = path };
+        return .{ .kind = kind, .full = lbuf[0..std.unicode.wtf16LeToWtf8(lbuf, long_w[0..ln])] };
+    }
+
+    /// Whether Windows classes extension `ext` as unsafe to open
+    /// (AssocIsDangerous) or opens it by running the file itself (`.pif`).
+    pub fn unsafeType(self: *Windows, ext: []const u8) bool {
+        return self.shell.unsafeType(ext);
+    }
+
+    /// PATHEXT of this process's environment (`.COM;.EXE;...`).
+    pub fn pathExtensions(self: *Windows, arena: std.mem.Allocator) []const u8 {
+        _ = self;
+        var buf: [1024:0]u16 = undefined;
+        const n = w.GetEnvironmentVariableW(std.unicode.utf8ToUtf16LeStringLiteral("PATHEXT"), @ptrCast(&buf), buf.len);
+        if (n == 0 or n >= buf.len) return "";
+        const out = arena.alloc(u8, n * 3) catch return "";
+        return out[0..std.unicode.wtf16LeToWtf8(out, buf[0..n])];
     }
 
     // ------------------------------------------------------------ tooling

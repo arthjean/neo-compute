@@ -185,17 +185,28 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
             .ok => {},
             .err => |msg| return unsupported(gpa, "UI Automation unavailable: {s}", .{msg}),
         }
+        // Provider-relative references (decision 0010): the witness reads
+        // the taskbar as the snapshot's main round trip does, before and
+        // after the series, over as many samples.
+        const handle: u64 = @intFromPtr(hwnd);
+        const full: Witness = .{ .samples = iterations orelse 200, .full = true };
         if (std.mem.eql(u8, name, "ui_tree")) {
             // Steady state of an observation: a delta of an unchanged tree.
-            const line = try std.fmt.allocPrint(arena.allocator(), "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_tree\",\"arguments\":{{\"window\":\"0x{x}\",\"since\":\"last\"}}}}}}", .{@intFromPtr(hwnd)});
-            return runTool(gpa, io, counter, &backend, line, iterations orelse 200);
+            const line = try std.fmt.allocPrint(arena.allocator(), "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_tree\",\"arguments\":{{\"window\":\"0x{x}\",\"since\":\"last\"}}}}}}", .{handle});
+            const before = witnessP95(arena.allocator(), io, handle, full);
+            var outcome = try runTool(gpa, io, counter, &backend, line, full.samples);
+            setWitness(&outcome, before, witnessP95(arena.allocator(), io, handle, full));
+            return outcome;
         }
         const s = try gpa.create(SnapshotScenario);
         defer gpa.destroy(s);
-        s.* = .{ .io = io, .backend = &backend, .hwnd = @intFromPtr(hwnd), .arena = .init(gpa) };
+        s.* = .{ .io = io, .backend = &backend, .hwnd = handle, .arena = .init(gpa) };
         defer s.arena.deinit();
-        const outcome = try bench.measure(gpa, io, s, iterations orelse SnapshotScenario.default_iterations, counter);
+        const n = iterations orelse SnapshotScenario.default_iterations;
+        const before = witnessP95(arena.allocator(), io, handle, .{ .samples = n, .full = true });
+        var outcome = try bench.measure(gpa, io, s, n, counter);
         s.extras.report("snapshot");
+        setWitness(&outcome, before, witnessP95(arena.allocator(), io, handle, .{ .samples = n, .full = true }));
         return outcome;
     }
     if (std.mem.eql(u8, name, "settle")) {
@@ -211,9 +222,243 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
         const line = try std.fmt.bufPrint(&buf, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"window_focus\",\"arguments\":{{\"window\":\"0x{x}\",\"observe\":\"delta\"}}}}}}", .{@intFromPtr(tw.window())});
         return runTool(gpa, io, counter, &backend, line, iterations orelse 30);
     }
+    if (std.mem.eql(u8, name, "window_set")) return windowSetScenario(gpa, io, counter, &backend, iterations orelse 100);
+    if (std.mem.eql(u8, name, "apps-catalog") or std.mem.eql(u8, name, "apps")) return catalogScenario(gpa, io, counter, &backend, name, iterations);
+    if (std.mem.eql(u8, name, "app_launch")) return appLaunchScenario(gpa, io, counter, &backend, iterations orelse 5);
     for (apps) |app| if (std.mem.eql(u8, name, app.name)) return appScenario(gpa, io, counter, &backend, app, iterations orelse 50);
     return unsupported(gpa, "unknown scenario", .{});
 }
+
+// ---------------------------------------------------------------- EP-006
+
+/// window_set through the dispatcher on a test window this scenario
+/// creates, alternating the two halves of display 0, without observation
+/// (US-027: < 20 ms p95).
+const WindowSetScenario = struct {
+    server: Server,
+    lines: [2][]const u8,
+    round: usize = 0,
+    sink_buf: [64 * 1024]u8 = undefined,
+    sink: std.Io.Writer.Discarding = undefined,
+
+    pub fn step(self: *WindowSetScenario, t: *Timings) !void {
+        try self.server.handleMessage(self.lines[self.round % 2], &self.sink.writer);
+        self.round += 1;
+        for (0..timing.stage_count) |s| {
+            t.ns[s] += self.server.timings.ns[s];
+            t.allocs[s] += self.server.timings.allocs[s];
+            if (self.server.timings.used[s]) t.used[s] = true;
+        }
+    }
+};
+
+fn windowSetScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, backend: *Windows, iterations: usize) !bench.Outcome {
+    const displays = backend.displays();
+    if (displays.len == 0) return unsupported(gpa, "window_set: no display enumerated", .{});
+    const d = displays[0].rect;
+    var tw: TestWindow = .{ .rect = .{ .left = d.x + 40, .top = d.y + 40, .right = d.x + 440, .bottom = d.y + 340 } };
+    tw.start() catch return unsupported(gpa, "window_set: test window cannot be created", .{});
+    defer tw.stop();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = display.Mapping.of(0, d, display.default_long_side);
+    const half = m.width / 2;
+    var lines: [2][]const u8 = undefined;
+    for (&lines, 0..) |*l, i| l.* = try std.fmt.allocPrint(arena.allocator(), "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"window_set\",\"arguments\":{{\"window\":\"0x{x}\",\"rect\":[{d},0,{d},{d}],\"display\":0,\"observe\":\"none\"}}}}}}", .{ @intFromPtr(tw.window()), i * half, half, m.height });
+    const s = try gpa.create(WindowSetScenario);
+    defer gpa.destroy(s);
+    s.* = .{ .server = .init(counter.allocator(), io, backend, .{}), .lines = lines };
+    defer s.server.deinit();
+    s.sink = .init(&s.sink_buf);
+    for (0..10) |_| {
+        var scratch: Timings = .{};
+        try s.step(&scratch);
+    }
+    return bench.measure(gpa, io, s, iterations, counter);
+}
+
+/// `apps-catalog`: one Start menu enumeration per iteration on the shell
+/// STA (A13: < 300 ms), the very first printed apart. `apps`: a name match
+/// on the cached catalog (< 1 ms), over names that hit, are ambiguous,
+/// mistyped or missing.
+const CatalogScenario = struct {
+    io: std.Io,
+    backend: *Windows,
+    arena: std.heap.ArenaAllocator,
+    catalog: @import("../../core/apps.zig").Catalog = .{},
+    enumerate: bool,
+    round: usize = 0,
+    cancel: std.atomic.Value(bool) = .init(false),
+
+    const queries = [_][]const u8{ "calculatrice", "bloc-notes", "parametres", "code", "calculatrise", "photoshop", "explorateur", "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App" };
+
+    pub fn step(self: *CatalogScenario, t: *Timings) !void {
+        _ = self.arena.reset(.retain_capacity);
+        const a = self.arena.allocator();
+        t.start(self.io, .catalog);
+        defer t.stop(self.io, .catalog);
+        if (self.enumerate) {
+            switch (self.backend.appCatalog(a, &self.cancel)) {
+                .ok => {},
+                .err => return error.CatalogFailed,
+            }
+        } else {
+            _ = try @import("../../core/apps.zig").match(a, self.catalog.apps, queries[self.round % queries.len]);
+            self.round += 1;
+        }
+    }
+};
+
+fn catalogScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, backend: *Windows, name: []const u8, iterations: ?usize) !bench.Outcome {
+    const s = try gpa.create(CatalogScenario);
+    defer gpa.destroy(s);
+    s.* = .{ .io = io, .backend = backend, .arena = .init(gpa), .enumerate = std.mem.eql(u8, name, "apps-catalog") };
+    defer s.arena.deinit();
+    defer s.catalog.deinit();
+    const t0 = timing.now(io);
+    const first = backend.appCatalog(s.arena.allocator(), &s.cancel);
+    const first_us = @divTrunc(timing.now(io) - t0, std.time.ns_per_us);
+    switch (first) {
+        .err => |msg| return unsupported(gpa, "Start menu enumeration failed: {s}", .{msg}),
+        .ok => |list| {
+            var packaged: usize = 0;
+            for (list) |a| packaged += @intFromBool(a.packaged);
+            std.debug.print("bench: {s} first enumeration {d}.{d:0>3} ms (shell thread start included), {d} entries, {d} packaged\n", .{ name, @divTrunc(first_us, 1000), @as(u64, @intCast(@mod(first_us, 1000))), list.len, packaged });
+            try s.catalog.replace(gpa, list, 0);
+        },
+    }
+    return bench.measure(gpa, io, s, iterations orelse if (s.enumerate) 20 else 2000, counter);
+}
+
+/// Window list line of `handle` through the dispatcher.
+fn callTool(server: *Server, arena: std.mem.Allocator, comptime tool: []const u8, comptime args_fmt: []const u8, args: anytype) !struct { is_error: bool, text: []const u8 } {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const arguments = try std.fmt.allocPrint(arena, args_fmt, args);
+    const line = try std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"" ++ tool ++ "\",\"arguments\":{s}}}}}", .{arguments});
+    try server.handleMessage(line, &out.writer);
+    const reply = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const res = reply.object.get("result").?.object;
+    return .{
+        .is_error = if (res.get("isError")) |e| e.bool else false,
+        .text = res.get("content").?.array.items[0].object.get("text").?.string,
+    };
+}
+
+fn handleOf(text: []const u8) ?u64 {
+    if (!std.mem.startsWith(u8, text, "0x")) return null;
+    const end = std.mem.indexOfScalar(u8, text, ' ') orelse text.len;
+    return std.fmt.parseInt(u64, text[2..end], 16) catch null;
+}
+
+/// EP-006 Definition of Done on the desktop: app_launch opens a text
+/// document and Calculator, window_set places each window on the left half
+/// of display 0 and closes it. Then app_launch of Calculator is timed
+/// (launch, window, full tree) and Calculator closed with window_set after
+/// each iteration. Windows the scenario did not open are never moved or
+/// closed: it needs Calculator closed, and skips the document while the
+/// default text application already runs (Notepad tabs, an editor's
+/// workspace would receive it).
+fn appLaunchScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, backend: *Windows, iterations: usize) !bench.Outcome {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const calc_app: App = .{ .name = "calculator", .argv = &.{}, .titles = &.{ "Calculatrice", "Calculator" } };
+    if (findApp(backend, calc_app) != null) return unsupported(gpa, "app_launch: Calculator is already open: close it first", .{});
+    var server: Server = .init(counter.allocator(), io, backend, .{});
+    defer server.deinit();
+    const m = display.Mapping.of(0, backend.displays()[0].rect, display.default_long_side);
+
+    // A document: a scratch text file under .zig-cache.
+    const before = try backend.listWindows(arena, true);
+    const text_exe = backend.defaultApp(arena, ".txt") orelse "";
+    const text_running = for (before) |win| {
+        if (text_exe.len > 0 and std.ascii.eqlIgnoreCase(win.exe, text_exe)) break true;
+    } else false;
+    if (text_running) {
+        std.debug.print("bench: app_launch document skipped: {s} (default for .txt) is already open; close it to include the document\n", .{text_exe});
+    } else {
+        const doc_dir = ".zig-cache\\bench-app-launch";
+        std.Io.Dir.cwd().createDirPath(io, doc_dir) catch {};
+        const doc_rel = doc_dir ++ "\\neo-compute-app-launch.txt";
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = doc_rel, .data = "neo-compute app_launch bench\n" }) catch |err| return unsupported(gpa, "app_launch: document cannot be written ({t})", .{err});
+        const doc = std.Io.Dir.cwd().realPathFileAlloc(io, doc_rel, arena) catch return unsupported(gpa, "app_launch: document path unknown", .{});
+        const doc_json = try std.mem.replaceOwned(u8, arena, doc, "\\", "\\\\");
+        const opened = try callTool(&server, arena, "app_launch", "{{\"path\":\"{s}\",\"observe\":\"none\"}}", .{doc_json});
+        std.debug.print("bench: app_launch document: {s}\n", .{opened.text});
+        const note = handleOf(opened.text) orelse return unsupported(gpa, "app_launch: the document did not open: {s}", .{opened.text});
+        if (opened.is_error) return unsupported(gpa, "app_launch: {s}", .{opened.text});
+        for (before) |win| if (win.handle == note)
+            return unsupported(gpa, "app_launch: the document opened in a window that was already open (0x{x}, {s}): close that application and rerun", .{ note, win.exe });
+        try placeAndClose(&server, arena, m, note, "document");
+    }
+
+    const s = try gpa.create(AppLaunchScenario);
+    defer gpa.destroy(s);
+    s.* = .{ .server = &server, .arena = .init(gpa), .mapping = m };
+    defer s.arena.deinit();
+    defer if (s.last) |h| {
+        _ = w.PostMessageW(@ptrFromInt(h), w.WM_CLOSE, 0, 0);
+    };
+    var first: Timings = .{};
+    try s.step(&first);
+    std.debug.print("bench: app_launch Calculator: {s}\n", .{s.text});
+    if (s.failed) return unsupported(gpa, "app_launch: {s}", .{s.text});
+    s.mapping = null;
+    return bench.measure(gpa, io, s, iterations, counter);
+}
+
+/// window_set places `handle` on the left half of display 0, prints the
+/// DWM frame it got, then closes it.
+fn placeAndClose(server: *Server, arena: std.mem.Allocator, m: display.Mapping, handle: u64, what: []const u8) !void {
+    const left = try callTool(server, arena, "window_set", "{{\"window\":\"0x{x}\",\"rect\":[0,0,{d},{d}],\"display\":0,\"observe\":\"none\"}}", .{ handle, m.width / 2, m.height });
+    const frame = window.rect(@ptrFromInt(handle)) orelse return error.WindowGone;
+    const got = m.rectToScreenshot(frame);
+    std.debug.print("bench: window_set {s} left half: {s}; DWM frame in screenshot pixels @{d},{d},{d},{d}\n", .{ what, left.text, got.x, got.y, got.w, got.h });
+    const closed = try callTool(server, arena, "window_set", "{{\"window\":\"0x{x}\",\"state\":\"closed\",\"observe\":\"none\"}}", .{handle});
+    std.debug.print("bench: window_set {s} closed: {s}\n", .{ what, closed.text });
+    if (left.is_error or closed.is_error) return error.WindowSetFailed;
+}
+
+const AppLaunchScenario = struct {
+    server: *Server,
+    arena: std.heap.ArenaAllocator,
+    text_buf: [512]u8 = undefined,
+    text: []const u8 = "",
+    failed: bool = false,
+    last: ?u64 = null,
+    /// Set for the first step: Calculator is placed on the left half before
+    /// it closes.
+    mapping: ?display.Mapping = null,
+
+    /// Launches Calculator and records the server's stages, then closes it
+    /// with window_set outside the measured stages.
+    pub fn step(self: *AppLaunchScenario, t: *Timings) !void {
+        _ = self.arena.reset(.retain_capacity);
+        const a = self.arena.allocator();
+        const r = try callTool(self.server, a, "app_launch", "{{\"name\":\"Calculatrice\"}}", .{});
+        for (0..timing.stage_count) |s| {
+            t.ns[s] += self.server.timings.ns[s];
+            t.allocs[s] += self.server.timings.allocs[s];
+            if (self.server.timings.used[s]) t.used[s] = true;
+        }
+        const first_line = r.text[0 .. std.mem.indexOfScalar(u8, r.text, '\n') orelse r.text.len];
+        const n = @min(first_line.len, self.text_buf.len);
+        @memcpy(self.text_buf[0..n], first_line[0..n]);
+        self.text = self.text_buf[0..n];
+        self.failed = r.is_error;
+        const h = handleOf(r.text) orelse return;
+        self.last = h;
+        if (self.mapping) |m| {
+            try placeAndClose(self.server, a, m, h, "Calculator");
+            self.last = null;
+            w.Sleep(500);
+            return;
+        }
+        _ = try callTool(self.server, a, "window_set", "{{\"window\":\"0x{x}\",\"state\":\"closed\",\"observe\":\"none\"}}", .{h});
+        self.last = null;
+        w.Sleep(500);
+    }
+};
 
 // ---------------------------------------------------------------- reference applications
 
@@ -412,7 +657,7 @@ fn appScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, 
     if (launched) std.debug.print("{s}\n", .{text});
     // The witness runs before and after the series and is averaged, so a
     // provider that speeds up or slows down meanwhile weighs on both sides.
-    const witness_before = if (app.witness) witnessP95(arena, io, h) else null;
+    const witness_before = if (app.witness) witnessP95(arena, io, h, .{}) else null;
     s.extras.len = 0;
     var outcome = try bench.measure(gpa, io, s, iterations, counter);
     s.extras.report(app.name);
@@ -421,9 +666,7 @@ fn appScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, 
         if (!backend.ui.lastMsaaProxy()) return unsupported(gpa, "{s}: Firefox still serves native UIA (accessibility.uia.enable ignored)", .{app.name});
         std.debug.print("bench: {s} read through the MSAA proxy: {d} edit and {d} text lines in the first ui_tree, corrections {d} us in the last snapshot\n", .{ app.name, std.mem.count(u8, text, " edit \""), std.mem.count(u8, text, " text \""), backend.ui.lastMsaaNs() / 1000 });
     }
-    if (witness_before) |before| if (witnessP95(arena, io, h)) |after| if (outcome == .ok) {
-        outcome.ok.witness_p95_ns = (before + after) / 2;
-    };
+    if (witness_before != null) setWitness(&outcome, witness_before, witnessP95(arena, io, h, .{}));
     // Raw element count (before pruning), against the 400-node statement.
     switch (backend.uiSnapshot(arena, h, .{})) {
         .ok => |snap| std.debug.print("bench: {s} window has {d} UIA elements\n", .{ app.name, snap.elements.len }),
@@ -438,12 +681,31 @@ fn appScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, 
     return outcome;
 }
 
+/// Keeps in an ok outcome the mean of the witness p95 before and after its
+/// series, when both runs succeeded: a provider that speeds up or slows
+/// down meanwhile weighs on both sides.
+fn setWitness(outcome: *bench.Outcome, before: ?u64, after: ?u64) void {
+    const b = before orelse return;
+    const a = after orelse return;
+    if (outcome.* == .ok) outcome.ok.witness_p95_ns = (b + a) / 2;
+}
+
+const Witness = struct {
+    samples: usize = 50,
+    /// neo-compute's main read (12 properties, 9 patterns, the control-view
+    /// subtree in one round trip) instead of US-001's 3 properties.
+    full: bool = false,
+};
+
 /// p95 of the US-001 C witness probe (zig-out/bin/probe_c.exe, installed by
-/// `zig build`) over 50 snapshots of the same window, or null when it cannot
-/// run.
-fn witnessP95(arena: std.mem.Allocator, io: std.Io, hwnd: u64) ?u64 {
+/// `zig build`) over `opts.samples` snapshots of the same window, or null
+/// when it cannot run.
+fn witnessP95(arena: std.mem.Allocator, io: std.Io, hwnd: u64, opts: Witness) ?u64 {
     const handle = std.fmt.allocPrint(arena, "0x{x}", .{hwnd}) catch return null;
-    const r = std.process.run(arena, io, .{ .argv = &.{ "zig-out\\bin\\probe_c.exe", "50", handle } }) catch |err| {
+    const samples = std.fmt.allocPrint(arena, "{d}", .{opts.samples}) catch return null;
+    const exe = "zig-out\\bin\\probe_c.exe";
+    const argv: []const []const u8 = if (opts.full) &.{ exe, samples, handle, "full" } else &.{ exe, samples, handle };
+    const r = std.process.run(arena, io, .{ .argv = argv }) catch |err| {
         std.debug.print("bench: witness probe not run ({t})\n", .{err});
         return null;
     };
@@ -452,6 +714,6 @@ fn witnessP95(arena: std.mem.Allocator, io: std.Io, hwnd: u64) ?u64 {
     const rest = r.stderr[at + key.len ..];
     const end = std.mem.indexOfNone(u8, rest, "0123456789") orelse rest.len;
     const p95_us = std.fmt.parseInt(u64, rest[0..end], 10) catch return null;
-    std.debug.print("bench: witness probe_c p95 {d} us on the same window\n", .{p95_us});
+    std.debug.print("bench: witness probe_c{s} p95 {d} us on the same window\n", .{ if (opts.full) " full" else "", p95_us });
     return p95_us * std.time.ns_per_us;
 }

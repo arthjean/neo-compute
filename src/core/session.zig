@@ -36,6 +36,12 @@ pub const Session = struct {
     /// Control level per application (US-017) and its pid cache.
     policy: *const policy.Policy = &policy.defaults,
     apps: policy.Cache = .{},
+    /// Start menu applications for app_launch (US-028).
+    catalog: @import("apps.zig").Catalog = .{},
+    /// How long app_launch waits for a window (US-029) and window_set for a
+    /// close before `force` (US-027); tests shorten them.
+    launch_wait_ms: u32 = 10_000,
+    close_wait_ms: u32 = 2000,
 
     pub fn init(gpa: std.mem.Allocator, long_side: u32) Session {
         return .{ .gpa = gpa, .long_side = long_side };
@@ -45,6 +51,7 @@ pub const Session = struct {
         self.reducer.deinit(self.gpa);
         self.encoder.deinit(self.gpa);
         self.ui.deinit(self.gpa);
+        self.catalog.deinit();
     }
 
     pub const Resolved = union(enum) { ok: Mapping, err: []const u8 };

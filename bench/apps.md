@@ -33,6 +33,14 @@ runs of 2026-11-03 the witness measured 91 to 163 ms p95 against 78 to 112 ms
 for the server on the same window: the cost is Explorer's provider, not the
 language (PRD, Rust Switch Gate, last paragraph).
 
+The taskbar scenarios `snapshot` and `ui_tree` are provider-relative
+(decision 0010): around each series, `probe_c.exe <n> <hwnd> full` reads the
+taskbar as the server's main round trip does (12 properties, 9 patterns, the
+control-view subtree), and a UIA stage above 110 % of its reference passes
+within 110 % of that witness. On 2026-11-05 the commit that recorded the
+baseline (24.0 ms) measured 31 to 32 ms, and the server matched the witness
+(snapshot 35.7 ms against 35.5 ms, ui_tree 36.7 ms against 37.0 ms).
+
 Edge is not installed on the reference machine: Chrome stands in for it
 (decision 0004).
 
@@ -58,3 +66,31 @@ holds: it is read once, inside that tree, not as a further root.
 `firefox-msaa` costs what UIA's MSAA proxy costs: about 130 ms to read the
 on-screen control view of the page, against 24 ms through Firefox's native
 UIA (decision 0009). The MSAA corrections themselves take under 0.1 ms.
+
+## EP-006 scenarios (US-026 to US-029)
+
+Measured on 2026-11-05 during the EP-006 implementation, ReleaseFast. The
+desktop scenarios run with `zig build bench -- --check bench/baseline.json`
+against the absolute budgets of `src/core/bench.zig`; `app_launch` runs on
+request.
+
+| Scenario | What it times | First call | Steady p95 | Budget |
+|---|---|---|---|---|
+| window_set | `window_set` rect on a test window, alternating halves of display 0, through the dispatcher | - | 4.6 to 5.3 µs | 20 ms |
+| apps-catalog | one `FOLDERID_AppsFolder` enumeration on the shell STA (177 entries, 30 packaged) | 170 to 190 ms | 152 to 183 ms | 300 ms |
+| apps | a name lookup in the cached catalog | - | 250 to 380 µs | 1 ms |
+| app_launch | `app_launch` of Calculator: launch, window, full tree; closed with `window_set` after each run | 0.86 to 1.1 s dispatch, settle included | 30 ms outside settle | - |
+
+`IEnumShellItems::Next` holds 99 % of the enumeration: the shell's
+AppsFolder provider builds its list there, and reading the name and AUMID of
+each entry costs under 1 ms in all. A shortcut's target is read for the
+chosen entry only, at launch (`targetExe`, 15 to 38 ms in Debug): reading it
+for every entry raised the enumeration p95 to 219 to 246 ms. Under load from
+another build on the machine the enumeration reached 305 to 578 ms.
+
+`app_launch` never moves or closes a window it did not open: it needs
+Calculator closed, and skips the document while the default `.txt`
+application already runs (Zed on the reference machine). On a desktop where
+it ran, the document window and Calculator were placed on the left half of
+display 0 with a DWM frame of exactly `0,0,640,720` screenshot pixels, then
+closed by `window_set`.

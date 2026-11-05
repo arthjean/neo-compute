@@ -409,10 +409,56 @@ test "window_list maps rectangles to screenshot pixels and hides cloaked windows
     defer h.deinit();
     const res = text(try h.call("window_list", "{}"));
     var lines = std.mem.splitScalar(u8, res, '\n');
+    // US-026: one line per display first, the work area in screenshot pixels.
+    try testing.expectEqualStrings("display=0 primary physical=2560x1440 size=1280x720 scale=2 dpi=192 work=0,0,1280,672", lines.next().?);
+    try testing.expectEqualStrings("display=1 physical=1920x1080 size=1280x720 scale=1.5 dpi=96 work=0,0,1280,720", lines.next().?);
     try testing.expectEqualStrings("0x1a2b \"Bloc-notes\" notepad.exe pid=4242 display=0 @50,40,600,400 z=0", lines.next().?);
     try testing.expectEqualStrings("0x3c4d \"Administrateur : PowerShell\" WindowsTerminal.exe pid=77 display=1 @80,66,600,401 z=1 {elevated}", lines.next().?);
     try testing.expect(lines.next() == null);
     try expectContains(text(try h.call("window_list", "{\"include_hidden\":true}")), "{cloaked}");
+}
+
+const desktop_windows = Fake.windows_fixture ++ [_]@import("display.zig").WindowInfo{
+    .{ .handle = 0x7a8b, .title = "Musique", .exe = "Spotify.exe", .pid = 515, .rect = .{ .x = 0, .y = 0, .w = 800, .h = 600 }, .elevated = false, .minimized = false, .cloaked = false, .other_desktop = true },
+};
+
+test "window_list flags windows of another virtual desktop, shown only with include_hidden" {
+    var h: Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.windows = &desktop_windows;
+    const visible = text(try h.call("window_list", "{}"));
+    try testing.expect(std.mem.indexOf(u8, visible, "0x7a8b") == null);
+    const all = text(try h.call("window_list", "{\"include_hidden\":true}"));
+    try expectContains(all, "0x7a8b \"Musique\" Spotify.exe pid=515 display=0 @0,0,400,300 z=3 {other-desktop}");
+    // A cloaked window of the current desktop keeps its flag.
+    try expectContains(all, "0x5e6f \"Paramètres\" SystemSettings.exe pid=99 display=0 @0,0,400,300 z=2 {cloaked}");
+}
+
+test "without IVirtualDesktopManager, windows of other desktops stay cloaked without error" {
+    var h: Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.windows = &desktop_windows;
+    h.backend.virtual_desktops = false;
+    const res = try h.call("window_list", "{\"include_hidden\":true}");
+    try testing.expect(!isError(res));
+    try expectContains(text(res), "0x7a8b \"Musique\" Spotify.exe pid=515 display=0 @0,0,400,300 z=3 {cloaked}");
+    try testing.expect(std.mem.indexOf(u8, text(res), "other-desktop") == null);
+    try testing.expect(std.mem.indexOf(u8, text(try h.call("window_list", "{}")), "0x7a8b") == null);
+}
+
+test "window_list stays within 8000 characters and never cuts a display line" {
+    var h: Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    var many: [300]@import("display.zig").WindowInfo = undefined;
+    for (&many, 0..) |*win, i| win.* = .{ .handle = 0x10000 + i, .title = "Une fenêtre au titre assez long pour remplir la sortie de window_list", .exe = "app.exe", .pid = @intCast(1000 + i), .rect = .{ .x = 10, .y = 10, .w = 400, .h = 300 }, .elevated = false, .minimized = false, .cloaked = false };
+    h.backend.windows = &many;
+    const res = text(try h.call("window_list", "{}"));
+    try testing.expect(res.len <= 8000);
+    try testing.expect(std.mem.startsWith(u8, res, "display=0 primary physical=2560x1440 size=1280x720 scale=2 dpi=192 work=0,0,1280,672\ndisplay=1 physical=1920x1080 size=1280x720 scale=1.5 dpi=96 work=0,0,1280,720\n0x10000 "));
+    try expectContains(res, "fenêtres omises (limite de sortie)");
 }
 
 test "window_focus activates by handle and reports closed windows" {

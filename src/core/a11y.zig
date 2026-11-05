@@ -445,6 +445,12 @@ pub fn settle(ctx: anytype, timeout_ms: u32, window: ?u64) Settled {
 /// (`observe`, default delta, screenshot in vision mode) once the screen has
 /// settled. A failed action, or `observe: "none"`, returns as is.
 pub fn observeAfter(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms: ?u32, window: ?u64) Result {
+    return observeWith(ctx, r, observe, settle_timeout_ms, window, false);
+}
+
+/// `observeAfter` whose `delta` is the full tree when `full` (app_launch
+/// returns the whole tree of the window it opened, US-029).
+pub fn observeWith(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms: ?u32, window: ?u64, full: bool) Result {
     if (r.is_error or r.len == 0 or r.blocks[0] != .text) return r;
     const mode = observe orelse ctx.session.default_observe;
     if (mode == .none) return r;
@@ -458,7 +464,7 @@ pub fn observeAfter(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_m
     switch (mode) {
         .none => unreachable,
         .delta => {
-            const obs = treeOf(ctx, window, true, false, false);
+            const obs = treeOf(ctx, window, !full, false, false);
             const body = obs.blocks[0].text;
             if (obs.is_error) return Result.text(fmt(ctx.arena, "{s} ; {s}\nObservation indisponible : {s}", .{ done, status, body }));
             return Result.text(fmt(ctx.arena, "{s} ; {s}\n{s}", .{ done, status, body }));

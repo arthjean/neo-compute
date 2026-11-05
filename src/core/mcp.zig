@@ -110,6 +110,8 @@ pub fn Ctx(comptime Backend: type) type {
         target: ?policy.Target = null,
         /// The policy refused the action.
         denied: bool = false,
+        /// What window_set and app_launch add to the audit line (FR-29).
+        audit_detail: audit.Detail = .{},
 
         pub fn cancelled(self: *const Self) bool {
             return self.cancel.load(.acquire);
@@ -495,6 +497,7 @@ pub fn Server(comptime Backend: type, comptime tools: anytype) type {
                 .duration_ns = @intCast(@max(timing.now(self.io) - started, 0)),
                 .result = result,
                 .text_len = text_len,
+                .detail = ctx.audit_detail,
             });
         }
 

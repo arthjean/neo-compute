@@ -263,3 +263,178 @@ pub fn ownerDisabled(hwnd: w.HWND) bool {
     const owner = w.GetWindow(hwnd, w.GW_OWNER) orelse return false;
     return w.IsWindowEnabled(owner) == 0;
 }
+
+// ---------------------------------------------------------------- window_set (US-027)
+
+/// Whether the window's thread answers within 200 ms: SetWindowPos and
+/// ShowWindow send it messages and would block on a hung window.
+fn answers(hwnd: w.HWND) bool {
+    var result: usize = 0;
+    return w.SendMessageTimeoutW(hwnd, w.WM_NULL, 0, 0, w.SMTO_ABORTIFHUNG, 200, &result) != 0;
+}
+
+pub fn placement(handle: u64) ?display.Placement {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return null;
+    var pid: u32 = 0;
+    if (w.GetWindowThreadProcessId(hwnd, &pid) == 0) return null;
+    return .{
+        .frame = rect(hwnd) orelse return null,
+        .pid = pid,
+        .minimized = w.IsIconic(hwnd) != 0,
+        .maximized = w.IsZoomed(hwnd) != 0,
+        .elevated = input.isElevatedPid(pid),
+    };
+}
+
+fn near(a: display.Rect, b: display.Rect) bool {
+    return @abs(a.x - b.x) <= 1 and @abs(a.y - b.y) <= 1 and @abs(a.w - b.w) <= 1 and @abs(a.h - b.h) <= 1;
+}
+
+/// Places the visible frame of `handle` at `frame` (physical pixels),
+/// restoring a minimized or maximized window first. SetWindowPos takes the
+/// window rectangle, invisible resize borders included, so they are added;
+/// a move to a display of another DPI resizes the window and its borders
+/// (WM_DPICHANGED), hence up to three corrections.
+pub fn place(handle: u64, frame: display.Rect) display.SetResult {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return .closed;
+    if (!answers(hwnd)) return .hung;
+    if (w.IsIconic(hwnd) != 0 or w.IsZoomed(hwnd) != 0) _ = w.ShowWindow(hwnd, w.SW_RESTORE);
+    var got = rect(hwnd) orelse return .closed;
+    var attempt: u32 = 0;
+    while (attempt < 3 and !near(got, frame)) : (attempt += 1) {
+        var wr: w.RECT = undefined;
+        if (w.GetWindowRect(hwnd, &wr) == 0) return .closed;
+        const l = got.x - wr.left;
+        const t = got.y - wr.top;
+        const r = wr.right - got.right();
+        const b = wr.bottom - got.bottom();
+        if (w.SetWindowPos(hwnd, null, frame.x - l, frame.y - t, frame.w + l + r, frame.h + t + b, w.SWP_NOZORDER | w.SWP_NOACTIVATE) == 0)
+            return if (w.GetLastError() == w.ERROR_ACCESS_DENIED) .elevated else .failed;
+        got = rect(hwnd) orelse return .closed;
+    }
+    return .{ .ok = got };
+}
+
+/// Restores, minimizes or maximizes `handle`, then waits up to 500 ms for
+/// the state to show.
+pub fn show(handle: u64, state: display.ShowState) display.SetResult {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return .closed;
+    if (!answers(hwnd)) return .hung;
+    _ = w.ShowWindow(hwnd, switch (state) {
+        .normal => w.SW_RESTORE,
+        .minimized => w.SW_MINIMIZE,
+        .maximized => w.SW_MAXIMIZE,
+    });
+    var waited: u32 = 0;
+    while (waited < 500) : (waited += 10) {
+        if (w.IsWindow(hwnd) == 0) return .closed;
+        const iconic = w.IsIconic(hwnd) != 0;
+        const zoomed = w.IsZoomed(hwnd) != 0;
+        const reached = switch (state) {
+            .normal => !iconic and !zoomed,
+            .minimized => iconic,
+            .maximized => zoomed,
+        };
+        if (reached) break;
+        w.Sleep(10);
+    }
+    return .{ .ok = rect(hwnd) orelse return .closed };
+}
+
+/// Asks `handle` to close as its title bar's close button does
+/// (WM_SYSCOMMAND / SC_CLOSE), posted so a hung window never blocks.
+pub fn close(handle: u64) display.SetResult {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return .closed;
+    if (w.PostMessageW(hwnd, w.WM_SYSCOMMAND, w.SC_CLOSE, 0) == 0)
+        return if (w.GetLastError() == w.ERROR_ACCESS_DENIED) .elevated else .failed;
+    return .{ .ok = rect(hwnd) orelse .{ .x = 0, .y = 0, .w = 0, .h = 0 } };
+}
+
+const Hosted = struct { frame_pid: u32, pid: u32 = 0 };
+
+fn hostedChild(hwnd: w.HWND, lparam: w.LPARAM) callconv(.winapi) w.BOOL {
+    const h: *Hosted = @ptrFromInt(@as(usize, @bitCast(lparam)));
+    var pid: u32 = 0;
+    _ = w.GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != 0 and pid != h.frame_pid) {
+        h.pid = pid;
+        return 0;
+    }
+    return 1;
+}
+
+/// Process of the application a window shows: a UWP frame
+/// (`ApplicationFrameWindow`, owned by ApplicationFrameHost.exe, which hosts
+/// every UWP window) shows the process of its CoreWindow child.
+pub fn appPid(handle: u64) ?u32 {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return null;
+    var pid: u32 = 0;
+    _ = w.GetWindowThreadProcessId(hwnd, &pid);
+    var cbuf: [64:0]u16 = undefined;
+    if (!std.mem.eql(u16, className(hwnd, &cbuf), std.unicode.utf8ToUtf16LeStringLiteral("ApplicationFrameWindow"))) return pid;
+    var h: Hosted = .{ .frame_pid = pid };
+    _ = w.EnumChildWindows(hwnd, hostedChild, @bitCast(@intFromPtr(&h)));
+    return if (h.pid != 0) h.pid else pid;
+}
+
+fn creationTime(pid: u32) ?u64 {
+    const process = w.OpenProcess(w.PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) orelse return null;
+    defer _ = w.CloseHandle(process);
+    var created: w.FILETIME = undefined;
+    var exited: w.FILETIME = undefined;
+    var kernel: w.FILETIME = undefined;
+    var user: w.FILETIME = undefined;
+    if (w.GetProcessTimes(process, &created, &exited, &kernel, &user) == 0) return null;
+    return (@as(u64, created.dwHighDateTime) << 32) | created.dwLowDateTime;
+}
+
+/// This process and its ancestors (Claude Code among them), nearest first.
+/// A parent pid whose process started after its child is a reused pid: the
+/// chain stops there.
+pub fn ancestors(arena: std.mem.Allocator) []const u32 {
+    var out: std.ArrayList(u32) = .empty;
+    const me = w.GetCurrentProcessId();
+    out.append(arena, me) catch return &.{};
+    const snap = w.CreateToolhelp32Snapshot(w.TH32CS_SNAPPROCESS, 0);
+    if (snap == w.INVALID_HANDLE_VALUE or snap == null) return out.items;
+    defer _ = w.CloseHandle(snap);
+    var parents: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+    var e: w.PROCESSENTRY32W = undefined;
+    e.dwSize = @sizeOf(w.PROCESSENTRY32W);
+    var more = w.Process32FirstW(snap, &e) != 0;
+    while (more) : (more = w.Process32NextW(snap, &e) != 0) parents.put(arena, e.th32ProcessID, e.th32ParentProcessID) catch return out.items;
+    var child = me;
+    var child_created = creationTime(me) orelse std.math.maxInt(u64);
+    while (out.items.len < 32) {
+        const parent = parents.get(child) orelse break;
+        if (parent == 0 or parent == 4 or std.mem.indexOfScalar(u32, out.items, parent) != null) break;
+        const created = creationTime(parent) orelse break;
+        if (created > child_created) break;
+        out.append(arena, parent) catch break;
+        child = parent;
+        child_created = created;
+    }
+    return out.items;
+}
+
+pub fn alive(pid: u32) bool {
+    const process = w.OpenProcess(w.PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) orelse return false;
+    defer _ = w.CloseHandle(process);
+    var code: u32 = 0;
+    if (w.GetExitCodeProcess(process, &code) == 0) return false;
+    return code == @as(u32, @bitCast(w.STILL_ACTIVE));
+}
+
+/// Terminates process `pid` and waits up to 1 s for it to exit.
+pub fn terminate(pid: u32) bool {
+    const process = w.OpenProcess(w.PROCESS_TERMINATE | w.PROCESS_SYNCHRONIZE, 0, pid) orelse return false;
+    defer _ = w.CloseHandle(process);
+    if (w.TerminateProcess(process, 1) == 0) return false;
+    _ = w.WaitForSingleObject(process, 1000);
+    return true;
+}

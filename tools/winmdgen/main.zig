@@ -957,6 +957,38 @@ const Emitter = struct {
             try w.writeAll(";\n");
             return;
         }
+        // Property keys (PKEY_*, DEVPKEY_*) are a ConstantAttribute string
+        // holding a C initializer: `{Data1, Data2, Data3, b0, ..., b7}, pid`.
+        if (t == .named and isPropertyKey(ix.typeName(t.named))) if (ix.findAttr(.{ .table = .Field, .row = row }, "ConstantAttribute")) |ca| {
+            const v = m.blob(.CustomAttribute, ca, 2);
+            var b: Blob = .{ .data = v };
+            _ = try b.byte(); // prolog 0x0001
+            _ = try b.byte();
+            const len = try b.compressed();
+            if (b.data.len < b.pos + len) return error.UnsupportedConstant;
+            const text = b.data[b.pos..][0..len];
+            var nums: [12]u64 = undefined;
+            var n: usize = 0;
+            var it = std.mem.tokenizeAny(u8, text, "{}, ");
+            while (it.next()) |tok| : (n += 1) {
+                if (n == nums.len) return error.UnsupportedConstant;
+                nums[n] = std.fmt.parseInt(u64, tok, 0) catch return error.UnsupportedConstant;
+            }
+            if (n != nums.len) return error.UnsupportedConstant;
+            var g: [16]u8 = undefined;
+            std.mem.writeInt(u32, g[0..4], @intCast(nums[0]), .little);
+            std.mem.writeInt(u16, g[4..6], @intCast(nums[1]), .little);
+            std.mem.writeInt(u16, g[6..8], @intCast(nums[2]), .little);
+            for (g[8..16], nums[3..11]) |*d, x| d.* = @intCast(x);
+            try w.writeAll("pub const ");
+            try e.ident(name);
+            try w.writeAll(": ");
+            try e.ty(t, .{});
+            try w.writeAll(" = .{ .fmtid = ");
+            try e.guid(g);
+            try w.print(", .pid = {d} }};\n", .{nums[11]});
+            return;
+        };
         const c = ix.constant_of.get(row) orelse {
             std.debug.print("winmdgen: constant `{s}` has no literal value (attribute-encoded constants are not supported)\n", .{name});
             return error.UnsupportedConstant;
@@ -1096,4 +1128,9 @@ fn extractWinmd(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
         return out.written();
     }
     return error.WinmdNotInPackage;
+}
+
+/// Struct types whose constants are written as a `{guid}, pid` initializer.
+fn isPropertyKey(name: []const u8) bool {
+    return std.mem.eql(u8, name, "PROPERTYKEY") or std.mem.eql(u8, name, "DEVPROPKEY");
 }

@@ -237,4 +237,7 @@ test {
     _ = @import("core/policy.zig");
     _ = @import("core/audit.zig");
     _ = @import("core/security_test.zig");
+    _ = @import("core/apps.zig");
+    _ = @import("core/launch.zig");
+    _ = @import("core/windows_test.zig");
 }

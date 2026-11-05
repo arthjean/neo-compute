@@ -130,6 +130,29 @@ test "check fails above 110 % of the reference or above the absolute budget" {
     notepad.outcome.ok.witness_p95_ns = 90_000_000;
     try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{notepad}, &sink.writer));
 
+    // The taskbar scenarios are provider-relative (decision 0010): a
+    // provider stage above 110 % of its reference passes within 110 % of the
+    // witness probe, fails above it or without one, and the other stages
+    // stay strict.
+    const taskbar = "{\"reference_p95_us\":{\"snapshot\":{\"accessibility\":24000,\"total\":24000},\"ui_tree\":{\"diff\":2,\"dispatch\":30000,\"total\":30000}}}";
+    var snap = fakeResult("snapshot", .accessibility, 32_000);
+    try testing.expectEqual(@as(usize, 2), try bench.check(a, taskbar, &.{snap}, &sink.writer));
+    snap.outcome.ok.witness_p95_ns = 30_000_000;
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, taskbar, &.{snap}, &sink.writer));
+    snap.outcome.ok.witness_p95_ns = 28_000_000;
+    try testing.expectEqual(@as(usize, 2), try bench.check(a, taskbar, &.{snap}, &sink.writer));
+    var tree_diff = fakeResult("ui_tree", .diff, 5);
+    tree_diff.outcome.ok.witness_p95_ns = 30_000_000;
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, taskbar, &.{tree_diff}, &sink.writer));
+    // The absolute 50 ms budget stays absolute.
+    var slow = fakeResult("snapshot", .accessibility, 52_000);
+    slow.outcome.ok.witness_p95_ns = 60_000_000;
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, taskbar, &.{slow}, &sink.writer));
+    // Other scenarios ignore a witness against their reference.
+    var cap = fakeResult("capture", .capture, 1110);
+    cap.outcome.ok.witness_p95_ns = 10_000_000;
+    try testing.expectEqual(@as(usize, 2), try bench.check(a, baseline, &.{cap}, &sink.writer));
+
     // Unsupported scenarios are never checked.
     const skipped: bench.Result = .{ .name = "capture", .outcome = .{ .unsupported = "no output" } };
     try testing.expectEqual(@as(usize, 0), try bench.check(a, baseline, &.{skipped}, &sink.writer));

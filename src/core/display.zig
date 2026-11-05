@@ -59,6 +59,15 @@ pub const Frame = struct {
 /// Outcome of a capture: the frame, or a message for the model (FR-06).
 pub const CaptureResult = union(enum) { frame: Frame, failed: []const u8 };
 
+/// What `window_list` prints about a display besides its geometry (US-026).
+pub const DisplayInfo = struct {
+    primary: bool,
+    /// Effective DPI (96 at 100 % scaling).
+    dpi: u32,
+    /// Work area (without the taskbar), physical pixels of the desktop.
+    work: Rect,
+};
+
 /// A visible top-level window, top of the z-order first.
 pub const WindowInfo = struct {
     handle: u64,
@@ -69,9 +78,29 @@ pub const WindowInfo = struct {
     elevated: bool,
     minimized: bool,
     cloaked: bool,
+    /// Cloaked because it sits on another virtual desktop (US-026), as
+    /// IVirtualDesktopManager reports; then `cloaked` is false.
+    other_desktop: bool = false,
 };
 
 pub const FocusResult = enum { ok, closed, refused };
+
+/// Where a top-level window is and what state it is in (US-027).
+pub const Placement = struct {
+    /// Visible frame (DWMWA_EXTENDED_FRAME_BOUNDS), physical pixels; the
+    /// restored frame's position is not reported for a minimized window.
+    frame: Rect,
+    pid: u32,
+    minimized: bool,
+    maximized: bool,
+    /// Runs at a higher integrity level: UIPI blocks what neo-compute sends.
+    elevated: bool,
+};
+
+/// Outcome of a window_set primitive: the visible frame obtained.
+pub const SetResult = union(enum) { ok: Rect, closed, elevated, hung, failed };
+
+pub const ShowState = enum { normal, minimized, maximized };
 
 /// A top-level window and its process, for the policy (US-017).
 pub const WindowRef = struct { handle: u64, pid: u32 };

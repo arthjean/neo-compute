@@ -1,6 +1,12 @@
 /* US-001 witness probe: the same UIA snapshot as probe.zig, written in C
  * against the mingw-w64 headers, so Zig and C latencies can be compared on
- * the same target. Usage: probe_c [samples] [foreground|taskbar] */
+ * the same target. Usage: probe_c [samples] [foreground|taskbar|0x<hwnd>] [full]
+ *
+ * `full` reads instead what neo-compute's snapshot reads in its main round
+ * trip (src/backend/windows/uia.zig): one FindAllBuildCache on the window
+ * element with the subtree of the control view, 12 properties and 9
+ * patterns in the cache, the provider's cost of that read alone
+ * (bench budgets relative to the provider, docs/decisions/0010). */
 #define COBJMACROS
 #define INITGUID
 #include <windows.h>
@@ -63,9 +69,59 @@ static HRESULT snapshot(IUIAutomation *uia, IUIAutomationCacheRequest *cache, IU
     return hr;
 }
 
+/* neo-compute's main read: ElementFromHandle, then FindAllBuildCache on the
+ * window element (TreeScope_Element), the cache carrying the control-view
+ * subtree. The cached tree is walked in process, as neo-compute does. */
+static int count_cached(IUIAutomationElement *el) {
+    IUIAutomationElementArray *children = NULL;
+    int n = 1, len = 0, i;
+    if (FAILED(IUIAutomationElement_GetCachedChildren(el, &children)) || !children) return n;
+    IUIAutomationElementArray_get_Length(children, &len);
+    for (i = 0; i < len; i++) {
+        IUIAutomationElement *c = NULL;
+        if (SUCCEEDED(IUIAutomationElementArray_GetElement(children, i, &c)) && c) {
+            n += count_cached(c);
+            IUIAutomationElement_Release(c);
+        }
+    }
+    IUIAutomationElementArray_Release(children);
+    return n;
+}
+
+static HRESULT snapshot_full(IUIAutomation *uia, IUIAutomationCacheRequest *cache, IUIAutomationCondition *cond, HWND hwnd, int *count) {
+    IUIAutomationElement *live = NULL, *root = NULL;
+    IUIAutomationElementArray *arr = NULL;
+    int len = 0;
+    HRESULT hr = IUIAutomation_ElementFromHandle(uia, (UIA_HWND)hwnd, &live);
+    if (FAILED(hr)) return hr;
+    hr = IUIAutomationElement_FindAllBuildCache(live, TreeScope_Element, cond, cache, &arr);
+    if (SUCCEEDED(hr) && arr) {
+        IUIAutomationElementArray_get_Length(arr, &len);
+        if (len > 0 && SUCCEEDED(IUIAutomationElementArray_GetElement(arr, 0, &root)) && root) {
+            *count = count_cached(root);
+            IUIAutomationElement_Release(root);
+        }
+        IUIAutomationElementArray_Release(arr);
+    }
+    IUIAutomationElement_Release(live);
+    return hr;
+}
+
+static const PROPERTYID full_properties[] = {
+    UIA_RuntimeIdPropertyId, UIA_NamePropertyId, UIA_ControlTypePropertyId, UIA_BoundingRectanglePropertyId,
+    UIA_IsOffscreenPropertyId, UIA_IsEnabledPropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsPasswordPropertyId,
+    UIA_ValueValuePropertyId, UIA_ToggleToggleStatePropertyId, UIA_ExpandCollapseExpandCollapseStatePropertyId, UIA_SelectionItemIsSelectedPropertyId,
+};
+static const PATTERNID full_patterns[] = {
+    UIA_InvokePatternId, UIA_ValuePatternId, UIA_TogglePatternId, UIA_ExpandCollapsePatternId, UIA_SelectionItemPatternId,
+    UIA_ScrollItemPatternId, UIA_RangeValuePatternId, UIA_ScrollPatternId, UIA_TextPatternId,
+};
+
 int main(int argc, char **argv) {
     int samples = argc > 1 ? atoi(argv[1]) : 200;
     const char *target = argc > 2 ? argv[2] : "taskbar";
+    int full = argc > 3 && strcmp(argv[3], "full") == 0;
+    size_t k;
     IUIAutomation *uia = NULL;
     IUIAutomationCacheRequest *cache = NULL;
     IUIAutomationCondition *cond = NULL;
@@ -86,13 +142,22 @@ int main(int argc, char **argv) {
     hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     if (SUCCEEDED(hr)) hr = CoCreateInstance(&CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, &IID_IUIAutomation, (void **)&uia);
     if (SUCCEEDED(hr)) hr = IUIAutomation_CreateCacheRequest(uia, &cache);
-    if (SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_AddProperty(cache, UIA_NamePropertyId);
-    if (SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_AddProperty(cache, UIA_ControlTypePropertyId);
-    if (SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_AddProperty(cache, UIA_BoundingRectanglePropertyId);
+    if (full) {
+        for (k = 0; SUCCEEDED(hr) && k < sizeof(full_properties) / sizeof(*full_properties); k++)
+            hr = IUIAutomationCacheRequest_AddProperty(cache, full_properties[k]);
+        for (k = 0; SUCCEEDED(hr) && k < sizeof(full_patterns) / sizeof(*full_patterns); k++)
+            hr = IUIAutomationCacheRequest_AddPattern(cache, full_patterns[k]);
+    } else {
+        if (SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_AddProperty(cache, UIA_NamePropertyId);
+        if (SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_AddProperty(cache, UIA_ControlTypePropertyId);
+        if (SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_AddProperty(cache, UIA_BoundingRectanglePropertyId);
+    }
     if (SUCCEEDED(hr)) hr = IUIAutomation_get_ControlViewCondition(uia, &cond);
+    if (full && SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_put_TreeScope(cache, TreeScope_Subtree);
+    if (full && SUCCEEDED(hr)) hr = IUIAutomationCacheRequest_put_TreeFilter(cache, cond);
     for (i = 0; i < samples && SUCCEEDED(hr); i++) {
         QueryPerformanceCounter(&t0);
-        hr = snapshot(uia, cache, cond, hwnd, &count);
+        hr = full ? snapshot_full(uia, cache, cond, hwnd, &count) : snapshot(uia, cache, cond, hwnd, &count);
         QueryPerformanceCounter(&t1);
         lat[i] = (unsigned long long)((t1.QuadPart - t0.QuadPart) * 1000000LL / freq.QuadPart);
     }
@@ -101,8 +166,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     qsort(lat, (size_t)samples, sizeof(*lat), cmp_u64);
-    fprintf(stderr, "RESULT {\"snapshot_target\":\"%s\",\"snapshot_elements\":%d,\"snapshot_p50_us\":%llu,\"snapshot_p95_us\":%llu,\"samples\":%d}\n",
-            target, count, pct(lat, samples, 0.50), pct(lat, samples, 0.95), samples);
+    fprintf(stderr, "RESULT {\"snapshot_target\":\"%s\",\"read\":\"%s\",\"snapshot_elements\":%d,\"snapshot_p50_us\":%llu,\"snapshot_p95_us\":%llu,\"samples\":%d}\n",
+            target, full ? "full" : "light", count, pct(lat, samples, 0.50), pct(lat, samples, 0.95), samples);
     IUIAutomationCondition_Release(cond);
     IUIAutomationCacheRequest_Release(cache);
     IUIAutomation_Release(uia);

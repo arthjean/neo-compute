@@ -13,6 +13,28 @@ pub const file_name = "audit.jsonl";
 pub const max_bytes = 10 * 1024 * 1024;
 pub const kept_files = 5;
 
+/// What a tool of EP-006 adds to its line: never a window title, a
+/// document path or any text it read (FR-29).
+pub const Detail = struct {
+    /// window_set: the requested state, or `placement` (US-027).
+    state: ?[]const u8 = null,
+    /// window_set force: the process it terminated.
+    terminated_pid: ?u32 = null,
+    terminated_exe_buf: [64]u8 = undefined,
+    terminated_exe_len: u8 = 0,
+    /// app_launch: the AUMID, or the document's extension (US-029).
+    launched: ?[]const u8 = null,
+
+    pub fn setTerminatedExe(self: *Detail, exe: []const u8) void {
+        self.terminated_exe_len = @intCast(@min(exe.len, self.terminated_exe_buf.len));
+        @memcpy(self.terminated_exe_buf[0..self.terminated_exe_len], exe[0..self.terminated_exe_len]);
+    }
+
+    fn terminatedExe(self: *const Detail) []const u8 {
+        return self.terminated_exe_buf[0..self.terminated_exe_len];
+    }
+};
+
 pub const Entry = struct {
     tool: []const u8,
     target: ?policy.Target = null,
@@ -21,6 +43,7 @@ pub const Entry = struct {
     result: []const u8,
     /// Characters of `type`'s text, the only argument recorded.
     text_len: ?usize = null,
+    detail: Detail = .{},
 };
 
 pub const Audit = struct {
@@ -44,7 +67,7 @@ pub const Audit = struct {
     }
 
     pub fn record(self: *Audit, e: Entry) void {
-        var buf: [512]u8 = undefined;
+        var buf: [1024]u8 = undefined;
         var w: Io.Writer = .fixed(&buf);
         format(&w, e, Io.Clock.real.now(self.io).toNanoseconds()) catch return self.warn(error.LineTooLong);
         self.append(w.buffered()) catch |err| return self.warn(err);
@@ -108,7 +131,33 @@ pub fn format(w: *Io.Writer, e: Entry, now_ns: i96) !void {
     } else try w.writeAll(",\"app\":null,\"pid\":null,\"policy\":null");
     try w.print(",\"ms\":{d:.1},\"result\":\"{s}\"", .{ @as(f64, @floatFromInt(e.duration_ns)) / std.time.ns_per_ms, e.result });
     if (e.text_len) |n| try w.print(",\"text_len\":{d}", .{n});
+    if (e.detail.state) |s| {
+        try w.writeAll(",\"state\":");
+        try std.json.Stringify.value(s, .{}, w);
+    }
+    if (e.detail.terminated_pid) |pid| {
+        try w.print(",\"terminated\":{{\"pid\":{d},\"exe\":", .{pid});
+        try std.json.Stringify.value(e.detail.terminatedExe(), .{}, w);
+        try w.writeByte('}');
+    }
+    if (e.detail.launched) |l| {
+        try w.writeAll(",\"launched\":");
+        // An AUMID is at most a few hundred bytes; cut to keep the line.
+        try std.json.Stringify.value(l[0..@min(l.len, 256)], .{}, w);
+    }
     try w.writeAll("}\n");
+}
+
+test "window_set and app_launch lines carry the state, the terminated process and the AUMID or extension" {
+    var buf: [1024]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    var d: Detail = .{ .state = "closed", .terminated_pid = 4242 };
+    d.setTerminatedExe("notepad.exe");
+    try format(&w, .{ .tool = "window_set", .duration_ns = 2_000_000, .result = "ok", .detail = d }, 0);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), ",\"state\":\"closed\",\"terminated\":{\"pid\":4242,\"exe\":\"notepad.exe\"}}\n"));
+    w = .fixed(&buf);
+    try format(&w, .{ .tool = "app_launch", .duration_ns = 1, .result = "ok", .detail = .{ .launched = ".txt" } }, 0);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), ",\"launched\":\".txt\"}\n"));
 }
 
 test "an audit line carries time, tool, target, level, duration and result, never typed text" {

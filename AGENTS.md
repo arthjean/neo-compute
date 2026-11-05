@@ -47,9 +47,9 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build` | Server and probes. The first run downloads the pinned win32metadata nupkg from nuget.org with `curl` and fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`, then serves both from the cache |
 | `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, compile-time budget errors, generated bindings and struct layouts, generator failure message, process lifecycle. Omit the filter for the full gate |
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
-| `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig` |
+| `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010) |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates |
-| `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; figures in `bench/apps.md` |
+| `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 tasks: scripted setup, final-state check and cleanup without `claude -p`. Without `-DryRun` it runs the campaign (see Boundaries); `evals/report.ps1` writes `evals/reports/<date>.md` |
 
 A story is done when its PRD acceptance criteria hold and the first five

@@ -114,5 +114,31 @@
         // Selftest trackbars that stop answering mid-snapshot (US-022 timeout)
                            "SetWindowSubclass",
         "DefSubclassProc",                            "WM_USER",                                "SetTimer",                                   "WM_TIMER",                                  "DestroyWindow",
+
+        // Shell worker in a single-threaded apartment (EP-006)
+        "COINIT_APARTMENTTHREADED",                   "CLSCTX_ALL",                             "MsgWaitForMultipleObjects",                  "QS_ALLINPUT",                               "WAIT_OBJECT_0",
+        "WAIT_TIMEOUT",                               "CoTaskMemFree",
+
+        // Displays and virtual desktops in window_list (US-026)
+                                 "MONITORINFOF_PRIMARY",                       "IVirtualDesktopManager",                    "VirtualDesktopManager",
+
+        // window_set (US-027)
+        "IsZoomed",                                   "WM_SYSCOMMAND",                          "SC_CLOSE",                                   "SW_MAXIMIZE",                               "SW_SHOWMINNOACTIVE",
+        "CreateToolhelp32Snapshot",                   "Process32FirstW",                        "Process32NextW",                             "PROCESSENTRY32W",                           "TH32CS_SNAPPROCESS",
+        "TerminateProcess",                           "PROCESS_TERMINATE",                      "PROCESS_SYNCHRONIZE",                        "GetProcessTimes",                           "FILETIME",
+        "INVALID_HANDLE_VALUE",                       "EnumChildWindows",
+
+        // Start menu catalog (US-028)
+                              "SHGetKnownFolderItem",                       "FOLDERID_AppsFolder",                       "KF_FLAG_DEFAULT",
+        "IShellItem",                                 "IShellItem2",                            "IEnumShellItems",                            "BHID_EnumItems",                            "SIGDN_NORMALDISPLAY",
+        "PKEY_AppUserModel_ID",                       "PKEY_Link_TargetParsingPath",            "PROPERTYKEY",                                "SHCreateItemFromParsingName",
+
+        // app_launch (US-029)
+                      "IApplicationActivationManager",
+        "ApplicationActivationManager",               "AO_NONE",                                "ShellExecuteExW",                            "SHELLEXECUTEINFOW",                         "SEE_MASK_NOCLOSEPROCESS",
+        "SEE_MASK_FLAG_NO_UI",                        "GetProcessId",                           "GetFileAttributesW",                         "INVALID_FILE_ATTRIBUTES",                   "FILE_ATTRIBUTE_DIRECTORY",
+        "GetDriveTypeW",                              "DRIVE_REMOTE",                           "GetFullPathNameW",                           "GetEnvironmentVariableW",                   "AssocQueryStringW",
+        "ASSOCSTR_EXECUTABLE",                        "ASSOCF_INIT_IGNOREUNKNOWN",              "GetExitCodeProcess",                         "STILL_ACTIVE",                              "ASSOCSTR_COMMAND",
+        "GetLongPathNameW",                           "AssocIsDangerous",
     },
 }

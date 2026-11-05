@@ -431,6 +431,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
         if (!tested) report.skip("uipi", "no elevated window on display 0; open one to exercise this check", .{});
     }
 
+    windowsAndAppsChecks(&report, &caller, &backend, arena) catch |err| report.fail("windows-apps", "{t}", .{err});
+
     securityChecks(&report, gpa, io, arena, &backend, &tw) catch |err| report.fail("security", "{t}", .{err});
 
     // release: the shipped server releases a held key within 50 ms of stdin
@@ -438,6 +440,147 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
     releaseCheck(io, &report, arena);
 
     return report.failed;
+}
+
+/// EP-006: display lines and virtual desktops in window_list (US-026),
+/// window_set on a window of its own (US-027), the Start menu catalog
+/// (US-028). Applications are launched by `bench app_launch` only.
+fn windowsAndAppsChecks(report: *Report, caller: *Caller, backend: *Windows, arena: std.mem.Allocator) !void {
+    const apps = @import("../../core/apps.zig");
+    const displays = backend.displays();
+
+    // window-displays: one line per display first, the primary one flagged,
+    // the DPI GetDpiForMonitor reports.
+    {
+        const list = try caller.call("window_list", "{{}}", .{});
+        var lines = std.mem.splitScalar(u8, list.text, '\n');
+        var good = !list.is_error;
+        var primaries: usize = 0;
+        for (displays, 0..) |d, i| {
+            const line = lines.next() orelse "";
+            const want = try std.fmt.allocPrint(arena, "display={d}", .{i});
+            const dpi = try std.fmt.allocPrint(arena, " dpi={d} ", .{monitorDpi(d.rect.x + 1, d.rect.y + 1)});
+            const physical = try std.fmt.allocPrint(arena, " physical={d}x{d} ", .{ d.rect.w, d.rect.h });
+            if (!std.mem.startsWith(u8, line, want) or std.mem.indexOf(u8, line, dpi) == null or std.mem.indexOf(u8, line, physical) == null or std.mem.indexOf(u8, line, " work=") == null) good = false;
+            if (std.mem.indexOf(u8, line, " primary ") != null) primaries += 1;
+        }
+        const first_window = lines.next() orelse "";
+        if (good and primaries == 1 and std.mem.startsWith(u8, first_window, "0x")) report.ok("window-displays", "{d} display line(s), one primary, then the windows", .{displays.len}) else report.fail("window-displays", "{d} primary, output:\n{s}", .{ primaries, list.text });
+    }
+
+    // virtual-desktops: IVirtualDesktopManager answers on the shell STA and
+    // places a window of this desktop on it.
+    {
+        var own: TestWindow = .{ .rect = .{ .left = displays[0].rect.x + 40, .top = displays[0].rect.y + 40, .right = displays[0].rect.x + 360, .bottom = displays[0].rect.y + 240 } };
+        own.start() catch return error.WindowCreationFailed;
+        defer own.stop();
+        var other = [_]bool{true};
+        const handles = [_]u64{@intFromPtr(own.window())};
+        const answered = backend.shell.otherDesktops(&handles, &other);
+        const hidden = try caller.call("window_list", "{{\"include_hidden\":true}}", .{});
+        if (answered and !other[0] and !hidden.is_error) report.ok("virtual-desktops", "IVirtualDesktopManager answers, the test window is on the current desktop", .{}) else if (!answered) report.skip("virtual-desktops", "IVirtualDesktopManager unavailable (Explorer restarted?): cloaked windows keep their flag", .{}) else report.fail("virtual-desktops", "other desktop: {}, window_list: {s}", .{ other[0], hidden.text });
+    }
+
+    // window-set: the visible frame lands on the requested rectangle within
+    // 2 screenshot pixels, states change, a hung window is reported, force
+    // never ends neo-compute, and state closed closes the window.
+    {
+        var own: TestWindow = .{ .rect = .{ .left = displays[0].rect.x + 100, .top = displays[0].rect.y + 100, .right = displays[0].rect.x + 500, .bottom = displays[0].rect.y + 400 } };
+        own.start() catch return error.WindowCreationFailed;
+        defer own.stop();
+        const h = @intFromPtr(own.window());
+        const m = display.Mapping.of(0, displays[0].rect, display.default_long_side);
+        const half_w: i32 = @intCast(m.width / 2);
+        const want: display.Rect = .{ .x = 0, .y = 0, .w = half_w, .h = @intCast(m.height) };
+        var worst_us: u64 = 0;
+        var placed_ok = true;
+        var last_text: []const u8 = "";
+        for (0..10) |i| {
+            const x: i32 = if (i % 2 == 0) 0 else half_w;
+            const t0 = qpcUs();
+            const r = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"rect\":[{d},0,{d},{d}],\"display\":0,\"observe\":\"none\"}}", .{ h, x, want.w, want.h });
+            worst_us = @max(worst_us, qpcUs() - t0);
+            last_text = r.text;
+            const got = m.rectToScreenshot(@import("window.zig").rect(own.window()) orelse return error.WindowGone);
+            if (r.is_error or @abs(got.x - x) > 2 or @abs(got.y) > 2 or @abs(got.w - want.w) > 2 or @abs(got.h - want.h) > 2) placed_ok = false;
+        }
+        if (placed_ok) report.ok("window-set-rect", "10 placements on the halves of display 0 within 2 px, slowest {d} us: {s}", .{ worst_us, last_text }) else report.fail("window-set-rect", "{s}", .{last_text});
+
+        const max = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"maximized\",\"observe\":\"none\"}}", .{h});
+        const zoomed = w.IsZoomed(own.window()) != 0;
+        const restored = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"normal\",\"observe\":\"none\"}}", .{h});
+        const normal = w.IsZoomed(own.window()) == 0 and w.IsIconic(own.window()) == 0;
+        const min = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"minimized\",\"observe\":\"none\"}}", .{h});
+        const iconic = w.IsIconic(own.window()) != 0;
+        if (zoomed and normal and iconic and !max.is_error and !restored.is_error and !min.is_error) report.ok("window-set-state", "{s} / {s} / {s}", .{ max.text, restored.text, min.text }) else report.fail("window-set-state", "zoomed {} normal {} iconic {}: {s} / {s} / {s}", .{ zoomed, normal, iconic, max.text, restored.text, min.text });
+        _ = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"normal\",\"observe\":\"none\"}}", .{h});
+
+        own.hang(1500);
+        w.Sleep(50);
+        const hung = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"maximized\",\"observe\":\"none\"}}", .{h});
+        w.Sleep(1600);
+        if (hung.is_error and std.mem.indexOf(u8, hung.text, "ne répond pas") != null) report.ok("window-set-hung", "{s}", .{hung.text}) else report.fail("window-set-hung", "{s}", .{hung.text});
+
+        const forced = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"closed\",\"force\":true}}", .{h});
+        const still = w.IsWindow(own.window()) != 0;
+        if (forced.is_error and still and std.mem.eql(u8, forced.text, "Fermeture forcée refusée : neo-compute.exe est protégé")) report.ok("window-set-protected", "{s}", .{forced.text}) else report.fail("window-set-protected", "window alive {}: {s}", .{ still, forced.text });
+
+        const closed = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"closed\",\"observe\":\"none\"}}", .{h});
+        const gone = waitFor(struct {
+            fn f(hwnd: w.HWND) bool {
+                return w.IsWindow(hwnd) == 0;
+            }
+        }.f, .{own.window()}, 1000);
+        if (!closed.is_error and gone and std.mem.startsWith(u8, closed.text, "0x") and std.mem.indexOf(u8, closed.text, "fermée") != null) report.ok("window-set-close", "{s}", .{closed.text}) else report.fail("window-set-close", "gone {}: {s}", .{ gone, closed.text });
+        const after = try caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"minimized\"}}", .{h});
+        if (after.is_error and std.mem.eql(u8, after.text, "Fenêtre fermée : rappelle window_list")) report.ok("window-set-closed-handle", "{s}", .{after.text}) else report.fail("window-set-closed-handle", "{s}", .{after.text});
+    }
+
+    // apps-catalog: the Start menu enumerates on the shell STA, with
+    // packaged and non-packaged entries, a non-packaged entry's shortcut
+    // resolves to its executable (the policy before a launch), and a cached
+    // match finds Calculator by its French name.
+    {
+        var cancel: std.atomic.Value(bool) = .init(false);
+        const t0 = qpcUs();
+        const listed = backend.appCatalog(arena, &cancel);
+        const first_us = qpcUs() - t0;
+        switch (listed) {
+            .err => |msg| report.fail("apps-catalog", "{s}", .{msg}),
+            .ok => |list| {
+                var packaged: usize = 0;
+                var with_exe: usize = 0;
+                var sample: []const u8 = "";
+                var lookup_us: u64 = 0;
+                for (list) |a| {
+                    packaged += @intFromBool(a.packaged);
+                    if (a.packaged) continue;
+                    const t2 = qpcUs();
+                    const exe = backend.appExe(arena, a);
+                    lookup_us = @max(lookup_us, qpcUs() - t2);
+                    if (exe) |e| {
+                        with_exe += 1;
+                        if (sample.len == 0) sample = try std.fmt.allocPrint(arena, "{s} -> {s}", .{ a.name, e });
+                    }
+                }
+                var cat: apps.Catalog = .{};
+                defer cat.deinit();
+                try cat.replace(std.heap.page_allocator, list, 0);
+                _ = try apps.match(arena, cat.apps, "warm");
+                const t1 = qpcUs();
+                const calc = try apps.match(arena, cat.apps, "calculatrice");
+                const match_us = qpcUs() - t1;
+                const calc_ok = calc == .found and calc.found.packaged and std.mem.startsWith(u8, calc.found.aumid, "Microsoft.WindowsCalculator_");
+                // Budgets (300 ms, 1 ms) are checked in ReleaseFast by
+                // `bench apps-catalog` and `bench apps`; this Debug build
+                // checks the content.
+                if (packaged > 0 and with_exe > 0 and calc_ok)
+                    report.ok("apps-catalog", "{d} entries ({d} packaged, {d} shortcuts to an exe, slowest lookup {d} us, e.g. {s}) in {d} us (Debug), `calculatrice` -> {s} in {d} us", .{ list.len, packaged, with_exe, lookup_us, sample, first_us, calc.found.aumid, match_us })
+                else
+                    report.fail("apps-catalog", "{d} entries ({d} packaged, {d} with exe) in {d} us, calculatrice: {t}", .{ list.len, packaged, with_exe, first_us, calc });
+            },
+        }
+    }
 }
 
 /// Id of the first ui_tree line containing `needle`.

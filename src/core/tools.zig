@@ -1,6 +1,6 @@
 //! Tool declarations. The first 17 mirror `computer_toolset_20260801`
-//! (names and parameters), the last 5 are neo-compute's accessibility and
-//! window tools (`extension`). Each `run` receives a `*Ctx(Backend)` and
+//! (names and parameters), the others are neo-compute's accessibility,
+//! window and application tools (`extension`). Each `run` receives a `*Ctx(Backend)` and
 //! returns a Result. Action tools take the optional `observe` and
 //! `settle_timeout_ms` extensions (US-015), explained once in the MCP
 //! instructions rather than per field to stay within the definition budget.
@@ -14,6 +14,8 @@ const a11y = @import("a11y.zig");
 const uitree = @import("uitree.zig");
 const fmt = @import("session.zig").fmt;
 const policy = @import("policy.zig");
+const windowctl = @import("windowctl.zig");
+const launch = @import("launch.zig");
 
 const Point = [2]i32;
 const Observe = a11y.Observe;
@@ -317,6 +319,44 @@ pub const window_focus = struct {
     }
 };
 
+pub const window_set = struct {
+    pub const name = "window_set";
+    pub const description = "Move, resize, minimize, maximize or close a window; rect [x, y, w, h] in screenshot pixels of display (default: the window's).";
+    pub const extension = true;
+    pub const Args = struct {
+        window: []const u8,
+        rect: ?[4]i32 = null,
+        display: ?u32 = null,
+        state: ?windowctl.State = null,
+        force: bool = false,
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .force = .{ .description = "With state closed: end the process after 2 s" }, .settle_timeout_ms = settle_info };
+    };
+    pub fn run(ctx: anytype, args: Args) Result {
+        const handle = parseHandle(args.window) orelse
+            return Result.err(fmt(ctx.arena, "Handle `{s}` invalide : utilise un handle de window_list (ex. 0x1a2b).", .{args.window}));
+        const o = windowctl.set(ctx, handle, args.rect, args.display, args.state, args.force);
+        return observed(ctx, o.result, args, o.window);
+    }
+};
+
+pub const app_launch = struct {
+    pub const name = "app_launch";
+    pub const description = "Start a Start menu app (name or AUMID) or open a document or folder in its default app; returns the window and its tree.";
+    pub const extension = true;
+    pub const Args = struct {
+        name: ?[]const u8 = null,
+        path: ?[]const u8 = null,
+        observe: ?Observe = null,
+        settle_timeout_ms: ?u32 = null,
+        pub const field_info = .{ .settle_timeout_ms = settle_info };
+    };
+    pub fn run(ctx: anytype, args: Args) Result {
+        return launch.launch(ctx, args.name, args.path, args.observe, args.settle_timeout_ms);
+    }
+};
+
 /// Parses a window handle as printed by window_list (`0x1a2b` or `1a2b`).
 pub fn parseHandle(text: []const u8) ?u64 {
     const t = std.mem.trim(u8, text, " ");
@@ -329,9 +369,9 @@ pub fn parseHandle(text: []const u8) ?u64 {
 pub const max_text_output = 8000; // FR-16
 const max_title_chars = 80;
 
-/// One line per window, top of the z-order first:
-/// `<handle> "<title>" <exe> pid=<n> display=<n> @x,y,w,h z=<n> {flags}`,
-/// the rectangle in screenshot pixels of the window's display.
+/// One line per display (US-026), then one per window, top of the z-order
+/// first: `<handle> "<title>" <exe> pid=<n> display=<n> @x,y,w,h z=<n>
+/// {flags}`, the rectangle in screenshot pixels of the window's display.
 fn windowList(ctx: anytype, include_hidden: bool) Result {
     ctx.timings.start(ctx.io, .windows);
     const listed = ctx.backend.listWindows(ctx.arena, include_hidden);
@@ -341,10 +381,16 @@ fn windowList(ctx: anytype, include_hidden: bool) Result {
     var kept: std.ArrayList(display.WindowInfo) = .empty;
     for (all_wins) |win| if (ctx.session.policy.levelOf(win.exe) != .deny) kept.append(ctx.arena, win) catch return Result.err("Mémoire insuffisante : réessaie.");
     const wins = kept.items;
-    if (wins.len == 0) return Result.text("Aucune fenêtre visible.");
     const displays = ctx.backend.displays();
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
     const w = &out.writer;
+    // Display lines come first and are never cut: at most 8 of about 90
+    // characters, well within the output limit.
+    for (displays, 0..) |d, i| writeDisplay(w, i, d, ctx.backend.displayInfo(i), ctx.session.long_side) catch return Result.err("Mémoire insuffisante : réessaie.");
+    if (wins.len == 0) {
+        w.writeAll("Aucune fenêtre visible.") catch return Result.err("Mémoire insuffisante : réessaie.");
+        return Result.text(out.written());
+    }
     for (wins, 0..) |win, z| {
         const mark = out.written().len;
         writeWindow(w, win, z, displays, ctx.session.long_side) catch return Result.err("Mémoire insuffisante : réessaie.");
@@ -379,17 +425,28 @@ fn writeWindow(w: *std.Io.Writer, win: display.WindowInfo, z: usize, displays: [
         try w.print(" display={d} @{d},{d},{d},{d}", .{ d, r.x, r.y, r.w, r.h });
     }
     try w.print(" z={d}", .{z});
-    if (win.elevated or win.minimized or win.cloaked) {
+    if (win.elevated or win.minimized or win.cloaked or win.other_desktop) {
         try w.writeAll(" {");
         var first = true;
-        inline for (.{ "elevated", "minimized", "cloaked" }) |flag| if (@field(win, flag)) {
+        inline for (.{ .{ "elevated", "elevated" }, .{ "minimized", "minimized" }, .{ "cloaked", "cloaked" }, .{ "other_desktop", "other-desktop" } }) |flag| if (@field(win, flag[0])) {
             if (!first) try w.writeByte(',');
-            try w.writeAll(flag);
+            try w.writeAll(flag[1]);
             first = false;
         };
         try w.writeByte('}');
     }
     try w.writeByte('\n');
+}
+
+/// `display=<n> [primary] physical=<w>x<h> size=<w>x<h> scale=<s> dpi=<n>
+/// work=<x>,<y>,<w>,<h>`: physical size, screenshot size and scale as
+/// `screenshot` reports them, and the work area in screenshot pixels.
+fn writeDisplay(w: *std.Io.Writer, index: usize, d: display.Display, info: display.DisplayInfo, long_side: u32) !void {
+    const m = display.Mapping.of(index, d.rect, long_side);
+    var sbuf: [16]u8 = undefined;
+    try w.print("display={d}{s} physical={d}x{d} size={d}x{d} scale={s} dpi={d}", .{ index, if (info.primary) " primary" else "", d.rect.w, d.rect.h, m.width, m.height, display.scaleText(&sbuf, m.scale), info.dpi });
+    const work = m.rectToScreenshot(display.intersection(info.work, d.rect) orelse d.rect);
+    try w.print(" work={d},{d},{d},{d}\n", .{ work.x, work.y, work.w, work.h });
 }
 
 /// Members of `computer_toolset_20260801`, in documentation order.
@@ -399,4 +456,4 @@ pub const toolset = .{
     scroll,       @"type",         key,        hold_key,        wait,
 };
 
-pub const all = toolset ++ .{ ui_tree, ui_find, ui_act, window_list, window_focus };
+pub const all = toolset ++ .{ ui_tree, ui_find, ui_act, window_list, window_focus, window_set, app_launch };

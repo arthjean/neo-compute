@@ -31,7 +31,8 @@ pub const Outcome = union(enum) {
         stages: [stage_count]?Stats,
         total: Stats,
         /// p95 of the C witness probe on the same window, for a
-        /// provider-bound budget (decision 0004).
+        /// provider-bound budget (decision 0004) or a provider-relative
+        /// reference (decision 0010).
         witness_p95_ns: ?u64 = null,
     },
     unsupported: []const u8,
@@ -65,6 +66,12 @@ pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: b
     // US-025: the same page with Firefox's native UIA off (MSAA proxy).
     .{ .scenario = "firefox-msaa", .ms = 150 },
     .{ .scenario = "vscode", .ms = 120 },
+    // US-027: window_set without settling.
+    .{ .scenario = "window_set", .ms = 20 },
+    // US-028 (A13): a Start menu enumeration, and a match on the cached
+    // catalog.
+    .{ .scenario = "apps-catalog", .ms = 300 },
+    .{ .scenario = "apps", .ms = 1 },
 };
 
 fn percentile(sorted: []const u64, p: f64) u64 {
@@ -266,9 +273,31 @@ fn writeStats(s: *std.json.Stringify, st: Stats) !void {
     try s.endObject();
 }
 
+/// Scenarios whose provider stages are checked against the provider as well
+/// as their reference (decision 0010): the taskbar's UIA provider drifts
+/// with the machine's state, so such a stage above 110 % of its reference
+/// still passes within 110 % of the witness probe reading the same tree the
+/// same way (`probe_c ... full`), measured before and after the series.
+/// Their other stages and their absolute budgets stay as they are.
+pub const provider_relative = [_][]const u8{ "snapshot", "ui_tree" };
+
+/// Stages that wait on the provider: the UIA round trips and the stages
+/// that contain them.
+fn providerStage(stage: []const u8) bool {
+    for ([_][]const u8{ "accessibility", "dispatch", "total" }) |s| if (std.mem.eql(u8, s, stage)) return true;
+    return false;
+}
+
+fn providerRelative(scenario: []const u8) bool {
+    for (provider_relative) |s| if (std.mem.eql(u8, s, scenario)) return true;
+    return false;
+}
+
 /// Baseline file: `{"reference_p95_us": {"<scenario>": {"<stage>": us}}}`.
 /// Fails when a p95 exceeds 110 % of its reference by at least
-/// `min_regression_us`, or a scenario total exceeds its absolute budget. Returns the number of violations.
+/// `min_regression_us` (and, for a provider stage of a provider-relative
+/// scenario, 110 % of the witness probe), or a scenario total exceeds its
+/// absolute budget. Returns the number of violations.
 pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []const Result, log: *Io.Writer) !usize {
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, baseline_json, .{});
     const refs = if (v.object.get("reference_p95_us")) |r| r.object else std.json.ObjectMap.empty;
@@ -297,19 +326,20 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
             }
         };
         const scenario_refs = refs.get(r.name) orelse continue;
+        const witness: ?u64 = if (providerRelative(r.name)) ok.witness_p95_ns else null;
         for (ok.stages, 0..) |maybe, i| {
             const st = maybe orelse continue;
             // Settling time depends on the application on screen: reported,
             // never checked.
             if (i == @backingInt(Stage.settle)) continue;
-            violations += try compare(log, r.name, @tagName(@as(Stage, @fromBackingInt(@intCast(i)))), st, scenario_refs);
+            violations += try compare(log, r.name, @tagName(@as(Stage, @fromBackingInt(@intCast(i)))), st, scenario_refs, witness);
         }
-        violations += try compare(log, r.name, "total", ok.total, scenario_refs);
+        violations += try compare(log, r.name, "total", ok.total, scenario_refs, witness);
     }
     return violations;
 }
 
-fn compare(log: *Io.Writer, scenario: []const u8, stage: []const u8, st: Stats, refs: std.json.Value) !usize {
+fn compare(log: *Io.Writer, scenario: []const u8, stage: []const u8, st: Stats, refs: std.json.Value, witness_ns: ?u64) !usize {
     if (refs != .object) return 0;
     const ref_v = refs.object.get(stage) orelse return 0;
     const ref: f64 = switch (ref_v) {
@@ -321,6 +351,15 @@ fn compare(log: *Io.Writer, scenario: []const u8, stage: []const u8, st: Stats, 
     // Below 1 us of difference the timer resolution dominates: 0.3 to 0.4 us
     // is one tick, not a regression.
     if (p95 <= ref * 1.10 or p95 - ref < min_regression_us) return 0;
+    if (witness_ns) |wn| if (providerStage(stage)) {
+        const witness = us(wn);
+        if (p95 <= witness * 1.10) {
+            try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference, within 110 % of the {d:.1} us witness probe (provider-relative)\n", .{ scenario, stage, p95, ref, witness });
+            return 0;
+        }
+        try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference and of the {d:.1} us witness probe\n", .{ scenario, stage, p95, ref, witness });
+        return 1;
+    };
     try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference\n", .{ scenario, stage, p95, ref });
     return 1;
 }
@@ -373,11 +412,11 @@ pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
 
 /// `settle` reports the settling time of an action apart (US-015): it has
 /// no budget and no reference, its other stages are the post-action delta.
-pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "snapshot", "screenshot", "window_list", "ui_tree", "settle" };
+pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps" };
 
 /// Scenarios that open applications on the desktop: run on request only
 /// (`neo-compute bench chrome`), never by `all`.
-pub const app_scenarios = [_][]const u8{ "notepad", "notepad-menu", "explorer", "settings", "calculator", "chrome", "chrome-text", "firefox", "firefox-msaa", "vscode" };
+pub const app_scenarios = [_][]const u8{ "notepad", "notepad-menu", "explorer", "settings", "calculator", "chrome", "chrome-text", "firefox", "firefox-msaa", "vscode", "app_launch" };
 
 /// Runs `which` ("all" or one scenario name). Platform scenarios come from
 /// `Backend.benchScenario`; a backend without them reports them unsupported.
