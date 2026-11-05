@@ -3,6 +3,15 @@
 //! `--policy` file, over the versioned defaults below. Every action resolves
 //! its target application (window under the point, foreground window or
 //! element owner) and checks its level before the first event is sent.
+//!
+//! Tools without a target window answer to the `system` section instead
+//! (US-021, FR-28). Its versioned defaults, written out:
+//!
+//!     "system": {
+//!       "app_launch": "allow",       // allow | deny
+//!       "clipboard": "read_write",   // off | read | write | read_write
+//!       "registry_read": "allow"     // allow | deny
+//!     }
 
 const std = @import("std");
 const display = @import("display.zig");
@@ -26,6 +35,63 @@ pub const Level = enum {
 };
 
 pub const Rule = struct { exe: []const u8, level: Level };
+
+pub const Switch = enum { allow, deny };
+
+pub const ClipboardAccess = enum {
+    off,
+    read,
+    write,
+    read_write,
+
+    pub fn allows(have: ClipboardAccess, need: ClipboardNeed) bool {
+        return switch (need) {
+            .read => have == .read or have == .read_write,
+            .write => have == .write or have == .read_write,
+        };
+    }
+};
+
+pub const ClipboardNeed = enum { read, write };
+
+/// The `system` section: tools that target no window (US-021).
+pub const System = struct {
+    app_launch: Switch = .allow,
+    clipboard: ClipboardAccess = .read_write,
+    registry_read: Switch = .allow,
+
+    /// Under the global `observe` of an invalid file, reads stay allowed
+    /// and every action is refused, as for applications.
+    fn observeOnly(self: System) System {
+        return .{
+            .app_launch = .deny,
+            .clipboard = switch (self.clipboard) {
+                .read, .read_write => .read,
+                .off, .write => .off,
+            },
+            .registry_read = self.registry_read,
+        };
+    }
+};
+
+/// What a tool without a target window needs from `system`.
+pub const SystemNeed = union(enum) {
+    app_launch,
+    registry_read,
+    clipboard: ClipboardNeed,
+
+    fn key(need: SystemNeed) []const u8 {
+        return @tagName(need);
+    }
+
+    fn allowedBy(need: SystemNeed, s: System) bool {
+        return switch (need) {
+            .app_launch => s.app_launch == .allow,
+            .registry_read => s.registry_read == .allow,
+            .clipboard => |c| s.clipboard.allows(c),
+        };
+    }
+};
 
 /// Password managers: hidden and untouchable unless the policy file says
 /// otherwise. Executable names, compared without case.
@@ -61,6 +127,8 @@ pub const Policy = struct {
     cap: Level = .full,
     /// Why the policy file was rejected (US English, for the instructions).
     problem: ?[]const u8 = null,
+    /// Tools without a target window (US-021).
+    system: System = .{},
 
     pub fn levelOf(self: *const Policy, exe: ?[]const u8) Level {
         const level = blk: {
@@ -87,11 +155,12 @@ pub fn load(arena: std.mem.Allocator, io: std.Io, path: []const u8, explicit: bo
 }
 
 fn invalid(problem: []const u8) Policy {
-    return .{ .default = .observe, .cap = .observe, .problem = problem };
+    return .{ .default = .observe, .cap = .observe, .problem = problem, .system = (System{}).observeOnly() };
 }
 
-/// Parses `{"default": "<level>", "apps": {"<exe>": "<level>", ...}}`. Any
-/// error names its line and quotes it.
+/// Parses `{"default": "<level>", "apps": {"<exe>": "<level>", ...},
+/// "system": {"app_launch": ..., "clipboard": ..., "registry_read": ...}}`.
+/// Any error names its line and quotes it.
 pub fn parse(arena: std.mem.Allocator, source: []const u8, path: []const u8) Policy {
     var diag: std.json.Diagnostics = .{};
     var scanner: std.json.Scanner = .initCompleteInput(arena, source);
@@ -139,7 +208,25 @@ fn walk(arena: std.mem.Allocator, s: *std.json.Scanner, p: *Policy, rules: *std.
                 };
                 try rules.append(arena, .{ .exe = exe, .level = level });
             }
-        } else return fmt(arena, "unknown key `{s}` (valid keys: default, apps)", .{key});
+        } else if (std.mem.eql(u8, key, "system")) {
+            if (try s.next() != .object_begin) return "`system` must be an object: app_launch, clipboard, registry_read";
+            while (true) {
+                const name = switch (try s.nextAlloc(arena, .alloc_if_needed)) {
+                    .object_end => break,
+                    .string, .allocated_string => |k| k,
+                    else => unreachable,
+                };
+                const why = if (std.mem.eql(u8, name, "app_launch"))
+                    try enumValue(Switch, arena, s, "system.app_launch", &p.system.app_launch)
+                else if (std.mem.eql(u8, name, "clipboard"))
+                    try enumValue(ClipboardAccess, arena, s, "system.clipboard", &p.system.clipboard)
+                else if (std.mem.eql(u8, name, "registry_read"))
+                    try enumValue(Switch, arena, s, "system.registry_read", &p.system.registry_read)
+                else
+                    fmt(arena, "unknown key `{s}` in `system` (valid keys: app_launch, clipboard, registry_read)", .{name});
+                if (why) |w| return w;
+            }
+        } else return fmt(arena, "unknown key `{s}` (valid keys: default, apps, system)", .{key});
     }
     if (try s.next() != .end_of_document) return "unexpected content after the object";
     return null;
@@ -152,6 +239,23 @@ fn levelValue(arena: std.mem.Allocator, s: *std.json.Scanner) !union(enum) { ok:
     };
     if (std.meta.stringToEnum(Level, text)) |l| return .{ .ok = l };
     return .{ .bad = fmt(arena, "unknown level `{s}` (deny, observe, click or full)", .{text}) };
+}
+
+/// Reads a string naming a member of `E` into `out`; returns why it is
+/// rejected otherwise.
+fn enumValue(comptime E: type, arena: std.mem.Allocator, s: *std.json.Scanner, comptime field: []const u8, out: *E) !?[]const u8 {
+    const choices = comptime blk: {
+        const names = @typeInfo(E).@"enum".field_names;
+        var list: []const u8 = "";
+        for (names, 0..) |n, i| list = list ++ (if (i == 0) "" else if (i == names.len - 1) " or " else ", ") ++ n;
+        break :blk list;
+    };
+    const text = switch (try s.nextAlloc(arena, .alloc_if_needed)) {
+        .string, .allocated_string => |t| t,
+        else => return "`" ++ field ++ "` must be a string: " ++ choices,
+    };
+    out.* = std.meta.stringToEnum(E, text) orelse return fmt(arena, "unknown value `{s}` for " ++ field ++ " ({s})", .{ text, choices });
+    return null;
 }
 
 /// Line `n` (1-based) of `source`, trimmed and cut to 80 bytes.
@@ -229,6 +333,14 @@ pub fn require(ctx: anytype, ref: ?display.WindowRef, need: Level) ?Result {
     if (t.level.allows(need)) return null;
     ctx.denied = true;
     return Result.err(fmt(ctx.arena, "Politique : {s} est en mode {t} : action refusée. Demande à Arthur de changer son niveau dans policy.json.", .{ t.exe(), t.level }));
+}
+
+/// Refuses a tool without a target window that the `system` section turns
+/// off (US-021, FR-28).
+pub fn requireSystem(ctx: anytype, tool: []const u8, need: SystemNeed) ?Result {
+    if (need.allowedBy(ctx.session.policy.system)) return null;
+    ctx.denied = true;
+    return Result.err(fmt(ctx.arena, "Politique : {s} est désactivé (system.{s} dans policy.json)", .{ tool, need.key() }));
 }
 
 /// The refusal of a `deny` window, without recording anything (an
@@ -316,7 +428,53 @@ test "an invalid policy file starts in global observe and names its line" {
     const syntax = parse(a, "{\n  \"default\": \"full\",\n  \"apps\": {\"a.exe\": \"full\",}\n}", "p.json");
     try std.testing.expect(std.mem.indexOf(u8, syntax.problem.?, "at line 3") != null);
     const key = parse(a, "{\"defaults\": \"full\"}", "p.json");
+    try std.testing.expect(std.mem.indexOf(u8, key.problem.?, "valid keys: default, apps, system") != null);
     try std.testing.expect(std.mem.indexOf(u8, key.problem.?, "unknown key `defaults`") != null);
     const not_string = parse(a, "{\"default\": 3}", "p.json");
     try std.testing.expect(std.mem.indexOf(u8, not_string.problem.?, "must be a string") != null);
+}
+
+test "the system section: every value, the defaults without it, unknown keys and values" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // No section: allow, read_write, allow.
+    const none = parse(a, "{\"default\": \"full\"}", "p.json");
+    try std.testing.expectEqual(@as(?[]const u8, null), none.problem);
+    try std.testing.expectEqual(System{ .app_launch = .allow, .clipboard = .read_write, .registry_read = .allow }, none.system);
+    try std.testing.expectEqual(System{}, defaults.system);
+    // Every value of every key.
+    for ([_]Switch{ .allow, .deny }) |v| {
+        const src = fmt(a, "{{\"system\": {{\"app_launch\": \"{t}\", \"registry_read\": \"{t}\"}}}}", .{ v, v });
+        const p = parse(a, src, "p.json");
+        try std.testing.expectEqual(@as(?[]const u8, null), p.problem);
+        try std.testing.expectEqual(v, p.system.app_launch);
+        try std.testing.expectEqual(v, p.system.registry_read);
+        try std.testing.expectEqual(ClipboardAccess.read_write, p.system.clipboard);
+    }
+    const expect_reads = [_]bool{ false, true, false, true };
+    const expect_writes = [_]bool{ false, false, true, true };
+    for ([_]ClipboardAccess{ .off, .read, .write, .read_write }, expect_reads, expect_writes) |v, r, w| {
+        const p = parse(a, fmt(a, "{{\"system\": {{\"clipboard\": \"{t}\"}}}}", .{v}), "p.json");
+        try std.testing.expectEqual(@as(?[]const u8, null), p.problem);
+        try std.testing.expectEqual(v, p.system.clipboard);
+        try std.testing.expectEqual(r, p.system.clipboard.allows(.read));
+        try std.testing.expectEqual(w, p.system.clipboard.allows(.write));
+        try std.testing.expectEqual(Switch.allow, p.system.app_launch);
+    }
+    // An unknown value names its line: global observe, reads only.
+    const bad = parse(a, "{\n  \"system\": {\n    \"clipboard\": \"rw\"\n  }\n}\n", "C:\\p.json");
+    try std.testing.expectEqualStrings("Policy file C:\\p.json is invalid at line 3 (`\"clipboard\": \"rw\"`): unknown value `rw` for system.clipboard (off, read, write or read_write)", bad.problem.?);
+    try std.testing.expectEqual(Level.observe, bad.levelOf("notepad.exe"));
+    try std.testing.expectEqual(System{ .app_launch = .deny, .clipboard = .read, .registry_read = .allow }, bad.system);
+    const bad_switch = parse(a, "{\"system\": {\"app_launch\": \"yes\"}}", "p.json");
+    try std.testing.expect(std.mem.indexOf(u8, bad_switch.problem.?, "unknown value `yes` for system.app_launch (allow or deny)") != null);
+    const not_string = parse(a, "{\"system\": {\"registry_read\": false}}", "p.json");
+    try std.testing.expect(std.mem.indexOf(u8, not_string.problem.?, "`system.registry_read` must be a string: allow or deny") != null);
+    // An unknown key.
+    const unknown = parse(a, "{\n\"system\": {\n\"shell\": \"allow\"}}", "p.json");
+    try std.testing.expect(std.mem.indexOf(u8, unknown.problem.?, "at line 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unknown.problem.?, "unknown key `shell` in `system` (valid keys: app_launch, clipboard, registry_read)") != null);
+    const not_object = parse(a, "{\"system\": \"deny\"}", "p.json");
+    try std.testing.expect(std.mem.indexOf(u8, not_object.problem.?, "`system` must be an object") != null);
 }
