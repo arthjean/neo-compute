@@ -25,10 +25,10 @@
     {
       "id": "EP-007",
       "title": "Attente et ancrage visuel",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 3,
-      "stories_done": 0
+      "stories_done": 3
     },
     {
       "id": "EP-008",
@@ -190,41 +190,41 @@
       "id": "US-030",
       "title": "`ui_find` avec `wait_ms`",
       "epic": "EP-007",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-020"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-06",
+      "completed_at": "2026-11-06",
+      "reviewed_at": "2026-11-06"
     },
     {
       "id": "US-031",
       "title": "IDs dessinés sur l'image (`ui_tree` `marks`)",
       "epic": "EP-007",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": [
         "US-020"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-06",
+      "completed_at": "2026-11-06",
+      "reviewed_at": "2026-11-06"
     },
     {
       "id": "US-032",
       "title": "Capture de repli par GDI",
       "epic": "EP-007",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P2",
       "size": "M",
       "blocked_by": [],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-06",
+      "completed_at": "2026-11-06",
+      "reviewed_at": "2026-11-06"
     },
     {
       "id": "US-033",
