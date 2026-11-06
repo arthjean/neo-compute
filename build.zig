@@ -167,7 +167,22 @@ fn serverModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     mod.addOptions("build_options", buildOptions(b, fake_backend));
     if (win32) |m| mod.addImport("win32", m);
     addJpeg(b, mod, target);
+    addPixelHash(b, mod, target);
     return mod;
+}
+
+/// The fingerprint hash of src/core/pixel_hash.zig as a static library,
+/// always optimized like libjpeg: in a Debug server a maximized window's
+/// fingerprint cost 11.5 ms per GDI look (US-032). A separate artifact,
+/// because a module's own `optimize` does not change how the Zig code of
+/// one compilation is optimized.
+fn addPixelHash(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const lib = b.addLibrary(.{
+        .name = "neo_pixel_hash",
+        .linkage = .static,
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/core/pixel_hash.zig"), .target = target, .optimize = .ReleaseFast }),
+    });
+    mod.linkLibrary(lib);
 }
 
 /// libjpeg-turbo (pinned in build.zig.zon) plus the C shim of

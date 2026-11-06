@@ -292,3 +292,23 @@ test "1000 pings after 100 warm-up pings allocate nothing from the backing alloc
     try testing.expect(allocs_at[0] > 0); // warm-up did allocate
     try testing.expectEqual(allocs_at[0], allocs_at[1]);
 }
+
+test "notifications/cancelled stops a ui_find wait at its next checkpoint, unanswered" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const t0 = timing.now(testing.io);
+    var r = try run(testing.allocator, &.{
+        .{ .line = "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"ui_find\",\"arguments\":{\"query\":\"introuvable\",\"wait_ms\":30000}}}\n" },
+        .{ .wait_ms = 80 },
+        .{ .line = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":30,\"reason\":\"user\"}}\n" },
+        .{ .line = "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"ping\"}\n" },
+        .{ .wait_messages = 2 },
+    }, .{});
+    defer r.deinit();
+    const elapsed_ms = @divTrunc(timing.now(testing.io) - t0, std.time.ns_per_ms);
+    try testing.expect(elapsed_ms < 1000); // far below the 30 s wait
+    try testing.expectEqual(@as(usize, 1), r.count());
+    var it = r.lines();
+    const v = try parseLine(arena.allocator(), it.next().?);
+    try testing.expectEqual(@as(i64, 31), v.object.get("id").?.integer);
+}

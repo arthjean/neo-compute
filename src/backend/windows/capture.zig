@@ -11,7 +11,7 @@ const image = @import("../../core/image.zig");
 const check = com.check;
 const release = com.release;
 
-pub const Error = com.Error || error{ NoOutputs, UnexpectedFrameFormat, OutOfMemory, AccessLost, Unsupported };
+pub const Error = com.Error || error{ NoOutputs, UnexpectedFrameFormat, OutOfMemory, AccessLost, Unsupported, GdiFailed };
 
 pub const Output = struct {
     desc: w.DXGI_OUTPUT_DESC,
@@ -30,6 +30,12 @@ pub const Output = struct {
     width: u32 = 0,
     height: u32 = 0,
     has_frame: bool = false,
+    /// The staging texture holds a newer frame than `pixels`: a look for
+    /// changes copied it on the GPU without reading it back (US-030).
+    unread: bool = false,
+    /// The GDI fallback was reported on stderr since the last duplication
+    /// (US-032): once per loss, not once per capture.
+    fallback_logged: bool = false,
     name_buf: [96]u8 = undefined,
     name_len: usize = 0,
     adapter_buf: [128]u8 = undefined,
@@ -65,6 +71,7 @@ pub const Output = struct {
             return error.ComCallFailed;
         }
         self.dup = dup.?;
+        self.fallback_logged = false;
         var dd: w.DXGI_OUTDUPL_DESC = undefined;
         dup.?.vtable.GetDesc(dup.?, &dd);
         self.rotation = switch (dd.Rotation) {
@@ -82,10 +89,12 @@ pub const Output = struct {
     }
 
     /// Acquires a new frame if one is ready within `timeout_ms` and copies
-    /// it into `pixels`. Returns false when the screen did not change (the
-    /// previous frame stays valid). `error.AccessLost` means the duplication
-    /// was invalidated (mode change, UAC, exclusive full screen).
-    pub fn acquire(self: *Output, gpa: std.mem.Allocator, timeout_ms: u32) Error!bool {
+    /// it into `pixels`, or with `read` false only into the staging texture
+    /// (`unread`: the CPU copy, about 2 ms at 2560x1440, waits for a caller
+    /// that needs the pixels). Returns false when the screen did not change
+    /// (the previous frame stays valid). `error.AccessLost` means the
+    /// duplication was invalidated (mode change, UAC, exclusive full screen).
+    pub fn acquire(self: *Output, gpa: std.mem.Allocator, timeout_ms: u32, read: bool) Error!bool {
         const dup = self.dup orelse return error.AccessLost;
         var info: w.DXGI_OUTDUPL_FRAME_INFO = undefined;
         var resource: ?*w.IDXGIResource = null;
@@ -134,7 +143,10 @@ pub const Output = struct {
         if (info.TotalMetadataBufferSize > 0) try self.readRects(gpa, dup, info.TotalMetadataBufferSize);
         if (!self.has_frame) try self.dirty.append(gpa, .{ .x = r.left, .y = r.top, .w = @intCast(dw), .h = @intCast(dh) });
         self.context.vtable.CopyResource(self.context, @ptrCast(self.staging.?), @ptrCast(tex));
-        try self.readback();
+        if (read or !self.has_frame) {
+            try self.readback();
+            self.unread = false;
+        } else self.unread = true;
         self.has_frame = true;
         return true;
     }
@@ -207,7 +219,9 @@ pub const Capture = struct {
     /// Enumerates every output attached to the desktop and duplicates it on
     /// its own adapter. An output whose duplication fails is kept, with the
     /// failure recorded, so it can be named in errors.
-    pub fn init(gpa: std.mem.Allocator) Error!Capture {
+    /// Without `duplicate` (GDI forced, US-032) the outputs are enumerated
+    /// without a duplication: a process holds one per output at most.
+    pub fn init(gpa: std.mem.Allocator, duplicate: bool) Error!Capture {
         var raw: ?*anyopaque = null;
         try check(w.CreateDXGIFactory1(&w.IDXGIFactory1.iid, &raw));
         var self: Capture = .{ .factory = @ptrCast(@alignCast(raw.?)) };
@@ -250,7 +264,7 @@ pub const Capture = struct {
                 var o: Output = .{ .desc = desc, .output1 = output1, .device = device.?, .context = context.? };
                 o.name_len = utf8Into(&o.name_buf, &desc.DeviceName);
                 o.adapter_len = utf8Into(&o.adapter_buf, &adesc.Description);
-                o.duplicate() catch {}; // recorded in dup_hr
+                if (duplicate) o.duplicate() catch {}; // recorded in dup_hr
                 self.outputs.append(gpa, o) catch |e| {
                     o.deinit(gpa);
                     return e;
@@ -295,3 +309,65 @@ pub fn secureDesktopActive() bool {
     const len = std.mem.indexOfScalar(u16, &name, 0) orelse name.len;
     return !std.mem.eql(u16, name[0..len], std.unicode.utf8ToUtf16LeStringLiteral("Default"));
 }
+
+/// BitBlt copy of one display into a top-down 32-bit DIB section (US-032),
+/// the fallback when DXGI duplication is refused: `CAPTUREBLT` includes
+/// layered windows, and a window protected against capture
+/// (`WDA_MONITOR`, DRM video) shows black. No dirty rects: the core tells a
+/// still screen by fingerprints.
+pub const Gdi = struct {
+    screen: w.HDC = null,
+    memory: w.HDC = null,
+    bitmap: w.HBITMAP = null,
+    previous: w.HGDIOBJ = null,
+    bits: [*]u8 = undefined,
+    width: u32 = 0,
+    height: u32 = 0,
+
+    /// Copies `part` (desktop coordinates, inside display `r`: the whole
+    /// display, or the window a look for changes watches) to the top-left
+    /// of a DIB section the size of `r`, and returns its BGRA pixels, rows
+    /// `r.w * 4` bytes apart, valid until the next call. A window costs a
+    /// fraction of a full 2560x1440 copy (about 20 ms).
+    pub fn grab(self: *Gdi, r: display.Rect, part: display.Rect) Error![]const u8 {
+        std.debug.assert(part.x >= r.x and part.y >= r.y and part.right() <= r.right() and part.bottom() <= r.bottom());
+        const width: u32 = @intCast(r.w);
+        const height: u32 = @intCast(r.h);
+        if (self.bitmap == null or self.width != width or self.height != height) try self.allocate(width, height);
+        if (w.BitBlt(self.memory, 0, 0, part.w, part.h, self.screen, part.x, part.y, w.SRCCOPY | w.CAPTUREBLT) == 0) return error.GdiFailed;
+        // A DIB section's bits are current only once GDI's batch is flushed.
+        _ = w.GdiFlush();
+        const stride = @as(usize, width) * 4;
+        return self.bits[0 .. (@as(usize, @intCast(part.h)) - 1) * stride + @as(usize, @intCast(part.w)) * 4];
+    }
+
+    fn allocate(self: *Gdi, width: u32, height: u32) Error!void {
+        self.deinit();
+        self.screen = w.GetDC(null) orelse return error.GdiFailed;
+        self.memory = w.CreateCompatibleDC(self.screen) orelse return error.GdiFailed;
+        var info = std.mem.zeroes(w.BITMAPINFO);
+        info.bmiHeader.biSize = @sizeOf(w.BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = @intCast(width);
+        // Negative: top-down rows, as the rest of the pipeline expects.
+        info.bmiHeader.biHeight = -@as(i32, @intCast(height));
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = w.BI_RGB;
+        var bits: ?*anyopaque = null;
+        self.bitmap = w.CreateDIBSection(self.memory, &info, w.DIB_RGB_COLORS, &bits, null, 0) orelse return error.GdiFailed;
+        self.bits = @ptrCast(bits orelse return error.GdiFailed);
+        self.previous = w.SelectObject(self.memory, self.bitmap);
+        self.width = width;
+        self.height = height;
+    }
+
+    pub fn deinit(self: *Gdi) void {
+        if (self.memory != null) {
+            if (self.previous != null) _ = w.SelectObject(self.memory, self.previous);
+            _ = w.DeleteDC(self.memory);
+        }
+        if (self.bitmap != null) _ = w.DeleteObject(self.bitmap);
+        if (self.screen != null) _ = w.ReleaseDC(null, self.screen);
+        self.* = .{};
+    }
+};

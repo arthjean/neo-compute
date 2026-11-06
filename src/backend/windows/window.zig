@@ -24,6 +24,16 @@ const Collect = struct {
     }
 };
 
+/// Hash of the set of visible top-level windows: it changes when one
+/// appears or goes (US-030, a dialog that opens), not when the z-order does.
+pub fn stamp() u64 {
+    var c: Collect = .{};
+    _ = w.EnumWindows(Collect.callback, @bitCast(@intFromPtr(&c)));
+    const handles: []usize = @ptrCast(c.hwnds[0..c.len]);
+    std.mem.sort(usize, handles, {}, std.sort.asc(usize));
+    return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(handles));
+}
+
 fn utf8(arena: std.mem.Allocator, wide: []const u16) ![]const u8 {
     const buf = try arena.alloc(u8, wide.len * 3);
     return buf[0..std.unicode.wtf16LeToWtf8(buf, wide)];

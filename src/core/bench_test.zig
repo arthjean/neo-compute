@@ -165,3 +165,25 @@ test "a baseline keeps the worst p95 of its runs" {
     try testing.expectEqual(@as(u64, 1_300_000), a[0].outcome.ok.stages[@backingInt(timing.Stage.capture)].?.p95_ns);
     try testing.expectEqual(@as(u64, 1_300_000), a[0].outcome.ok.total.p95_ns);
 }
+
+test "the marks budget is 8 ms over the screenshot of the same run, else over its absolute budget" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var sink: std.Io.Writer.Allocating = .init(a);
+    const empty = "{\"reference_p95_us\":{}}";
+    // Screenshot at 20 ms in the run: marks passes at 27.9 ms, fails at 28.1.
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, empty, &.{ fakeResult("screenshot", .encode, 20_000), fakeResult("marks", .encode, 27_900) }, &sink.writer));
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{ fakeResult("screenshot", .encode, 20_000), fakeResult("marks", .encode, 28_100) }, &sink.writer));
+    try testing.expect(std.mem.indexOf(u8, sink.written(), "marks total p95 28.10 ms exceeds screenshot p95 (with its witness) 20.00 ms + 8 ms") != null);
+    // marks alone: the screenshot's 30 ms budget plus 8.
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, empty, &.{fakeResult("marks", .encode, 37_000)}, &sink.writer));
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{fakeResult("marks", .encode, 39_000)}, &sink.writer));
+    // With its witness (ui_tree without marks on the same window, 10 ms),
+    // marks is budgeted on what it adds: 20 + 10 + 8 ms.
+    var with_tree = fakeResult("marks", .encode, 37_900);
+    with_tree.outcome.ok.witness_p95_ns = 10 * std.time.ns_per_ms;
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, empty, &.{ fakeResult("screenshot", .encode, 20_000), with_tree }, &sink.writer));
+    with_tree.outcome.ok.total.p95_ns = 38_100 * std.time.ns_per_us;
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{ fakeResult("screenshot", .encode, 20_000), with_tree }, &sink.writer));
+}

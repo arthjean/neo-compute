@@ -54,6 +54,15 @@ pub const Frame = struct {
     dirty: []const Rect = &.{},
     /// Destinations of moved regions since the previous capture.
     moved: []const Rect = &.{},
+    /// `gdi`: a BitBlt copy (US-032), always fresh and without dirty rects:
+    /// changes are found by comparing fingerprints of successive frames.
+    source: Source = .dxgi,
+    /// Set when the pixels cover only this desktop rectangle, not the whole
+    /// display: a GDI look for changes copies just the target window's area
+    /// (US-032). Such a frame is only fingerprinted, never encoded.
+    area: ?Rect = null,
+
+    pub const Source = enum { dxgi, gdi };
 };
 
 /// Outcome of a capture: the frame, or a message for the model (FR-06).

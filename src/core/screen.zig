@@ -8,6 +8,7 @@ const jpeg = @import("jpeg.zig");
 const Result = @import("mcp.zig").Result;
 const fmt = @import("session.zig").fmt;
 const policy = @import("policy.zig");
+const marks = @import("marks.zig");
 const Mapping = display.Mapping;
 
 /// Longest side of a `zoom` image (US-007).
@@ -75,11 +76,24 @@ pub fn blackOut(pixels: []u8, w: u32, h: u32, region: display.Rect, origin: [2]i
     }
 }
 
+/// What a marked screenshot adds to the image (US-031): password fields the
+/// snapshot read, blacked out with the scanned ones, then the labels.
+const Overlay = struct {
+    secrets: []const display.Rect = &.{},
+    /// The foreground window's password scan ran (US-019); without it the
+    /// snapshot's own password fields are the foreground's.
+    scanned: bool = true,
+    labels: []const marks.Label = &.{},
+    /// Labels drawn, from `marks.layout`.
+    drawn: usize = 0,
+};
+
 /// Reduces `region` of `frame` (display `m`) to w x h, blacks out the
 /// `deny` windows (US-017) and the visible password fields (US-019, the
-/// scan started before the capture), encodes it as JPEG and fills the image
-/// block of `r`.
-fn encodeImage(ctx: anytype, r: *Result, m: Mapping, frame: display.Frame, region: display.Rect, w: u32, h: u32, quality: u8) ?[]const u8 {
+/// scan started before the capture), draws the overlay's labels over the
+/// masked image (US-031), encodes it as JPEG and fills the image block of
+/// `r`.
+fn encodeImage(ctx: anytype, r: *Result, m: Mapping, frame: display.Frame, region: display.Rect, w: u32, h: u32, quality: u8, overlay: ?*Overlay) ?[]const u8 {
     std.debug.assert(@max(w, h) <= display.max_long_side); // FR-17
     const s = ctx.session;
     const origin = [2]i32{ m.rect.x, m.rect.y };
@@ -92,10 +106,18 @@ fn encodeImage(ctx: anytype, r: *Result, m: Mapping, frame: display.Frame, regio
     ctx.timings.stop(ctx.io, .reduce);
     const reduced = s.reducer.out[0 .. @as(usize, w) * h * 4];
     ctx.timings.start(ctx.io, .mask);
-    const secrets = ctx.backend.secretRects();
+    const secrets = if (overlay) |o| (if (o.scanned) ctx.backend.secretRects() else &.{}) else ctx.backend.secretRects();
     blackOut(reduced, w, h, region, origin, denied);
     blackOut(reduced, w, h, region, origin, secrets);
+    if (overlay) |o| blackOut(reduced, w, h, region, origin, o.secrets);
     ctx.timings.stop(ctx.io, .mask);
+    if (overlay) |o| if (o.labels.len > 0) {
+        ctx.timings.start(ctx.io, .marks);
+        defer ctx.timings.stop(ctx.io, .marks);
+        const at = ctx.arena.alloc(?display.Rect, o.labels.len) catch return "Mémoire insuffisante : réessaie.";
+        o.drawn = marks.layout(o.labels, w, h, at);
+        for (o.labels, at) |*l, place| if (place) |p| marks.draw(reduced, w, l, p);
+    };
     ctx.timings.start(ctx.io, .encode);
     defer ctx.timings.stop(ctx.io, .encode);
     const bytes = s.encoder.encode(s.gpa, reduced, w, h, @as(usize, w) * 4, quality) catch
@@ -123,10 +145,10 @@ pub fn screenshot(ctx: anytype, display_arg: ?u32) Result {
     };
     var r: Result = .{ .len = 2 };
     const full: display.Rect = .{ .x = 0, .y = 0, .w = m.rect.w, .h = m.rect.h };
-    if (encodeImage(ctx, &r, m, frame, full, m.width, m.height, jpeg.screenshot_quality)) |e| return Result.err(e);
+    if (encodeImage(ctx, &r, m, frame, full, m.width, m.height, jpeg.screenshot_quality, null)) |e| return Result.err(e);
     ctx.session.recordShot(m);
     var sbuf: [32]u8 = undefined;
-    r.blocks[1] = .{ .text = fmt(ctx.arena, "display={d} scale={s} size={d}x{d}", .{ index, display.scaleText(&sbuf, m.scale), m.width, m.height }) };
+    r.blocks[1] = .{ .text = fmt(ctx.arena, "display={d} scale={s} size={d}x{d}{s}", .{ index, display.scaleText(&sbuf, m.scale), m.width, m.height, gdiNote(frame) }) };
     return r;
 }
 
@@ -156,7 +178,36 @@ pub fn zoom(ctx: anytype, region: [4]i32) Result {
         h = @max(1, @as(u32, @intFromFloat(@round(@as(f64, @floatFromInt(ph)) / k))));
     }
     var r: Result = .{ .len = 2 };
-    if (encodeImage(ctx, &r, m, frame, phys, w, h, jpeg.zoom_quality)) |e| return Result.err(e);
-    r.blocks[1] = .{ .text = fmt(ctx.arena, "display={d} region={d},{d},{d},{d} size={d}x{d}", .{ m.display, x0, y0, x1, y1, w, h }) };
+    if (encodeImage(ctx, &r, m, frame, phys, w, h, jpeg.zoom_quality, null)) |e| return Result.err(e);
+    r.blocks[1] = .{ .text = fmt(ctx.arena, "display={d} region={d},{d},{d},{d} size={d}x{d}{s}", .{ m.display, x0, y0, x1, y1, w, h, gdiNote(frame) }) };
     return r;
+}
+
+/// What an image says once captured through GDI (US-032).
+pub const gdi_note = "Capture GDI : les fenêtres protégées contre la capture apparaissent en noir";
+
+fn gdiNote(frame: display.Frame) []const u8 {
+    return if (frame.source == .gdi) " ; " ++ gdi_note else "";
+}
+
+pub const Marked = union(enum) { ok: struct { image: @import("mcp.zig").Content, drawn: usize, gdi: bool }, err: []const u8 };
+
+/// The screenshot of display `m` (format and scale of `screenshot`, FR-17)
+/// with `labels` (screenshot pixels) drawn after the masking of `deny`
+/// windows and password fields, `secrets` among them (US-031). Its space
+/// becomes the one of incoming coordinates and of `zoom`. With `scan`
+/// false, `secrets` already hold the foreground window's password fields
+/// (its complete snapshot), and the scan of US-019 is not run again.
+pub fn marked(ctx: anytype, m: Mapping, labels: []const marks.Label, secrets: []const display.Rect, scan: bool) Marked {
+    if (scan) ctx.backend.beginSecretScan();
+    const frame = switch (frameOf(ctx, m)) {
+        .ok => |f| f,
+        .err => |e| return .{ .err = e },
+    };
+    var r: Result = .{ .len = 1 };
+    var overlay: Overlay = .{ .secrets = secrets, .labels = labels, .scanned = scan };
+    const full: display.Rect = .{ .x = 0, .y = 0, .w = m.rect.w, .h = m.rect.h };
+    if (encodeImage(ctx, &r, m, frame, full, m.width, m.height, jpeg.screenshot_quality, &overlay)) |e| return .{ .err = e };
+    ctx.session.recordShot(m);
+    return .{ .ok = .{ .image = r.blocks[0], .drawn = overlay.drawn, .gdi = frame.source == .gdi } };
 }

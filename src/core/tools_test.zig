@@ -75,7 +75,7 @@ pub fn expectContains(haystack: []const u8, needle: []const u8) !void {
 }
 
 /// Width and height from the SOF0 marker of a base64 JPEG.
-fn jpegSize(arena: std.mem.Allocator, b64: []const u8) ![2]u16 {
+pub fn jpegSize(arena: std.mem.Allocator, b64: []const u8) ![2]u16 {
     const bytes = try arena.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(b64));
     try std.base64.standard.Decoder.decode(bytes, b64);
     try testing.expectEqualSlices(u8, &.{ 0xFF, 0xD8 }, bytes[0..2]);

@@ -43,9 +43,14 @@ pub const Result = struct { name: []const u8, outcome: Outcome };
 /// Absolute p95 budgets on a scenario's total (PRD Quality Gates). A
 /// provider-bound budget also passes when the total stays within 110 % of the
 /// C witness probe on the same window: the cost is then the provider's
-/// (decision 0004).
-pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: bool = false }{
+/// (decision 0004). A budget `over` another scenario is that scenario's
+/// total p95 in the same run (its absolute budget when it did not run) plus
+/// `ms`, plus the scenario's witness when it has one: `marks` is budgeted
+/// on what it adds to the ui_tree of the same window.
+pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: bool = false, over: ?[]const u8 = null }{
     .{ .scenario = "capture", .ms = 8 },
+    // US-032: BitBlt of a 2560x1440 display into a DIB section.
+    .{ .scenario = "capture-gdi", .ms = 40 },
     .{ .scenario = "screenshot", .ms = 30 },
     .{ .scenario = "snapshot", .ms = 50 },
     .{ .scenario = "window_list", .ms = 5 },
@@ -72,7 +77,21 @@ pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: b
     // catalog.
     .{ .scenario = "apps-catalog", .ms = 300 },
     .{ .scenario = "apps", .ms = 1 },
+    // US-031: ui_tree marks on a test window costs less than 8 ms beyond
+    // a screenshot of the same display.
+    .{ .scenario = "marks", .ms = 8, .over = "screenshot" },
 };
+
+/// Total p95 in ms of scenario `name` in `results`, else its absolute
+/// budget.
+fn reference(results: []const Result, name: []const u8) ?f64 {
+    for (results) |r| if (std.mem.eql(u8, r.name, name)) switch (r.outcome) {
+        .ok => |ok| return us(ok.total.p95_ns) / 1000.0,
+        .unsupported => {},
+    };
+    for (budgets) |b| if (std.mem.eql(u8, b.scenario, name) and b.over == null) return b.ms;
+    return null;
+}
 
 fn percentile(sorted: []const u64, p: f64) u64 {
     if (sorted.len == 0) return 0;
@@ -309,6 +328,14 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
         };
         for (budgets) |b| if (std.mem.eql(u8, b.scenario, r.name)) {
             const p95_ms = us(ok.total.p95_ns) / 1000.0;
+            if (b.over) |other| {
+                const witness_ms = if (ok.witness_p95_ns) |wn| us(wn) / 1000.0 else 0;
+                const base = (reference(results, other) orelse continue) + witness_ms;
+                if (p95_ms <= base + b.ms) continue;
+                violations += 1;
+                try log.print("bench: {s} total p95 {d:.2} ms exceeds {s} p95 (with its witness) {d:.2} ms + {d} ms\n", .{ r.name, p95_ms, other, base, b.ms });
+                continue;
+            }
             if (p95_ms <= b.ms) continue;
             if (b.provider_bound) {
                 const witness = ok.witness_p95_ns orelse {
@@ -412,7 +439,7 @@ pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
 
 /// `settle` reports the settling time of an action apart (US-015): it has
 /// no budget and no reference, its other stages are the post-action delta.
-pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps" };
+pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "capture-gdi", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps", "marks" };
 
 /// Scenarios that open applications on the desktop: run on request only
 /// (`neo-compute bench chrome`), never by `all`.

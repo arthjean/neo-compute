@@ -339,3 +339,18 @@ test "an audit write failure never blocks the tool" {
     try testing.expect(log.warned);
     try testing.expect(!isError(try h.call("screenshot", "{}")));
 }
+
+test "ui_tree marks blacks out deny applications before drawing its labels (US-031)" {
+    var h: Harness = .{};
+    deskHarness(&h, .{});
+    defer h.deinit();
+    const res = try h.call("ui_tree", "{\"marks\":true}");
+    try testing.expect(!isError(res));
+    // KeePassXC's visible part is black, the part under Notepad is not.
+    try testing.expect(isBlack(shotPixel(&h, 1500, 700)));
+    try testing.expect(!isBlack(shotPixel(&h, 1100, 700)));
+    // Notepad's "Enregistrer" button (1100,840) carries its label.
+    try testing.expectEqual([4]u8{ 0, 255, 255, 255 }, shotPixel(&h, 1100, 840));
+    // No label reaches into the deny window.
+    try testing.expect(std.mem.indexOf(u8, text(res), "KeePassXC") == null);
+}

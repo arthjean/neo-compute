@@ -213,6 +213,50 @@ pub fn reduceReference(out: []u8, src: []const u8, stride: usize, sw: u32, sh: u
     };
 }
 
+// ---------------------------------------------------------------- fingerprint
+
+/// Rows a fingerprint skips between two sampled rows: the image is reduced
+/// to one row in `fingerprint_step`, which halves the bytes hashed while a
+/// change of a few pixels in height still shows.
+pub const fingerprint_step = 2;
+
+/// Hash of `region` (pixels of the image, clipped to it) of a BGRA image
+/// whose rows are `stride` bytes apart, sampled every `fingerprint_step`
+/// rows. Two equal fingerprints mean an unchanged region: this is how a
+/// capture without dirty rects (GDI, US-032) tells a still screen.
+///
+/// The hash is `neo_pixel_hash` (src/core/pixel_hash.zig), a library built
+/// ReleaseFast in every mode: at one look every 100 ms it is most of a
+/// wait's CPU. std's XxHash3 hashed about 370 MB/s here (20 ms for a
+/// 2560x1440 region in ReleaseFast), and a Debug Wyhash took 11.5 ms for a
+/// maximized window.
+pub fn fingerprint(src: []const u8, stride: usize, width: u32, height: u32, region: Rect) u64 {
+    const x0: usize = @intCast(std.math.clamp(region.x, 0, @as(i32, @intCast(width))));
+    const y0: usize = @intCast(std.math.clamp(region.y, 0, @as(i32, @intCast(height))));
+    const x1: usize = @intCast(std.math.clamp(region.right(), 0, @as(i32, @intCast(width))));
+    const y1: usize = @intCast(std.math.clamp(region.bottom(), 0, @as(i32, @intCast(height))));
+    const seed: u64 = 0x6e656f2d636f6d70; // "neo-comp"
+    if (x1 <= x0) return seed;
+    return neo_pixel_hash(src.ptr, stride, x0, x1, y0, y1, fingerprint_step, seed);
+}
+
+extern fn neo_pixel_hash(src: [*]const u8, stride: usize, x0: usize, x1: usize, y0: usize, y1: usize, step: usize, seed: u64) callconv(.c) u64;
+
+test "a fingerprint changes with the region's pixels and ignores the rest" {
+    var buf: [64 * 32 * 4]u8 = @splat(7);
+    const region: Rect = .{ .x = 8, .y = 4, .w = 20, .h = 10 };
+    const a = fingerprint(&buf, 64 * 4, 64, 32, region);
+    try std.testing.expectEqual(a, fingerprint(&buf, 64 * 4, 64, 32, region));
+    // Outside the region: same fingerprint.
+    buf[(30 * 64 + 60) * 4] = 99;
+    try std.testing.expectEqual(a, fingerprint(&buf, 64 * 4, 64, 32, region));
+    // Inside, on a sampled row: another fingerprint.
+    buf[(6 * 64 + 10) * 4 + 1] = 99;
+    try std.testing.expect(a != fingerprint(&buf, 64 * 4, 64, 32, region));
+    // A region past the image's edges is clipped, never read out of bounds.
+    _ = fingerprint(&buf, 64 * 4, 64, 32, .{ .x = -10, .y = 20, .w = 200, .h = 200 });
+}
+
 fn testPattern(buf: []u8, w: u32, h: u32) void {
     // Gradients, a checkerboard and hard edges: the cases where a wrong
     // weight shows.

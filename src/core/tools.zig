@@ -227,13 +227,16 @@ pub const ui_tree = struct {
         since: ?enum { last } = null,
         /// US-024: a web page's visible text nodes, in reading order.
         text: bool = false,
+        /// US-031: also the screenshot with each actionable element's id
+        /// drawn on it (explained in the instructions).
+        marks: bool = false,
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = switch (optionalHandle(ctx, args.window)) {
             .ok => |h| h,
             .err => |r| return r,
         };
-        return a11y.tree(ctx, handle, args.since != null, args.text);
+        return a11y.tree(ctx, handle, args.since != null, args.text, args.marks);
     }
 };
 
@@ -245,13 +248,16 @@ pub const ui_find = struct {
     pub const Args = struct {
         query: []const u8,
         window: ?[]const u8 = null,
+        /// US-030: wait for a match, searching again on screen changes.
+        wait_ms: u32 = 0,
+        pub const field_info = .{ .wait_ms = .{ .description = "Wait up to this long for a match", .minimum = 0, .maximum = a11y.max_wait_ms } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = switch (optionalHandle(ctx, args.window)) {
             .ok => |h| h,
             .err => |r| return r,
         };
-        return a11y.find(ctx, args.query, handle);
+        return a11y.find(ctx, args.query, handle, args.wait_ms);
     }
 };
 

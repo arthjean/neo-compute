@@ -21,21 +21,39 @@ pub const Server = mcp.Server(Backend, tools.all);
 
 const usage =
     \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision]
-    \\                   [--policy FILE] [--rearm-key COMBO]
-    \\       neo-compute bench <all|transport|diff|capture|snapshot|screenshot|window_list|ui_tree|settle|APP> [--iterations N]
-    \\                         [--check BASELINE.json] [--write-baseline FILE]
-    \\       neo-compute selftest
+    \\                   [--policy FILE] [--rearm-key COMBO] [--capture auto|gdi]
+    \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|APP>
+    \\                         [--iterations N] [--check BASELINE.json] [--write-baseline FILE] [--capture auto|gdi]
+    \\       neo-compute selftest [--capture auto|gdi]
     \\       neo-compute --version
     \\
 ;
+
+/// `--capture gdi` (US-032): every capture goes through GDI instead of
+/// DXGI duplication. Returns false for a value other than auto or gdi.
+fn captureMode(value: []const u8) bool {
+    if (!@hasDecl(Backend, "setCaptureMode")) return std.mem.eql(u8, value, "auto");
+    return Backend.setCaptureMode(value);
+}
+
+const capture_usage = "neo-compute: --capture needs auto or gdi\n";
 
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (@hasDecl(Backend, "initProcess")) Backend.initProcess();
     if (args.len > 1 and std.mem.eql(u8, args[1], "bench")) return benchCommand(init, args[2..]);
-    if (args.len > 1 and std.mem.eql(u8, args[1], "selftest")) return selftestCommand(init);
+    if (args.len > 1 and std.mem.eql(u8, args[1], "selftest")) {
+        if (args.len == 4 and std.mem.eql(u8, args[2], "--capture") and captureMode(args[3])) return selftestCommand(init);
+        if (args.len != 2) {
+            std.debug.print("{s}{s}", .{ capture_usage, usage });
+            return 2;
+        }
+        return selftestCommand(init);
+    }
     // Started by selftest only: a provider that stalls (US-022 timeout).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-stall") and @hasDecl(Backend, "stallProvider")) return Backend.stallProvider();
+    // Started by selftest only: a still window of another process (US-032 wait CPU).
+    if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-still") and @hasDecl(Backend, "stillWindow")) return Backend.stillWindow(args[2..]);
 
     var trace = false;
     var screenshot_size: u32 = display.default_long_side;
@@ -78,6 +96,12 @@ pub fn main(init: std.process.Init) !u8 {
                     return 2;
                 },
             };
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--capture")) {
+            if (!captureMode(if (i + 1 < args.len) args[i + 1] else "")) {
+                std.debug.print(capture_usage, .{});
+                return 2;
+            }
             i += 1;
         } else if (std.mem.eql(u8, a, "--version")) {
             std.debug.print("{s} {s}\n", .{ mcp.server_name, mcp.server_version });
@@ -158,6 +182,12 @@ fn benchCommand(init: std.process.Init, args: []const [:0]const u8) !u8 {
         } else if (std.mem.eql(u8, a, "--write-baseline")) {
             baseline_out = value;
             i += 1;
+        } else if (std.mem.eql(u8, a, "--capture")) {
+            if (!captureMode(value)) {
+                std.debug.print(capture_usage, .{});
+                return 2;
+            }
+            i += 1;
         } else if (!std.mem.startsWith(u8, a, "--")) {
             which = a;
         } else {
@@ -213,7 +243,7 @@ fn selftestCommand(init: std.process.Init) !u8 {
         try stderr.interface.print("selftest: platform FAILED: this build has no platform backend\n", .{});
         return 1;
     }
-    const failed = try Backend.selftest(init.gpa, init.io, &stderr.interface);
+    const failed = try Backend.selftest(init.gpa, init.io, init.environ_map, &stderr.interface);
     if (failed) |name| {
         try stderr.interface.print("selftest: FAILED ({s})\n", .{name});
         return 1;
@@ -229,6 +259,7 @@ test {
     _ = @import("core/tokens.zig");
     _ = @import("core/display.zig");
     _ = @import("core/image.zig");
+    _ = @import("core/marks.zig");
     _ = @import("core/jpeg.zig");
     _ = @import("core/keys.zig");
     _ = @import("core/tools_test.zig");

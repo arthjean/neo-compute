@@ -10,8 +10,9 @@ const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 /// apart and kept out of totals and budgets. `policy` is the target
 /// resolution of US-017, `mask` the wait for password rectangles and the
 /// blackout of US-017 and US-019, `catalog` the Start menu enumeration and
-/// name matching of US-028.
-pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, diff, windows, policy, mask, settle, serialize, write, catalog };
+/// name matching of US-028, `marks` the layout and drawing of element ids on
+/// an image (US-031).
+pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, diff, windows, policy, mask, settle, serialize, write, catalog, marks };
 pub const stage_count = @typeInfo(Stage).@"enum".field_names.len;
 
 pub fn now(io: Io) i96 {

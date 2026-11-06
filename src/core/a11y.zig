@@ -11,6 +11,8 @@ const timing = @import("timing.zig");
 const actions = @import("actions.zig");
 const session = @import("session.zig");
 const policy = @import("policy.zig");
+const image = @import("image.zig");
+const marks = @import("marks.zig");
 const Result = @import("mcp.zig").Result;
 const fmt = session.fmt;
 
@@ -106,9 +108,17 @@ fn extraRoots(ctx: anytype, window: ?u64) []const uitree.RootWindow {
 
 /// `ui_tree`: the pruned tree of `window`, or with `since_last` only what
 /// changed since the last tree of that window. With `text`, a web page's
-/// visible text nodes too (US-024).
-pub fn tree(ctx: anytype, window: ?u64, since_last: bool, text: bool) Result {
-    return treeOf(ctx, window, since_last, true, text);
+/// visible text nodes too (US-024); with `with_marks`, the screenshot of the
+/// root's display with each actionable element's id drawn on it (US-031).
+pub fn tree(ctx: anytype, window: ?u64, since_last: bool, text: bool, with_marks: bool) Result {
+    if (!with_marks) return treeOf(ctx, window, since_last, true, text);
+    const s = switch (snapshot(ctx, window, true, text)) {
+        .ok => |s| s,
+        .err => |e| return Result.err(e),
+    };
+    var labels: std.ArrayList(marks.Label) = .empty;
+    const r = treeText(ctx, s, window == null, since_last, &labels) catch return Result.err(oom);
+    return markedTree(ctx, s, r, labels.items) catch Result.err(oom);
 }
 
 fn treeOf(ctx: anytype, window: ?u64, since_last: bool, record: bool, text: bool) Result {
@@ -116,7 +126,44 @@ fn treeOf(ctx: anytype, window: ?u64, since_last: bool, record: bool, text: bool
         .ok => |s| s,
         .err => |e| return Result.err(e),
     };
-    return treeText(ctx, s, window == null, since_last) catch Result.err(oom);
+    return treeText(ctx, s, window == null, since_last, null) catch Result.err(oom);
+}
+
+/// An element worth a label: one with an action `ui_act` runs. ScrollItem
+/// alone does not count, as in the pruning: providers put it everywhere.
+fn markable(e: uitree.Element) bool {
+    const a = e.actions;
+    return a.invoke or a.value or a.toggle or a.expand_collapse or a.select;
+}
+
+/// Completes `ui_tree`'s text with the marked screenshot (US-031): the
+/// password fields of every root are blacked out with the scanned ones and
+/// the `deny` windows before the labels are drawn.
+fn markedTree(ctx: anytype, s: Snap, r: Result, labels: []const marks.Label) !Result {
+    if (r.is_error) return r;
+    var secrets: std.ArrayList(display.Rect) = .empty;
+    for (s.snap.elements) |e| if (e.password and !e.states.offscreen) try secrets.append(ctx.arena, e.rect);
+    const text = r.blocks[0].text;
+    // A complete snapshot of the foreground window already lists its
+    // password fields: the scan would read them a second time.
+    const fg = ctx.backend.windowAt(null);
+    const scan = s.snap.partial or s.snap.web_pending or fg == null or fg.?.handle != s.snap.window;
+    const shot = switch (screen.marked(ctx, s.maps[0], labels, secrets.items, scan)) {
+        .ok => |o| o,
+        .err => |e| return Result.text(try std.fmt.allocPrint(ctx.arena, "{s}\nImage indisponible : {s}", .{ text, e })),
+    };
+    var out: Result = .{ .len = 2 };
+    var w: std.Io.Writer.Allocating = .init(ctx.arena);
+    try w.writer.writeAll(text);
+    if (labels.len == 0) {
+        try w.writer.writeAll("\nAucun élément actionnable à marquer");
+    } else if (shot.drawn < labels.len) {
+        try w.writer.print("\n… {d} étiquettes omises (place prise ou plus de {d})", .{ labels.len - shot.drawn, marks.max_labels });
+    }
+    if (shot.gdi) try w.writer.writeAll("\n" ++ screen.gdi_note);
+    out.blocks[0] = .{ .text = w.written() };
+    out.blocks[1] = shot.image;
+    return out;
 }
 
 /// Kept elements of every root, in order, with the root of each.
@@ -148,7 +195,9 @@ fn pruneRoots(a: std.mem.Allocator, s: Snap) !Pruned {
     return .{ .kept = kept.items, .root_of = root_of.items };
 }
 
-fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool) !Result {
+/// The tree's text; `labels`, when given, receives one label per actionable
+/// element shown on the root's display, in tree order.
+fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?*std.ArrayList(marks.Label)) !Result {
     const a = ctx.arena;
     const gpa = ctx.session.gpa;
     const ui = &ctx.session.ui;
@@ -163,6 +212,14 @@ fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool) !Result {
     }
     const handles = try a.alloc(u64, s.roots.len);
     for (s.roots, handles) |r, *h| h.* = r.handle;
+    if (labels) |out| {
+        const on = s.maps[0];
+        for (p.kept, p.root_of, ids) |k, ri, id| {
+            const e = els[k.index];
+            if (!markable(e) or e.states.offscreen or s.maps[ri].display != on.display or !e.rect.intersects(on.rect)) continue;
+            try out.append(a, marks.Label.of(id, on.rectToScreenshot(e.rect)));
+        }
+    }
 
     var note: ?[]const u8 = null;
     var delta: ?[]const u8 = null;
@@ -299,23 +356,145 @@ fn deltaText(a: std.mem.Allocator, s: Snap, p: Pruned, shown: []const uitree.Sho
 
 // ---------------------------------------------------------------- ui_find
 
+/// Longest wait of `ui_find` (US-030).
+pub const max_wait_ms = 30_000;
+/// While waiting, a change on screen starts a new search at most this often,
+/// and without any change one runs this often anyway (US-030).
+const research_min_ms = 100;
+const research_max_ms = 1000;
+/// Interval between two looks for changes while waiting: a DXGI capture
+/// with nothing new returns at once, so this costs well under 1 % of a core.
+const wait_poll_ms = 20;
+/// Area a GDI look copies every `research_min_ms`: a larger window is looked
+/// at less often, one more `research_min_ms` per such area (US-030, US-032).
+/// A BitBlt of a whole 2560x1440 display costs 2 to 7 ms of CPU depending
+/// on the GPU and DWM, so a maximized window looked at every 100 ms took
+/// 2 to 7 % of a core; every 200 ms keeps it under the 5 % budget.
+const gdi_look_area = 1920 * 1080;
+
+/// Interval until the next look for changes after `frame`: DXGI's are free
+/// when nothing changed; a GDI look copies the window's area.
+fn lookMs(frame: display.Frame) u64 {
+    if (frame.source != .gdi) return wait_poll_ms;
+    const area = @as(u64, frame.width) * frame.height;
+    return research_min_ms * @max(1, std.math.divCeil(u64, area, gdi_look_area) catch 1);
+}
+
+test "a GDI look waits 100 ms per 1920x1080 of window, a DXGI look 20 ms" {
+    const gdi = struct {
+        fn of(w: u32, h: u32) display.Frame {
+            return .{ .pixels = &.{}, .width = w, .height = h, .stride = 0, .source = .gdi };
+        }
+    }.of;
+    try std.testing.expectEqual(@as(u64, 100), lookMs(gdi(480, 320)));
+    try std.testing.expectEqual(@as(u64, 100), lookMs(gdi(1920, 1080)));
+    try std.testing.expectEqual(@as(u64, 200), lookMs(gdi(2560, 1440)));
+    try std.testing.expectEqual(@as(u64, 300), lookMs(gdi(3840, 1600)));
+    try std.testing.expectEqual(@as(u64, 20), lookMs(.{ .pixels = &.{}, .width = 2560, .height = 1440, .stride = 0 }));
+}
+
 /// `ui_find`: elements of `window` matching `query`, at most 20 lines in the
 /// ui_tree format. Off-screen elements are included (scroll_into_view).
-pub fn find(ctx: anytype, query: []const u8, window: ?u64) Result {
+/// With `wait_ms`, searches again until a match or the deadline (US-030).
+pub fn find(ctx: anytype, query: []const u8, window: ?u64, wait_ms: u32) Result {
     const q = switch (uitree.Query.parse(ctx.arena, query) catch return Result.err(oom)) {
         .ok => |q| q,
         .err => |e| return Result.err(e),
     };
+    if (wait_ms > 0) return findWaiting(ctx, q, query, window, wait_ms);
     const s = switch (snapshot(ctx, window, true, false)) {
         .ok => |s| s,
         .err => |e| return Result.err(e),
     };
-    return findText(ctx, q, query, s) catch Result.err(oom);
+    const found = findText(ctx, q, query, s, null) catch return Result.err(oom);
+    return found.result;
 }
 
-fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap) !Result {
+/// Searches at once, then again after a change near the target window (a
+/// DXGI dirty or move rect, or a new fingerprint under GDI), a move of that
+/// window or a new top-level window, at most every 100 ms and at least every
+/// second, until a match or `wait_ms`. Not an action: it runs while paused,
+/// like `wait`, and stops at its next checkpoint once cancelled. Each search
+/// gets a scratch arena reset before the next, so a 30 s wait holds one
+/// snapshot at a time.
+fn findWaiting(ctx: anytype, q: uitree.Query, query: []const u8, window: ?u64, wait_ms: u32) Result {
+    const ms = std.time.ns_per_ms;
+    const start = timing.now(ctx.io);
+    const deadline = start + @as(i96, wait_ms) * ms;
+    const request_arena = ctx.arena;
+    var scratch: std.heap.ArenaAllocator = .init(request_arena);
+    ctx.arena = scratch.allocator();
+    defer ctx.arena = request_arena;
+    var watch: Watch = .{};
+    // A GDI look copies the window's area with BitBlt: it runs only as
+    // often as a search may, and less often for a large window (`lookMs`).
+    var poll_ms: u64 = wait_poll_ms;
+    while (true) {
+        _ = scratch.reset(.retain_capacity);
+        // The state the search sees: a change from now on calls for another.
+        // The look taken here drains the dirty rects from before the search
+        // and gives GDI its first fingerprint, so neither starts a search
+        // of its own.
+        const before = Watch.target(ctx, window);
+        var area = before.area;
+        var stamp = ctx.backend.topWindowStamp();
+        switch (Watch.look(ctx, before)) {
+            .failed => {},
+            .frame => |f| {
+                poll_ms = lookMs(f);
+                _ = watch.changed(ctx, f, before.index, before.area);
+            },
+        }
+        const searched = timing.now(ctx.io);
+        const s = switch (snapshot(ctx, window, true, false)) {
+            .ok => |s| s,
+            .err => |e| return Result.err(request_arena.dupe(u8, e) catch oom),
+        };
+        const elapsed: u64 = @intCast(@divTrunc(@max(timing.now(ctx.io) - start, 0), ms));
+        const found = findText(ctx, q, query, s, elapsed) catch return Result.err(oom);
+        if (found.matched > 0) return Result.text(request_arena.dupe(u8, found.result.blocks[0].text) catch oom);
+        // Watch until the next search is due.
+        var pending = false;
+        while (true) {
+            const t = timing.now(ctx.io);
+            if (t >= deadline) {
+                if (pending) break;
+                return Result.err(fmt(request_arena, "Aucun élément « {s} » après {d} ms : vérifie la requête ou augmente wait_ms", .{ query, wait_ms }));
+            }
+            if (t - searched >= research_max_ms * ms or (pending and t - searched >= research_min_ms * ms)) break;
+            const left: u64 = @intCast(deadline - t);
+            if (!ctx.sleep(@min(poll_ms * ms, left))) return Result.err("ui_find annulé");
+            const at = Watch.target(ctx, window);
+            const now_stamp = ctx.backend.topWindowStamp();
+            if (!sameRect(area, at.area) or now_stamp != stamp) pending = true;
+            area = at.area;
+            stamp = now_stamp;
+            switch (Watch.look(ctx, at)) {
+                // Without a capture (secure desktop), only the window and
+                // the one-second searches remain.
+                .failed => {},
+                .frame => |f| {
+                    poll_ms = lookMs(f);
+                    if (watch.changed(ctx, f, at.index, at.area)) pending = true;
+                },
+            }
+        }
+    }
+}
+
+fn sameRect(a: ?display.Rect, b: ?display.Rect) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return a.?.eql(b.?);
+}
+
+const Found = struct { result: Result, matched: usize };
+
+/// The matching lines; with `found_after` (a wait), headed by
+/// `found after <n> ms`.
+fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap, found_after: ?u64) !Found {
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
     const w = &out.writer;
+    if (found_after) |n| try w.print("found after {d} ms\n", .{n});
     try writeFlags(w, s.snap);
     try uitree.writeRootHeader(w, s.maps[0], s.roots[0]);
     try w.writeByte('\n');
@@ -336,7 +515,7 @@ fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap) !Result {
     }
     if (matched == 0) try w.print("Aucun élément ne correspond à `{s}` : essaie un autre nom, role:<rôle>, state:<état> ou ui_tree.\n", .{query});
     if (matched > max_find_lines) try w.print("… {d} autres résultats : précise la requête.\n", .{matched - max_find_lines});
-    return Result.text(std.mem.trimEnd(u8, out.written(), "\n"));
+    return .{ .result = Result.text(std.mem.trimEnd(u8, out.written(), "\n")), .matched = matched };
 }
 
 // ---------------------------------------------------------------- ui_act
@@ -411,10 +590,60 @@ fn touches(rects: []const display.Rect, area: ?display.Rect) bool {
     return false;
 }
 
+/// Interval between two GDI captures while settling: without dirty rects,
+/// two equal fingerprints this far apart mean a still screen (US-032).
+const gdi_interval_ms = 50;
+
+/// Whether the screen changed around a window between successive captures:
+/// a DXGI frame's dirty and move rects, else (GDI) the fingerprint of the
+/// area compared with the previous capture's (US-032).
+const Watch = struct {
+    fingerprint: ?u64 = null,
+
+    /// The target window's rectangle (`window`, else the foreground one,
+    /// read again on every look so a dialog that opens counts) and the
+    /// display it sits on.
+    fn target(ctx: anytype, window: ?u64) Target {
+        const area = ctx.backend.windowRect(window);
+        const displays = ctx.backend.displays();
+        const index = if (area) |a| display.displayAt(displays, a.x + @divTrunc(a.w, 2), a.y + @divTrunc(a.h, 2)) orelse 0 else ctx.backend.foregroundDisplay() orelse 0;
+        return .{ .area = area, .index = index };
+    }
+
+    const Target = struct { area: ?display.Rect, index: usize };
+
+    /// What changed on the target's display. Under GDI the backend copies
+    /// only the target's area, which is all a fingerprint reads: at
+    /// 2560x1440 a whole display costs about 20 ms of BitBlt, a window a
+    /// fraction of it (US-030 CPU budget).
+    fn look(ctx: anytype, at: Target) display.CaptureResult {
+        return ctx.backend.changes(at.index, ctx.arena, at.area);
+    }
+
+    /// Changes in `area` since the previous call. Changes elsewhere, such as
+    /// the client's own spinner in its terminal, are ignored. The first GDI
+    /// frame counts as a change: nothing to compare it with yet.
+    fn changed(self: *Watch, ctx: anytype, frame: display.Frame, index: usize, area: ?display.Rect) bool {
+        if (frame.source == .dxgi) return frame.fresh and (touches(frame.dirty, area) or touches(frame.moved, area));
+        // A copy of the area alone: the whole frame is the area.
+        const whole: display.Rect = .{ .x = 0, .y = 0, .w = @intCast(frame.width), .h = @intCast(frame.height) };
+        if (frame.area != null) return self.differs(image.fingerprint(frame.pixels, frame.stride, frame.width, frame.height, whole));
+        const displays = ctx.backend.displays();
+        const origin: display.Rect = if (index < displays.len) displays[index].rect else .{ .x = 0, .y = 0, .w = @intCast(frame.width), .h = @intCast(frame.height) };
+        const local = if (area) |a| if (intersection(a, origin)) |r| display.Rect{ .x = r.x - origin.x, .y = r.y - origin.y, .w = r.w, .h = r.h } else whole else whole;
+        return self.differs(image.fingerprint(frame.pixels, frame.stride, frame.width, frame.height, local));
+    }
+
+    fn differs(self: *Watch, f: u64) bool {
+        defer self.fingerprint = f;
+        return self.fingerprint == null or self.fingerprint.? != f;
+    }
+};
+
 /// Waits until no dirty rect touches the target window (`window`, else the
-/// foreground one, read again on every capture so a dialog that opens counts)
-/// on two captures at least 50 ms apart, or until `timeout_ms`. Changes
-/// elsewhere, such as the client's own spinner in its terminal, are ignored.
+/// foreground one) on two captures at least 50 ms apart, or until
+/// `timeout_ms`. A GDI capture has no dirty rects: two captures 50 ms apart
+/// with the same fingerprint of the window's area are settled (US-032).
 /// Timed as the `settle` stage, apart from the capture budgets.
 pub fn settle(ctx: anytype, timeout_ms: u32, window: ?u64) Settled {
     ctx.timings.start(ctx.io, .settle);
@@ -422,22 +651,24 @@ pub fn settle(ctx: anytype, timeout_ms: u32, window: ?u64) Settled {
     const start = timing.now(ctx.io);
     const ms = std.time.ns_per_ms;
     var quiet_since: ?i96 = null;
+    var watch: Watch = .{};
     while (true) {
-        const area = ctx.backend.windowRect(window);
-        const displays = ctx.backend.displays();
-        const index = if (area) |a| display.displayAt(displays, a.x + @divTrunc(a.w, 2), a.y + @divTrunc(a.h, 2)) orelse 0 else ctx.backend.foregroundDisplay() orelse 0;
-        const frame = switch (ctx.backend.capture(index, ctx.arena)) {
+        const at = Watch.target(ctx, window);
+        const frame = switch (Watch.look(ctx, at)) {
             .frame => |f| f,
             .failed => |msg| return .{ .unavailable = msg },
         };
         const t = timing.now(ctx.io);
-        if (frame.fresh and (touches(frame.dirty, area) or touches(frame.moved, area))) {
+        const gdi = frame.source == .gdi;
+        if (watch.changed(ctx, frame, at.index, at.area)) {
             quiet_since = null;
+        } else if (gdi) {
+            return .{ .settled = @intCast(@divTrunc(t - start, ms)) };
         } else if (quiet_since) |q| {
             if (t - q >= quiet_ms * ms) return .{ .settled = @intCast(@divTrunc(t - start, ms)) };
         } else quiet_since = t;
         if (t - start >= @as(i96, timeout_ms) * ms) return .timeout;
-        if (!ctx.sleep(10 * ms)) return .cancelled;
+        if (!ctx.sleep(@as(u64, if (gdi) gdi_interval_ms else 10) * ms)) return .cancelled;
     }
 }
 

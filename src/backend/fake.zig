@@ -83,6 +83,22 @@ pub const Fake = struct {
     focused: ?u64 = null,
     /// Every capture reports a dirty rect, like a video or a spinner.
     animating: bool = false,
+    /// `gdi`: frames as the BitBlt fallback returns them (US-032), fresh and
+    /// without dirty rects; an animation changes a pixel of the window.
+    capture_source: display.Frame.Source = .dxgi,
+    /// US-030: from this capture on, `ui_elements` becomes
+    /// `appear_elements` and that capture reports a dirty rect over the
+    /// window, as a button that shows up and paints itself.
+    appear_at_capture: ?u32 = null,
+    appear_elements: []const uitree.Element = &.{},
+    /// US-030: at this window stamp read, `ui_elements` becomes
+    /// `appear_elements` and `appear_windows` the top-level windows, as a
+    /// dialog that opens in a window of its own.
+    appear_at_stamp: ?u32 = null,
+    appear_windows: []const display.WindowInfo = &.{},
+    stamp_calls: u32 = 0,
+    /// GDI looks for changes that copied a window's area only (US-032).
+    gdi_area_looks: u32 = 0,
 
     /// Accessibility tree served by uiSnapshot; tests replace it.
     ui_window: u64 = 0x1a2b,
@@ -201,14 +217,46 @@ pub const Fake = struct {
         const d = displays_fixture[index];
         const buf: []const u8 = if (index == 0) &frame0 else &frame1;
         self.capture_calls += 1;
+        var appeared = false;
+        if (self.appear_at_capture) |n| if (self.capture_calls == n) {
+            self.ui_elements = self.appear_elements;
+            appeared = true;
+        };
+        if (self.capture_source == .gdi) {
+            if (self.animating or appeared) frame0[(200 * 2560 + 200) * 4] +%= 1;
+            return .{ .frame = .{ .pixels = buf, .width = @intCast(d.rect.w), .height = @intCast(d.rect.h), .stride = @as(usize, @intCast(d.rect.w)) * 4, .source = .gdi } };
+        }
         return .{ .frame = .{
             .pixels = buf,
             .width = @intCast(d.rect.w),
             .height = @intCast(d.rect.h),
             .stride = @as(usize, @intCast(d.rect.w)) * 4,
-            .fresh = self.capture_calls == 1 or self.animating,
-            .dirty = if (self.animating) &animation_rect else &.{},
+            .fresh = self.capture_calls == 1 or self.animating or appeared,
+            .dirty = if (self.animating or appeared) &animation_rect else &.{},
         } };
+    }
+
+    /// Changes since the last look: the fixture's frames are always in
+    /// memory, so a capture. Under GDI, like the Windows backend, only
+    /// `area` clipped to the display (US-032).
+    pub fn changes(self: *Fake, index: usize, arena: std.mem.Allocator, area: ?display.Rect) display.CaptureResult {
+        const r = self.capture(index, arena);
+        if (r != .frame or r.frame.source != .gdi) return r;
+        const d = displays_fixture[index].rect;
+        const a = area orelse return r;
+        const x0 = std.math.clamp(a.x, d.x, d.right());
+        const y0 = std.math.clamp(a.y, d.y, d.bottom());
+        const x1 = std.math.clamp(a.right(), d.x, d.right());
+        const y1 = std.math.clamp(a.bottom(), d.y, d.bottom());
+        if (x1 <= x0 or y1 <= y0) return r;
+        var f = r.frame;
+        const offset = @as(usize, @intCast(y0 - d.y)) * f.stride + @as(usize, @intCast(x0 - d.x)) * 4;
+        f.pixels = f.pixels[offset..];
+        f.width = @intCast(x1 - x0);
+        f.height = @intCast(y1 - y0);
+        f.area = .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
+        self.gdi_area_looks += 1;
+        return .{ .frame = f };
     }
 
     pub fn sendMouse(self: *Fake, events: []const input.MouseEvent) input.InputError!void {
@@ -305,6 +353,21 @@ pub const Fake = struct {
 
     pub fn windowRef(self: *Fake, handle: u64) ?display.WindowRef {
         return refOf(self.live(handle) orelse return null);
+    }
+
+    /// Changes when a top-level window appears or goes (US-030): a hash of
+    /// the live windows' handles.
+    pub fn topWindowStamp(self: *Fake) u64 {
+        self.stamp_calls += 1;
+        if (self.appear_at_stamp) |n| if (self.stamp_calls == n) {
+            self.ui_elements = self.appear_elements;
+            self.windows = self.appear_windows;
+        };
+        var h: u64 = 0;
+        for (self.windows) |win| if (self.live(win.handle) != null) {
+            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&win.handle));
+        };
+        return h;
     }
 
     pub fn processName(self: *Fake, arena: std.mem.Allocator, pid: u32) ?[]const u8 {

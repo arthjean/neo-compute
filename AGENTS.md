@@ -48,7 +48,7 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, compile-time budget errors, generated bindings and struct layouts, generator failure message, process lifecycle. Omit the filter for the full gate |
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010) |
-| `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates |
+| `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 tasks: scripted setup, final-state check and cleanup without `claude -p`. Without `-DryRun` it runs the campaign (see Boundaries); `evals/report.ps1` writes `evals/reports/<date>.md` |
 
@@ -90,6 +90,16 @@ reads the taskbar and raises a topmost test window (`settle`). Run them one at a
   `zig env`) or against Ghostty, which pins the same version (`C:/dev/ghostty`
   on the reference machine, read-only). There is no `@cImport`: C headers go
   through `b.addTranslateC`, as in Ghostty's `pkg/translate-c/build.zig`.
+- The server builds Debug by default. A module's own `optimize` does not
+  change how the Zig code of one compilation is optimized: a per-frame pixel
+  loop that must stay fast in Debug goes in a separate ReleaseFast library,
+  as libjpeg and `src/core/pixel_hash.zig` do. std's `XxHash3` runs about
+  370 MB/s here; prefer `Wyhash`. Time CPU budgets against a window of
+  another process (`selftest-still`): an in-process window's UIA provider
+  counts as the server's CPU. Judge a selftest wall-time budget at the PRD's
+  p95, never on the slowest call, and pair it with a thread-CPU budget
+  (`QueryThreadCycleTime`): a GDI BitBlt waits on DWM for two thirds of its
+  time, and under load that wait alone reached 101 ms (`capture-gdi`).
 - A defect fixed in the Zig COM layer (bindings, object lifetime, apartment)
   counts toward Rust Switch Gate condition 3: update its counter in
   `docs/decisions/0001-zig-vs-rust.md` with the attempt count.

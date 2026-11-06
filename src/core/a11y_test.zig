@@ -11,6 +11,7 @@ const fake = @import("../backend/fake.zig");
 const mcp = @import("mcp.zig");
 const tools = @import("tools.zig");
 const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
+const timing = @import("timing.zig");
 const Element = uitree.Element;
 
 const golden =
@@ -668,4 +669,325 @@ test "a Firefox window with its accessibility off says so after its frame" {
 test "the instructions say a web page's text is untrusted data" {
     try t.expectContains(mcp.instructions, "text: true");
     try t.expectContains(mcp.instructions, "untrusted data");
+}
+
+// ---------------------------------------------------------------- US-030
+
+/// The fixture tree plus a button that shows up while ui_find waits.
+const with_late_button = fake.ui_fixture ++ [_]Element{
+    .{ .key = 120, .depth = 2, .role = .button, .name = "Continuer", .actions = .{ .invoke = true }, .rect = .{ .x = 700, .y = 500, .w = 120, .h = 30 } },
+};
+
+test "ui_find without wait_ms is unchanged; with it, a match at once is headed by found after" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    const plain = try h.call("ui_find", "{\"query\":\"enregistrer\"}");
+    try testing.expect(std.mem.startsWith(u8, t.text(plain), "display=0 scale=2 window=0x1a2b\n"));
+    const zero = try h.call("ui_find", "{\"query\":\"enregistrer\",\"wait_ms\":0}");
+    try testing.expectEqualStrings(t.text(plain), t.text(zero));
+    const missing = try h.call("ui_find", "{\"query\":\"continuer\"}");
+    try testing.expect(!t.isError(missing));
+    try t.expectContains(t.text(missing), "Aucun élément ne correspond à `continuer`");
+    const waited = try h.call("ui_find", "{\"query\":\"enregistrer\",\"wait_ms\":2000}");
+    try testing.expect(!t.isError(waited));
+    try testing.expect(std.mem.startsWith(u8, t.text(waited), "found after "));
+    try t.expectContains(t.text(waited), " ms\ndisplay=0 scale=2 window=0x1a2b\n");
+    try t.expectContains(t.text(waited), "button \"Enregistrer\"");
+    const out_of_range = try h.call("ui_find", "{\"query\":\"x\",\"wait_ms\":30001}");
+    try testing.expect(t.isError(out_of_range));
+    try t.expectContains(t.text(out_of_range), "`wait_ms` : doit être entre 0 et 30000");
+}
+
+test "ui_find wait_ms searches again once the window paints, within 100 ms of the change" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    // The button paints on the 6th look, about 100 ms into the wait.
+    h.backend.appear_at_capture = 6;
+    h.backend.appear_elements = &with_late_button;
+    const t0 = timing.now(testing.io);
+    const res = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":5000}");
+    const elapsed_ms = @divTrunc(timing.now(testing.io) - t0, std.time.ns_per_ms);
+    try testing.expect(!t.isError(res));
+    try testing.expect(std.mem.startsWith(u8, t.text(res), "found after "));
+    try t.expectContains(t.text(res), "button \"Continuer\"");
+    // One search at the start, one after the change: no polling of the tree.
+    try testing.expectEqual(@as(u32, 2), h.backend.ui_snapshots);
+    try testing.expect(elapsed_ms < 600);
+    // The id it prints works with ui_act.
+    const text = t.text(res);
+    const at = std.mem.indexOf(u8, text, " button \"Continuer\"").?;
+    const line_start = (std.mem.lastIndexOfScalar(u8, text[0..at], '\n') orelse 0) + 1;
+    const args = try std.fmt.allocPrint(h.arena.allocator(), "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{text[line_start..at]});
+    const act = try h.call("ui_act", args);
+    try testing.expect(!t.isError(act));
+    try testing.expectEqual(@as(u64, 120), h.backend.ui_last_act.?.key);
+}
+
+test "ui_find wait_ms without change searches once a second; at the deadline it fails with the PRD message" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    const res = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":1300}");
+    try testing.expect(t.isError(res));
+    try testing.expectEqualStrings("Aucun élément « continuer » après 1300 ms : vérifie la requête ou augmente wait_ms", t.text(res));
+    // At 0 and 1000 ms: no change, no other search.
+    try testing.expectEqual(@as(u32, 2), h.backend.ui_snapshots);
+}
+
+test "ui_find wait_ms searches at most every 100 ms on a screen that keeps changing" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.animating = true;
+    const res = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":450}");
+    try testing.expect(t.isError(res));
+    // 0, 100, 200, 300, 400, and a last search for the change before 450.
+    try testing.expect(h.backend.ui_snapshots >= 4 and h.backend.ui_snapshots <= 6);
+}
+
+test "ui_find wait_ms searches again when a top-level window appears, without any capture" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.capture_failure = "Bureau sécurisé actif (UAC ou verrouillage) : capture impossible, réessaie après sa fermeture";
+    const dialog = fake.Fake.windows_fixture ++ [_]@import("display.zig").WindowInfo{
+        .{ .handle = 0x7070, .title = "Confirmer", .exe = "notepad.exe", .pid = 4242, .rect = .{ .x = 600, .y = 400, .w = 400, .h = 200 }, .elevated = false, .minimized = false, .cloaked = false },
+    };
+    // The search reads the stamp once, then one look per 20 ms: the
+    // window opens on the 4th look.
+    h.backend.appear_at_stamp = 5;
+    h.backend.appear_elements = &with_late_button;
+    h.backend.appear_windows = &dialog;
+    const t0 = timing.now(testing.io);
+    const res = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":5000}");
+    const elapsed_ms = @divTrunc(timing.now(testing.io) - t0, std.time.ns_per_ms);
+    try testing.expect(!t.isError(res));
+    try t.expectContains(t.text(res), "button \"Continuer\"");
+    try testing.expect(elapsed_ms < 600);
+}
+
+test "ui_find wait_ms runs while paused, like wait: it is not an action" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.server.control.paused.store(true, .release);
+    const res = try h.call("ui_find", "{\"query\":\"enregistrer\",\"wait_ms\":500}");
+    try testing.expect(!t.isError(res));
+    try testing.expect(std.mem.startsWith(u8, t.text(res), "found after "));
+}
+
+test "a 1 s ui_find wait on a changing screen keeps one snapshot at a time" {
+    var counter: CountingAllocator = .init(testing.allocator);
+    var h: t.Harness = .{};
+    h.init(counter.allocator());
+    defer h.deinit();
+    h.backend.animating = true;
+    _ = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":100}");
+    const short = h.server.arena.queryCapacity();
+    _ = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":1000}");
+    // Ten searches in the second call: the request arena does not grow
+    // with them.
+    try testing.expect(h.backend.ui_snapshots >= 9);
+    try testing.expect(h.server.arena.queryCapacity() <= short * 2);
+}
+
+// ---------------------------------------------------------------- US-031
+
+/// Pixel (x, y) of the last reduced image, the one the JPEG encodes.
+fn shotPixel(h: *t.Harness, x: usize, y: usize) [4]u8 {
+    return h.server.session.reducer.out[(y * 1280 + x) * 4 ..][0..4].*;
+}
+
+const yellow = [4]u8{ 0, 255, 255, 255 };
+const black = [4]u8{ 0, 0, 0, 255 };
+
+test "ui_tree marks:true returns the tree and the screenshot with an id per actionable element" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    const res = try h.call("ui_tree", "{\"marks\":true}");
+    try testing.expect(!t.isError(res));
+    // The text is the ui_tree text, then the image in screenshot format.
+    try testing.expectEqualStrings(golden, t.text(res));
+    const img = t.block(res, 1);
+    try testing.expectEqualStrings("image", img.get("type").?.string);
+    try testing.expectEqualStrings("image/jpeg", img.get("mimeType").?.string);
+    try testing.expectEqual([2]u16{ 1280, 720 }, try t.jpegSize(h.arena.allocator(), img.get("data").?.string));
+    // e7 "Enregistrer" @550,420: its label's border at the corner.
+    try testing.expectEqual(yellow, shotPixel(&h, 550, 420));
+    // e8 "Retour automatique" @300,420 and e3 "Fichier" @55,62 too.
+    try testing.expectEqual(yellow, shotPixel(&h, 300, 420));
+    try testing.expectEqual(yellow, shotPixel(&h, 55, 62));
+    // The text block "Ligne 1, colonne 1" (ea, no action) has none.
+    try testing.expect(!std.meta.eql(yellow, shotPixel(&h, 50, 435)));
+    try testing.expect(h.server.timings.used[@backingInt(timing.Stage.marks)]);
+    // The foreground window's complete snapshot holds its password fields:
+    // no second scan.
+    try testing.expectEqual(@as(u32, 0), h.backend.secret_scans);
+}
+
+test "marks on a window other than the foreground one, or a partial tree, still scan the foreground's password fields" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    const other = try h.call("ui_tree", "{\"window\":\"0x5e6f\",\"marks\":true}");
+    try testing.expect(!t.isError(other));
+    try testing.expectEqual(@as(u32, 1), h.backend.secret_scans);
+    // e6's field is blacked out from the scan (no label: not in that tree).
+    try testing.expectEqual(black, shotPixel(&h, 60, 425));
+    h.backend.ui_partial = true;
+    _ = try h.call("ui_tree", "{\"marks\":true}");
+    try testing.expectEqual(@as(u32, 2), h.backend.secret_scans);
+}
+
+test "marks are drawn after the password field is blacked out" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    _ = try h.call("ui_tree", "{\"marks\":true}");
+    // e6 "Mot de passe" @50,420,200,15: its label at the corner, the rest
+    // of the field black.
+    try testing.expectEqual(yellow, shotPixel(&h, 50, 420));
+    try testing.expectEqual(black, shotPixel(&h, 200, 430));
+    try testing.expectEqual(black, shotPixel(&h, 249, 434));
+}
+
+test "the marked image is in screenshot space: zoom works on it and coordinates refer to it" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    _ = try h.call("ui_tree", "{\"marks\":true}");
+    try testing.expectEqual(@as(?usize, 0), h.server.session.current);
+    const z = try h.call("zoom", "{\"region\":[540,410,620,440]}");
+    try testing.expect(!t.isError(z));
+    try testing.expectEqualStrings("display=0 region=540,410,620,440 size=160x60", t.text(z));
+    // A click on the label's element lands on the element (scale 2).
+    const c = try h.call("left_click", "{\"coordinate\":[575,427],\"observe\":\"none\"}");
+    try testing.expect(!t.isError(c));
+    try testing.expectEqual([2]i32{ 1151, 855 }, h.backend.cursor);
+}
+
+test "a root without an actionable element: the image without labels and a note" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    const plain = [_]Element{
+        .{ .key = 1, .depth = 0, .role = .window, .name = "Lecture", .rect = .{ .x = 100, .y = 80, .w = 1200, .h = 800 } },
+        .{ .key = 2, .depth = 1, .role = .text, .name = "Rien à cliquer", .rect = .{ .x = 120, .y = 100, .w = 300, .h = 30 } },
+    };
+    h.backend.ui_elements = &plain;
+    const res = try h.call("ui_tree", "{\"marks\":true}");
+    try testing.expect(!t.isError(res));
+    try testing.expect(std.mem.endsWith(u8, t.text(res), "\nAucun élément actionnable à marquer"));
+    try testing.expectEqualStrings("image", t.block(res, 1).get("type").?.string);
+    try testing.expect(!std.meta.eql(yellow, shotPixel(&h, 60, 50)));
+}
+
+test "labels that would cover each other move one line down or are left out, and the text says how many" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    var els: [8]Element = undefined;
+    els[0] = .{ .key = 1, .depth = 0, .role = .window, .name = "Pile", .rect = .{ .x = 100, .y = 80, .w = 1200, .h = 800 } };
+    // Seven buttons sharing a corner: two labels fit, five are left out.
+    const names = [_][]const u8{ "Un", "Deux", "Trois", "Quatre", "Cinq", "Six", "Sept" };
+    for (names, 1..) |n, i| els[i] = .{ .key = 1 + i, .depth = 1, .role = .button, .name = n, .actions = .{ .invoke = true }, .rect = .{ .x = 400, .y = 400, .w = 200 - @as(i32, @intCast(i)) * 10, .h = 60 } };
+    h.backend.ui_elements = &els;
+    const res = try h.call("ui_tree", "{\"marks\":true}");
+    try t.expectContains(t.text(res), "\n… 5 étiquettes omises (place prise ou plus de 150)");
+    // At 200,200 in the image, then one line (12 px) lower.
+    try testing.expectEqual(yellow, shotPixel(&h, 200, 200));
+    try testing.expectEqual(yellow, shotPixel(&h, 200, 212));
+}
+
+test "ui_tree without marks returns text only, as before" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    const res = try h.call("ui_tree", "{\"marks\":false}");
+    try testing.expectEqual(@as(usize, 1), res.get("content").?.array.items.len);
+    try testing.expectEqual(@as(u32, 0), h.backend.capture_calls);
+}
+
+// ---------------------------------------------------------------- US-032
+
+test "a GDI capture says so on screenshot, zoom and marks" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.capture_source = .gdi;
+    const shot = try h.call("screenshot", "{\"display\":0}");
+    try testing.expect(!t.isError(shot));
+    try testing.expectEqualStrings("display=0 scale=2 size=1280x720 ; Capture GDI : les fenêtres protégées contre la capture apparaissent en noir", t.text(shot));
+    const z = try h.call("zoom", "{\"region\":[0,0,100,100]}");
+    try t.expectContains(t.text(z), " ; Capture GDI : les fenêtres protégées contre la capture apparaissent en noir");
+    const m = try h.call("ui_tree", "{\"marks\":true}");
+    try testing.expect(std.mem.endsWith(u8, t.text(m), "\nCapture GDI : les fenêtres protégées contre la capture apparaissent en noir"));
+}
+
+test "without dirty rects, two equal fingerprints 50 ms apart settle; a changing window times out" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.capture_source = .gdi;
+    const still = try h.call("left_click", "{\"coordinate\":[400,300]}");
+    try testing.expect(!t.isError(still));
+    try t.expectContains(t.text(still), "settled in ");
+    // Two captures: the first has nothing to compare with. Both copied the
+    // window's area only.
+    try testing.expectEqual(@as(u32, 2), h.backend.capture_calls);
+    try testing.expectEqual(@as(u32, 2), h.backend.gdi_area_looks);
+    h.backend.animating = true;
+    const busy = try h.call("left_click", "{\"coordinate\":[400,300],\"settle_timeout_ms\":300}");
+    try t.expectContains(t.text(busy), "settle timeout");
+}
+
+test "ui_find wait_ms under GDI does not search again on a still screen before the second" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.capture_source = .gdi;
+    const res = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":900}");
+    try testing.expect(t.isError(res));
+    // The first fingerprint is taken with the search: it is no change.
+    try testing.expectEqual(@as(u32, 1), h.backend.ui_snapshots);
+    // Every look copied the window's area, not the display.
+    try testing.expect(h.backend.capture_calls > 1);
+    try testing.expectEqual(h.backend.capture_calls, h.backend.gdi_area_looks);
+}
+
+test "ui_find wait_ms under GDI looks at a maximized window less often than at a small one" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.capture_source = .gdi;
+    _ = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":950}");
+    const small = h.backend.gdi_area_looks;
+    // The foreground window's root fills display 0 (2560x1440).
+    var maximized = fake.ui_fixture;
+    maximized[0].rect = .{ .x = 0, .y = 0, .w = 2560, .h = 1440 };
+    h.backend.ui_elements = &maximized;
+    h.backend.gdi_area_looks = 0;
+    _ = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":950}");
+    // One look with each search, then one per interval: fewer looks at the
+    // maximized window over the same wait.
+    try testing.expect(small >= 5);
+    try testing.expect(h.backend.gdi_area_looks < small);
+}
+
+test "ui_find wait_ms under GDI searches again on a new fingerprint" {
+    var h: t.Harness = .{};
+    h.init(testing.allocator);
+    defer h.deinit();
+    h.backend.capture_source = .gdi;
+    h.backend.appear_at_capture = 3;
+    h.backend.appear_elements = &with_late_button;
+    const t0 = timing.now(testing.io);
+    const res = try h.call("ui_find", "{\"query\":\"continuer\",\"wait_ms\":5000}");
+    const elapsed_ms = @divTrunc(timing.now(testing.io) - t0, std.time.ns_per_ms);
+    try testing.expect(!t.isError(res));
+    try t.expectContains(t.text(res), "button \"Continuer\"");
+    try testing.expect(elapsed_ms < 900);
 }

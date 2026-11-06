@@ -140,5 +140,13 @@
         "GetDriveTypeW",                              "DRIVE_REMOTE",                           "GetFullPathNameW",                           "GetEnvironmentVariableW",                   "AssocQueryStringW",
         "ASSOCSTR_EXECUTABLE",                        "ASSOCF_INIT_IGNOREUNKNOWN",              "GetExitCodeProcess",                         "STILL_ACTIVE",                              "ASSOCSTR_COMMAND",
         "GetLongPathNameW",                           "AssocIsDangerous",
+
+        // GDI capture when DXGI duplication fails (US-032)
+                              "GetDC",                                      "ReleaseDC",                                 "CreateCompatibleDC",
+        "DeleteDC",                                   "CreateDIBSection",                       "SelectObject",                               "BitBlt",                                    "GdiFlush",
+        "BITMAPINFO",                                 "BI_RGB",                                 "DIB_RGB_COLORS",                             "SRCCOPY",                                   "CAPTUREBLT",
+
+        // Server CPU in cycles for the selftest's wait budgets (US-030)
+        "QueryProcessCycleTime",                      "QueryThreadCycleTime",                   "GetCurrentThread",
     },
 }

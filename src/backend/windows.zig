@@ -37,15 +37,36 @@ pub const Windows = struct {
     /// Shell APIs on their own STA thread (EP-006).
     shell: shell_mod.Shell,
     kill: ?*hooks.KillSwitch = null,
+    /// GDI capture per display (US-032), and the displays whose duplication
+    /// Windows refuses for good (DXGI_ERROR_UNSUPPORTED).
+    gdi: [display.max_displays]capture_mod.Gdi = @splat(.{}),
+    gdi_only: [display.max_displays]bool = @splat(false),
+    /// Every capture goes through GDI (`--capture gdi`, the selftest and
+    /// bench `capture-gdi`).
+    force_gdi: bool = false,
+    /// Selftest only: DuplicateOutput fails with this HRESULT, and the
+    /// secure desktop is reported active, so the fallback paths run.
+    refuse_duplication: ?w.HRESULT = null,
+    pretend_secure: bool = false,
+
+    /// `--capture gdi`: backends created from now on capture through GDI.
+    pub var capture_mode: enum { auto, gdi } = .auto;
 
     pub fn init(gpa: std.mem.Allocator) Windows {
-        return .{ .gpa = gpa, .ui = .{ .gpa = gpa }, .shell = .init(gpa) };
+        return .{ .gpa = gpa, .ui = .{ .gpa = gpa }, .shell = .init(gpa), .force_gdi = capture_mode == .gdi };
+    }
+
+    /// Applies `--capture` (auto or gdi) to the backends created afterward.
+    pub fn setCaptureMode(name: []const u8) bool {
+        capture_mode = std.meta.stringToEnum(@TypeOf(capture_mode), name) orelse return false;
+        return true;
     }
 
     pub fn deinit(self: *Windows) void {
         self.stopKillSwitch();
         self.ui.deinit();
         self.shell.deinit();
+        for (&self.gdi) |*g| g.deinit();
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
     }
@@ -70,7 +91,7 @@ pub const Windows = struct {
             c.deinit(self.gpa);
             self.cap = null;
         }
-        self.cap = Capture.init(self.gpa) catch |err| {
+        self.cap = Capture.init(self.gpa, !self.force_gdi) catch |err| {
             std.debug.print("neo-compute: DXGI output enumeration failed: {t} hr=0x{x}\n", .{ err, com.lastHr() });
             return null;
         };
@@ -121,6 +142,21 @@ pub const Windows = struct {
     /// Latest frame of display `index`: a new one when the screen changed,
     /// the cached one otherwise, without waiting.
     pub fn capture(self: *Windows, index: usize, arena: std.mem.Allocator) display.CaptureResult {
+        return self.grab(index, arena, true, null);
+    }
+
+    /// What changed on display `index` since the last look, as `capture`
+    /// reports it but without the CPU copy of a new frame's pixels: the
+    /// frame's `pixels` are empty. Settling and ui_find's wait look at the
+    /// dirty rects only, so a busy screen elsewhere (a spinner) costs them a
+    /// GPU copy per look rather than about 2 ms of CPU (US-030). Under GDI
+    /// the look copies only `area` (the target window, desktop coordinates)
+    /// clipped to the display, the part a fingerprint reads (US-032).
+    pub fn changes(self: *Windows, index: usize, arena: std.mem.Allocator, area: ?display.Rect) display.CaptureResult {
+        return self.grab(index, arena, false, area);
+    }
+
+    fn grab(self: *Windows, index: usize, arena: std.mem.Allocator, read: bool, area: ?display.Rect) display.CaptureResult {
         // `failure` classifies by the HRESULT of this call only: a stale
         // E_ACCESSDENIED would turn an allocation failure into the
         // secure-desktop message.
@@ -128,20 +164,26 @@ pub const Windows = struct {
         const c = self.ensure() orelse return .{ .failed = if (capture_mod.secureDesktopActive()) secure_desktop_message else "DXGI indisponible : aucune sortie d'écran énumérée, réessaie." };
         if (index >= self.displays_len) return .{ .failed = fmt(arena, "Écran {d} déconnecté : refais un screenshot.", .{index}) };
         const o = &c.outputs.items[index];
+        if (self.force_gdi or self.gdi_only[index]) return self.gdiFrame(index, area);
         o.beginCapture();
-        if (o.dup == null) self.recreate(o) catch |err| return self.failure(arena, index, o, err);
-        const fresh = o.acquire(self.gpa, if (o.has_frame) 0 else 500) catch |err| switch (err) {
+        if (o.dup == null) self.recreate(o) catch |err| return self.failure(arena, index, o, err, true);
+        const fresh = o.acquire(self.gpa, if (o.has_frame) 0 else 500, read) catch |err| switch (err) {
             error.AccessLost => blk: {
                 // Mode change, UAC, exclusive full screen: recreate the
                 // duplication and try once more.
-                self.recreate(o) catch |e| return self.failure(arena, index, o, e);
-                break :blk o.acquire(self.gpa, 500) catch |e| return self.failure(arena, index, o, e);
+                self.recreate(o) catch |e| return self.failure(arena, index, o, e, true);
+                break :blk o.acquire(self.gpa, 500, read) catch |e| return self.failure(arena, index, o, e, false);
             },
-            else => return self.failure(arena, index, o, err),
+            else => return self.failure(arena, index, o, err, false),
         };
         if (!o.has_frame) return .{ .failed = "Capture réinitialisée : réessaie." };
+        // A look for changes left the newest frame on the GPU.
+        if (read and o.unread) {
+            o.readback() catch |err| return self.failure(arena, index, o, err, false);
+            o.unread = false;
+        }
         return .{ .frame = .{
-            .pixels = o.pixels,
+            .pixels = if (read) o.pixels else &.{},
             .width = o.width,
             .height = o.height,
             .stride = @as(usize, o.width) * 4,
@@ -153,7 +195,10 @@ pub const Windows = struct {
 
     /// Recreates a lost duplication; logs when it misses the 500 ms budget.
     fn recreate(self: *Windows, o: *capture_mod.Output) capture_mod.Error!void {
-        _ = self;
+        if (self.refuse_duplication) |hr| {
+            com.last_hr = hr;
+            return if (hr == w.DXGI_ERROR_UNSUPPORTED) error.Unsupported else error.ComCallFailed;
+        }
         var t0: i64 = 0;
         _ = w.QueryPerformanceCounter(&t0);
         try o.duplicate();
@@ -180,19 +225,78 @@ pub const Windows = struct {
         return @intCast(@divTrunc((t1 - t0) * 1_000_000, freq));
     }
 
-    fn failure(self: *Windows, arena: std.mem.Allocator, index: usize, o: *capture_mod.Output, err: capture_mod.Error) display.CaptureResult {
+    /// A failed duplication call. Windows refusing duplication for good
+    /// (DXGI_ERROR_UNSUPPORTED), or a duplication that cannot be recreated
+    /// (`recreating`, after DXGI_ERROR_ACCESS_LOST), falls back to GDI
+    /// (US-032); the secure desktop stays refused on both paths.
+    fn failure(self: *Windows, arena: std.mem.Allocator, index: usize, o: *capture_mod.Output, err: capture_mod.Error, recreating: bool) display.CaptureResult {
+        _ = arena;
         const hr = com.last_hr;
-        if (capture_mod.secureDesktopActive() or hr == w.E_ACCESSDENIED) return .{ .failed = secure_desktop_message };
-        if (err == error.Unsupported or hr == w.DXGI_ERROR_UNSUPPORTED)
-            return .{ .failed = fmt(arena, "Écran {d} ({s}, adaptateur {s}) : DXGI Desktop Duplication non supportée (DXGI_ERROR_UNSUPPORTED). Le repli Windows.Graphics.Capture n'est pas disponible en v1 : capture un autre écran.", .{ index, o.name(), o.adapterName() }) };
+        if (self.secure() or hr == w.E_ACCESSDENIED) return .{ .failed = secure_desktop_message };
         if (hr == w.DXGI_ERROR_SESSION_DISCONNECTED)
             return .{ .failed = "Session Windows inactive : capture impossible tant que la session n'est pas au premier plan" };
+        if (err == error.Unsupported or hr == w.DXGI_ERROR_UNSUPPORTED) {
+            if (!o.fallback_logged) std.debug.print("neo-compute: {s} (adapter {s}) refuses DXGI duplication (DXGI_ERROR_UNSUPPORTED): captured through GDI from now on\n", .{ o.name(), o.adapterName() });
+            o.fallback_logged = true;
+            self.gdi_only[index] = true;
+            return self.gdiFrame(index, null);
+        }
+        if (recreating) {
+            if (!o.fallback_logged) std.debug.print("neo-compute: duplication of {s} cannot be recreated ({t} hr=0x{x}): this capture goes through GDI\n", .{ o.name(), err, com.lastHr() });
+            o.fallback_logged = true;
+            return self.gdiFrame(index, null);
+        }
         // Device removed, driver reset or a stale output: start over on
         // the next call.
         std.debug.print("neo-compute: capture of {s} failed: {t} hr=0x{x}\n", .{ o.name(), err, com.lastHr() });
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
         return .{ .failed = "Capture réinitialisée : réessaie." };
+    }
+
+    fn secure(self: *const Windows) bool {
+        return self.pretend_secure or capture_mod.secureDesktopActive();
+    }
+
+    /// Selftest only: drops display `index`'s duplication, as an
+    /// ACCESS_LOST that the next capture must recover from.
+    pub fn dropDuplicationForTest(self: *Windows, index: usize) void {
+        const c = self.ensure() orelse return;
+        const o = &c.outputs.items[index];
+        if (o.dup) |d| com.release(d);
+        o.dup = null;
+    }
+
+    /// Whether display `index` is captured through GDI for good.
+    pub fn gdiOnly(self: *const Windows, index: usize) bool {
+        return self.gdi_only[index];
+    }
+
+    /// Display `index` through GDI (US-032), or only `area` (desktop
+    /// coordinates) clipped to it, the window a look for changes watches;
+    /// refused on the secure desktop like a duplication (Edge Case 7).
+    fn gdiFrame(self: *Windows, index: usize, area: ?display.Rect) display.CaptureResult {
+        if (self.secure()) return .{ .failed = secure_desktop_message };
+        const r = self.displays_buf[index].rect;
+        const part: display.Rect = if (area) |a| clip: {
+            const x0 = @max(a.x, r.x);
+            const y0 = @max(a.y, r.y);
+            const x1 = @min(a.right(), r.right());
+            const y1 = @min(a.bottom(), r.bottom());
+            break :clip if (x1 > x0 and y1 > y0) .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 } else r;
+        } else r;
+        const pixels = self.gdi[index].grab(r, part) catch {
+            std.debug.print("neo-compute: GDI capture of display {d} failed (error {d})\n", .{ index, w.GetLastError() });
+            return .{ .failed = "Capture GDI impossible : réessaie, ou vérifie que la session est au premier plan." };
+        };
+        return .{ .frame = .{
+            .pixels = pixels,
+            .width = @intCast(part.w),
+            .height = @intCast(part.h),
+            .stride = @as(usize, @intCast(r.w)) * 4,
+            .source = .gdi,
+            .area = if (area != null) part else null,
+        } };
     }
 
     // ------------------------------------------------------------ input
@@ -294,6 +398,12 @@ pub const Windows = struct {
     pub fn windowRef(self: *Windows, handle: u64) ?display.WindowRef {
         _ = self;
         return window.ref(handle);
+    }
+
+    /// Changes when a visible top-level window appears or goes (US-030).
+    pub fn topWindowStamp(self: *Windows) u64 {
+        _ = self;
+        return window.stamp();
     }
 
     pub fn processName(self: *Windows, arena: std.mem.Allocator, pid: u32) ?[]const u8 {
@@ -498,6 +608,9 @@ pub const Windows = struct {
     pub const selftest = @import("windows/selftest.zig").run;
     /// `selftest-stall`: the out-of-process provider the selftest times out on.
     pub const stallProvider = @import("windows/stall_provider.zig").run;
+    /// `selftest-still`: the still window of another process the selftest
+    /// times ui_find's GDI wait on.
+    pub const stillWindow = @import("windows/still_window.zig").run;
 
     pub fn benchScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name: []const u8, iterations: ?usize) !bench.Outcome {
         return @import("windows/bench.zig").run(gpa, io, counter, name, iterations);

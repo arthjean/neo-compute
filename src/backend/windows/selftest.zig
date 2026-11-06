@@ -12,6 +12,7 @@ const uitree = @import("../../core/uitree.zig");
 const TestWindow = @import("test_window.zig").TestWindow;
 const test_window = @import("test_window.zig");
 const stall_provider = @import("stall_provider.zig");
+const still_window = @import("still_window.zig");
 const Windows = @import("../windows.zig").Windows;
 const mcp = @import("../../core/mcp.zig");
 const tools = @import("../../core/tools.zig");
@@ -113,9 +114,153 @@ fn monitorDpi(x: i32, y: i32) u32 {
     return dx;
 }
 
+const gdi_skip = "GDI capture forced (--capture gdi): this check is for DXGI duplication";
+
+/// The GDI fallback (US-032) on a backend forced to it: its frames show the
+/// test window, the screenshot says it is a GDI capture, settling compares
+/// fingerprints, and ui_find's wait sees a new button.
+fn gdiChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: std.mem.Allocator, main: *Windows, tw: *TestWindow, primary: display.Rect, probe: [2]i32) !void {
+    var gb: Windows = .init(gpa);
+    defer gb.deinit();
+    gb.force_gdi = true;
+    if (gb.displays().len == 0) return report.fail("capture-gdi", "no display enumerated", .{});
+    // capture-gdi: the PRD budget is a p95 (< 40 ms), the second slowest
+    // of 20 here. The slowest alone is not judged: BitBlt waits on DWM's
+    // readback for about two thirds of a call, and under load that wait
+    // reached 101 ms while the thread's own CPU stayed at 6 ms. That CPU
+    // has a budget of its own, which machine load barely moves (12.5 ms at
+    // most over 4000 calls with every core busy), also taken at p95.
+    const per_us = cyclesPerUs();
+    var walls: [20]u64 = undefined;
+    var cpus: [20]u64 = undefined;
+    var shows = false;
+    var source: display.Frame.Source = .dxgi;
+    for (&walls, &cpus) |*wall, *cpu| {
+        var c0: u64 = 0;
+        _ = w.QueryThreadCycleTime(w.GetCurrentThread(), &c0);
+        const t0 = qpcUs();
+        const r = gb.capture(0, arena);
+        wall.* = qpcUs() - t0;
+        var c1: u64 = 0;
+        _ = w.QueryThreadCycleTime(w.GetCurrentThread(), &c1);
+        cpu.* = @intFromFloat(@as(f64, @floatFromInt(c1 - c0)) / per_us);
+        switch (r) {
+            .failed => |msg| return report.fail("capture-gdi", "{s}", .{msg}),
+            .frame => |f| {
+                source = f.source;
+                const i = (@as(usize, @intCast(probe[1] - primary.y)) * f.width + @as(usize, @intCast(probe[0] - primary.x))) * 4;
+                shows = isColor(f.pixels[i..][0..4].*, test_window.magenta);
+            },
+        }
+    }
+    std.mem.sort(u64, &walls, {}, std.sort.asc(u64));
+    std.mem.sort(u64, &cpus, {}, std.sort.asc(u64));
+    const p95 = walls[walls.len - 2];
+    const cpu_p95 = cpus[cpus.len - 2];
+    if (shows and source == .gdi and p95 < 40_000 and cpu_p95 < 15_000)
+        report.ok("capture-gdi", "{d}x{d} BitBlt frames show the test window, p95 {d} us (budget 40000 us), CPU per call p95 {d} us (budget 15000 us), slowest {d} us", .{ primary.w, primary.h, p95, cpu_p95, walls[walls.len - 1] })
+    else
+        report.fail("capture-gdi", "window color {}, source {t}, p95 {d} us (budget 40000 us), CPU per call p95 {d} us (budget 15000 us), slowest {d} us", .{ shows, source, p95, cpu_p95, walls[walls.len - 1] });
+
+    // changes-gdi: a look for changes copies the window's area only, and
+    // its pixels are that area's.
+    {
+        var wr: w.RECT = undefined;
+        _ = w.GetWindowRect(tw.window(), &wr);
+        const area: display.Rect = .{ .x = wr.left, .y = wr.top, .w = wr.right - wr.left, .h = wr.bottom - wr.top };
+        // Medians on both sides, for the same reason as above.
+        var area_walls: [20]u64 = undefined;
+        var part: ?display.Frame = null;
+        for (&area_walls) |*wall| {
+            const t0 = qpcUs();
+            const r = gb.changes(0, arena, area);
+            wall.* = qpcUs() - t0;
+            part = if (r == .frame) r.frame else null;
+        }
+        std.mem.sort(u64, &area_walls, {}, std.sort.asc(u64));
+        const median = area_walls[area_walls.len / 2];
+        const whole = walls[walls.len / 2];
+        const ok = if (part) |f| f.area != null and f.width == area.w and f.height == area.h and
+            isColor(f.pixels[@as(usize, @intCast(probe[1] - area.y)) * f.stride + @as(usize, @intCast(probe[0] - area.x)) * 4 ..][0..4].*, test_window.magenta) else false;
+        if (ok and median < whole) report.ok("changes-gdi", "{d}x{d} window area copied in {d} us median (whole display {d} us)", .{ area.w, area.h, median, whole }) else report.fail("changes-gdi", "area frame {any}, median {d} us (whole display {d} us)", .{ part != null, median, whole });
+    }
+
+    // capture-fallback: on the selftest's own backend (a process holds one
+    // duplication per output), a duplication that cannot be recreated after
+    // a loss uses GDI for that capture only; DXGI_ERROR_UNSUPPORTED turns
+    // the display to GDI for good; the secure desktop refuses the GDI path
+    // too. The backend is put back on DXGI afterward.
+    if (Windows.capture_mode == .gdi) report.skip("capture-fallback", "{s}", .{gdi_skip}) else {
+        const sourceOf = struct {
+            fn f(r: display.CaptureResult) ?display.Frame.Source {
+                return if (r == .frame) r.frame.source else null;
+            }
+        }.f;
+        // DXGI_ERROR_NOT_CURRENTLY_AVAILABLE: too many duplications.
+        main.refuse_duplication = @bitCast(@as(u32, 0x887A0022));
+        main.dropDuplicationForTest(0);
+        const lost = sourceOf(main.capture(0, arena));
+        main.refuse_duplication = null;
+        const recovered = sourceOf(main.capture(0, arena));
+        const transient = !main.gdiOnly(0);
+        main.refuse_duplication = w.DXGI_ERROR_UNSUPPORTED;
+        main.dropDuplicationForTest(0);
+        const unsupported = sourceOf(main.capture(0, arena));
+        main.refuse_duplication = null;
+        const sticky = sourceOf(main.capture(0, arena));
+        const for_good = main.gdiOnly(0);
+        main.pretend_secure = true;
+        const refused = main.capture(0, arena);
+        main.pretend_secure = false;
+        main.gdi_only[0] = false;
+        main.dropDuplicationForTest(0);
+        const back = sourceOf(main.capture(0, arena));
+        const secure_msg = @import("../windows.zig").secure_desktop_message;
+        const secure_ok = refused == .failed and std.mem.eql(u8, refused.failed, secure_msg);
+        if (lost == .gdi and recovered == .dxgi and transient and unsupported == .gdi and sticky == .gdi and for_good and secure_ok and back == .dxgi)
+            report.ok("capture-fallback", "UNSUPPORTED: GDI for good; recreation refused after a loss: GDI once, then DXGI; secure desktop: `{s}`", .{refused.failed})
+        else
+            report.fail("capture-fallback", "lost {?t} then {?t}, unsupported {?t} then {?t} (for good {}), secure refused {}, back to {?t}", .{ lost, recovered, unsupported, sticky, for_good, secure_ok, back });
+    }
+
+    var server: Server = .init(gpa, io, &gb, .{});
+    defer server.deinit();
+    var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
+    defer caller.out.deinit();
+    const shot = try caller.call("screenshot", "{{\"display\":0}}", .{});
+    const note = @import("../../core/screen.zig").gdi_note;
+    if (!shot.is_error and shot.image_mime != null and std.mem.indexOf(u8, shot.text, note) != null) report.ok("screenshot-gdi", "`{s}`", .{shot.text}) else report.fail("screenshot-gdi", "{s}", .{shot.text});
+
+    // A click on the still window settles on two equal fingerprints; a
+    // window repainting every 15 ms reaches the settle timeout.
+    _ = w.SetForegroundWindow(tw.window());
+    const m = display.Mapping.of(0, primary, display.default_long_side);
+    const c = m.toScreenshot(probe[0], probe[1]);
+    const still = try caller.call("left_click", "{{\"coordinate\":[{d},{d}]}}", .{ c[0], c[1] });
+    tw.animateRamp(true);
+    w.Sleep(50);
+    const busy = try caller.call("mouse_move", "{{\"coordinate\":[{d},{d}],\"settle_timeout_ms\":400}}", .{ c[0], c[1] });
+    tw.animateRamp(false);
+    w.Sleep(100);
+    const settled = std.mem.indexOf(u8, still.text, "settled in ") != null;
+    const timed_out = std.mem.indexOf(u8, busy.text, "settle timeout") != null;
+    if (settled and timed_out) report.ok("settle-gdi", "still window: `{s}`; animated window: settle timeout", .{std.mem.sliceTo(still.text, '\n')}) else report.fail("settle-gdi", "still: {s}\nanimated: {s}", .{ still.text, busy.text });
+
+    // ui_find's wait sees the button through a new fingerprint.
+    tw.lateButton(800);
+    const t0 = qpcUs();
+    const late = try caller.call("ui_find", "{{\"query\":\"{s}\",\"window\":\"0x{x}\",\"wait_ms\":3000}}", .{ test_window.late_label, @intFromPtr(tw.window()) });
+    const late_ms = (qpcUs() - t0) / 1000;
+    tw.removeLateButton();
+    w.Sleep(100);
+    if (!late.is_error and std.mem.startsWith(u8, late.text, "found after ") and late_ms < 1100) report.ok("ui-find-wait-gdi", "button created at 800 ms found in {d} ms through fingerprints", .{late_ms}) else report.fail("ui-find-wait-gdi", "{d} ms: {s}", .{ late_ms, late.text });
+}
+
 /// Runs every subtest; returns null when all pass.
-pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8 {
+pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, log: *std.Io.Writer) !?[]const u8 {
     var report: Report = .{ .log = log };
+    const gdi_forced = Windows.capture_mode == .gdi;
+    if (gdi_forced) log.print("selftest: every capture goes through GDI (--capture gdi)\n", .{}) catch {};
 
     // DPI awareness must be per-monitor v2 so Win32, DXGI and UIA all speak
     // physical pixels.
@@ -186,7 +331,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
     }
 
     // capture-cache: an unchanged screen is served without waiting.
-    {
+    if (gdi_forced) report.skip("capture-cache", "{s}", .{gdi_skip}) else {
         var worst: u64 = 0;
         var cached: u32 = 0;
         for (0..20) |_| {
@@ -199,7 +344,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
     }
 
     // capture-dirty: a repaint shows up as a dirty rect over the window.
-    {
+    if (gdi_forced) report.skip("capture-dirty", "{s}", .{gdi_skip}) else {
         const win: display.Rect = .{ .x = wr.left, .y = wr.top, .w = wr.right - wr.left, .h = wr.bottom - wr.top };
         tw.setColor(test_window.cyan);
         var hit = false;
@@ -224,6 +369,39 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
         if (hit and recolored) report.ok("capture-dirty", "repaint seen with a dirty rect over the window", .{}) else report.fail("capture-dirty", "dirty rect over the window: {}, new color captured: {}", .{ hit, recolored });
     }
 
+    // capture-changes (US-030): a look for changes sees the repaint's dirty
+    // rect without reading the frame back, and the next capture still
+    // returns that newest frame.
+    if (gdi_forced) report.skip("capture-changes", "{s}", .{gdi_skip}) else {
+        const win: display.Rect = .{ .x = wr.left, .y = wr.top, .w = wr.right - wr.left, .h = wr.bottom - wr.top };
+        tw.setColor(test_window.cyan);
+        var hit = false;
+        var tries: u32 = 0;
+        while (tries < 60 and !hit) : (tries += 1) {
+            w.Sleep(16);
+            switch (backend.changes(0, arena, null)) {
+                .failed => {},
+                .frame => |f| for (f.dirty) |d| if (d.intersects(win)) {
+                    hit = true;
+                },
+            }
+        }
+        w.Sleep(50);
+        _ = backend.changes(0, arena, null);
+        var recolored = false;
+        switch (backend.capture(0, arena)) {
+            .failed => {},
+            .frame => |f| {
+                const i = (@as(usize, @intCast(probe_y - primary.y)) * f.width + @as(usize, @intCast(probe_x - primary.x))) * 4;
+                recolored = isColor(f.pixels[i..][0..4].*, test_window.cyan);
+            },
+        }
+        tw.setColor(test_window.magenta);
+        w.Sleep(100);
+        _ = backend.capture(0, arena);
+        if (hit and recolored) report.ok("capture-changes", "dirty rect seen without readback, next capture shows the new color", .{}) else report.fail("capture-changes", "dirty rect seen: {}, next capture shows the new color: {}", .{ hit, recolored });
+    }
+
     // access-lost: the recovery path recreates the duplication in < 500 ms
     // and the next capture succeeds.
     {
@@ -236,6 +414,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
             if (t < 500_000 and after == .frame) report.ok("access-lost", "duplication recreated in {d} us, next capture ok", .{t}) else report.fail("access-lost", "recreated in {d} us, next capture {s}", .{ t, if (after == .frame) "ok" else after.failed });
         }
     }
+
+    // capture-gdi, screenshot-gdi, settle-gdi, ui-find-wait-gdi (US-032):
+    // the GDI fallback on a backend forced to it.
+    gdiChecks(&report, gpa, io, arena, &backend, &tw, primary, .{ probe_x, probe_y }) catch |err| report.fail("capture-gdi", "{t}", .{err});
 
     // screenshot: the tool returns a JPEG and its mapping.
     {
@@ -396,6 +578,12 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, log: *std.Io.Writer) !?[]const u8
     }
 
     uiChecks(&report, &caller, &backend, &tw) catch |err| report.fail("ui", "{t}", .{err});
+    // ui-find-wait-cpu (US-030): the capture of this run, DXGI unless
+    // --capture gdi. ui-find-wait-cpu-gdi (US-032): GDI on a window that
+    // fills display 0, each look copying and fingerprinting all of it (a
+    // Debug fingerprint once cost 11.5 ms per look, 8 % of a core).
+    stillWaitCheck(io, env, &report, arena, "ui-find-wait-cpu", .{ .x = primary.x + 40, .y = primary.y + 40, .w = 480, .h = 320 }, if (gdi_forced) "gdi" else "auto");
+    stillWaitCheck(io, env, &report, arena, "ui-find-wait-cpu-gdi", primary, "gdi");
     rangeTimeoutCheck(io, &report, &caller, &backend, arena);
 
     // windows: window_list reports the test window; window_focus restores it.
@@ -628,6 +816,59 @@ fn uiChecks(report: *Report, caller: *Caller, backend: *Windows, tw: *TestWindow
     const found = try caller.call("ui_find", "{{\"query\":\"role:button SELFTEST\",\"window\":\"0x{x}\"}}", .{handle});
     if (!found.is_error and std.mem.indexOf(u8, found.text, button_line) != null) report.ok("ui-find", "role:button SELFTEST finds {s}", .{id}) else report.fail("ui-find", "{s}", .{found.text});
 
+    // ui-find-wait (US-030): a button created 800 ms into the call is found
+    // in under 900 ms; a 5 s wait on a still window costs under 5 % of a
+    // core.
+    {
+        tw.lateButton(800);
+        const t0 = qpcUs();
+        const late = try caller.call("ui_find", "{{\"query\":\"{s}\",\"window\":\"0x{x}\",\"wait_ms\":3000}}", .{ test_window.late_label, handle });
+        const late_ms = (qpcUs() - t0) / 1000;
+        tw.removeLateButton();
+        const headed = std.mem.startsWith(u8, late.text, "found after ");
+        // Forced GDI looks every 100 ms: the 900 ms bound is DXGI's.
+        const bound: u64 = if (Windows.capture_mode == .gdi) 1100 else 900;
+        if (!late.is_error and headed and std.mem.indexOf(u8, late.text, "button \"" ++ test_window.late_label ++ "\"") != null and late_ms < bound and late_ms >= 800)
+            report.ok("ui-find-wait", "button created at 800 ms found in {d} ms: `{s}`", .{ late_ms, std.mem.sliceTo(late.text, '\n') })
+        else
+            report.fail("ui-find-wait", "found in {d} ms (want 800..{d}), error={}: {s}", .{ late_ms, bound, late.is_error, late.text });
+        w.Sleep(100);
+    }
+    // ui-marks (US-031): ui_tree marks returns the tree and the screenshot
+    // of display 0 with the button's id drawn at its corner over the masked
+    // password field's neighbor; that id invokes the button.
+    {
+        const marked = try caller.call("ui_tree", "{{\"window\":\"0x{x}\",\"marks\":true}}", .{handle});
+        const mark_id = idOf(marked.text, button_line);
+        var br: w.RECT = undefined;
+        _ = w.GetWindowRect(tw.buttonWindow(), &br);
+        var pr: w.RECT = undefined;
+        _ = w.GetWindowRect(tw.passwordWindow(), &pr);
+        const m = display.Mapping.of(0, backend.displays()[0].rect, display.default_long_side);
+        const out = caller.server.session.reducer.out;
+        const px = struct {
+            fn at(buf: []const u8, mm: display.Mapping, x: i32, y: i32) [4]u8 {
+                const p = mm.toScreenshot(x, y);
+                return buf[(@as(usize, @intCast(p[1])) * mm.width + @as(usize, @intCast(p[0]))) * 4 ..][0..4].*;
+            }
+        }.at;
+        const corner = px(out, m, br.left, br.top);
+        const field = px(out, m, pr.right - 4, pr.bottom - 4);
+        const labeled = corner[0] < 40 and corner[1] > 200 and corner[2] > 200;
+        const masked = field[0] < 16 and field[1] < 16 and field[2] < 16;
+        const before_marks = tw.commandCount();
+        const acted = if (mark_id) |mid| try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{mid}) else null;
+        const clicked = waitFor(struct {
+            fn f(t: *TestWindow, n: u32) bool {
+                return t.commandCount() > n;
+            }
+        }.f, .{ tw, before_marks }, 1000);
+        if (!marked.is_error and marked.image_mime != null and labeled and masked and acted != null and !acted.?.is_error and clicked and std.mem.indexOf(u8, marked.text, test_window.secret) == null)
+            report.ok("ui-marks", "{s} drawn at the button's corner (BGRA {any}), password field black, `{s}`", .{ mark_id.?, corner, acted.?.text })
+        else
+            report.fail("ui-marks", "image={?s} label at corner={} (BGRA {any}) field masked={} id={?s} invoked={}", .{ marked.image_mime, labeled, corner, masked, mark_id, clicked });
+    }
+
     // ui-act: Invoke reaches the button as BN_CLICKED, without coordinates.
     const before = tw.commandCount();
     const invoked = try caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{id});
@@ -717,14 +958,17 @@ fn uiChecks(report: *Report, caller: *Caller, backend: *Windows, tw: *TestWindow
         const m = display.Mapping.of(0, backend.displays()[0].rect, display.default_long_side);
         const c = m.toScreenshot(wr.left + 300, wr.top + 200);
         const still = try caller.call("left_click", "{{\"coordinate\":[{d},{d}]}}", .{ c[0], c[1] });
-        tw.animate(true);
+        // Two alternating colors can look still to fingerprints taken 50 ms
+        // apart: under forced GDI the window takes a new color each frame.
+        const gdi = Windows.capture_mode == .gdi;
+        if (gdi) tw.animateRamp(true) else tw.animate(true);
         w.Sleep(50);
         const t0 = qpcUs();
         const busy = try caller.call("left_click", "{{\"coordinate\":[{d},{d}],\"settle_timeout_ms\":300,\"observe\":\"none\"}}", .{ c[0], c[1] });
         _ = busy;
         const busy2 = try caller.call("mouse_move", "{{\"coordinate\":[{d},{d}],\"settle_timeout_ms\":300}}", .{ c[0], c[1] });
         const busy_ms = (qpcUs() - t0) / 1000;
-        tw.animate(false);
+        if (gdi) tw.animateRamp(false) else tw.animate(false);
         w.Sleep(100);
         const settled = std.mem.indexOf(u8, still.text, "settled in ") != null and std.mem.indexOf(u8, still.text, "window=0x") != null;
         const timed_out = !busy2.is_error and std.mem.indexOf(u8, busy2.text, "settle timeout") != null;
@@ -1025,6 +1269,109 @@ fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: st
         else
             report.fail("hook-reinstall", "reinstalls {d} -> {d}, hooks live {}", .{ before, after, live });
     }
+}
+
+/// ui-find-wait-cpu (US-030): a 5 s ui_find wait without change on a still
+/// window over `rect` costs the server under 5 % of a core. Both sides are
+/// processes of their own, as in real use: the window (`selftest-still`)
+/// and a `neo-compute --capture <capture>` server driven over stdio, whose
+/// CPU alone is counted, in cycles. Measured on this process instead, the
+/// test window's UIA provider, the UIA worker and the 15.6 ms ticks of
+/// GetProcessTimes made the same wait read 0.9 to 5.3 %. The server's
+/// policy and audit log go to a scratch directory, not the user's.
+fn stillWaitCheck(io: std.Io, env: *const std.process.Environ.Map, report: *Report, arena: std.mem.Allocator, name: []const u8, rect: display.Rect, capture: []const u8) void {
+    const measured = cpuOfWait(io, env, arena, rect, capture) catch |err| return report.fail(name, "{t}", .{err});
+    const m = switch (measured) {
+        .ok => |m| m,
+        .failed => |why| return report.fail(name, "{s}", .{why}),
+    };
+    const percent = @as(f64, @floatFromInt(m.cpu_us)) * 100 / @as(f64, @floatFromInt(@max(m.wall_us, 1)));
+    const expected = "Aucun élément « neo-compute absent element » après 5000 ms : vérifie la requête ou augmente wait_ms";
+    const answered = std.mem.indexOf(u8, m.response, "\"isError\":true") != null and std.mem.indexOf(u8, m.response, expected) != null;
+    if (answered and m.placed and percent < 5)
+        report.ok(name, "5 s wait without change on a {d}x{d} window, server --capture {s} in a process of its own: {d:.2} % of a core ({d} us CPU over {d} ms)", .{ rect.w, rect.h, capture, percent, m.cpu_us, m.wall_us / 1000 })
+    else
+        report.fail(name, "{d}x{d} window placed={}, --capture {s}: {d:.2} % of a core (budget 5 %), response `{s}`", .{ rect.w, rect.h, m.placed, capture, percent, m.response });
+}
+
+const Wait = union(enum) {
+    ok: struct { cpu_us: u64, wall_us: u64, placed: bool, response: []const u8 },
+    failed: []const u8,
+};
+
+fn rpc(wr: *std.Io.File.Writer, rd: *std.Io.File.Reader, line: []const u8, answer: bool) ![]const u8 {
+    try wr.interface.writeAll(line);
+    try wr.interface.flush();
+    if (!answer) return "";
+    return (try rd.interface.takeDelimiter('\n')) orelse error.NoResponse;
+}
+
+fn cpuOfWait(io: std.Io, env: *const std.process.Environ.Map, arena: std.mem.Allocator, rect: display.Rect, capture: []const u8) !Wait {
+    var path_w: [1024:0]u16 = undefined;
+    const n = w.GetModuleFileNameW(null, &path_w, path_w.len);
+    const path = try arena.alloc(u8, n * 3);
+    const exe = path[0..std.unicode.wtf16LeToWtf8(path, path_w[0..n])];
+
+    var rect_args: [4][16]u8 = undefined;
+    var still_argv: [6][]const u8 = .{ exe, "selftest-still", "", "", "", "" };
+    for ([_]i32{ rect.x, rect.y, rect.w, rect.h }, &rect_args, still_argv[2..]) |v, *buf, *arg| arg.* = try std.fmt.bufPrint(buf, "{d}", .{v});
+    var still = try std.process.spawn(io, .{ .argv = &still_argv, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore });
+    defer still.kill(io);
+    var hwnd: w.HWND = null;
+    var waited: u32 = 0;
+    while (waited < 3000) : (waited += 20) {
+        hwnd = w.FindWindowW(std.unicode.utf8ToUtf16LeStringLiteral(still_window.class_name), null);
+        if (hwnd != null) break;
+        w.Sleep(20);
+    }
+    if (hwnd == null) return .{ .failed = "no selftest-still window after 3 s" };
+    w.Sleep(300);
+    var r: w.RECT = undefined;
+    _ = w.GetWindowRect(hwnd, &r);
+    const placed = r.left == rect.x and r.top == rect.y and r.right - r.left == rect.w and r.bottom - r.top == rect.h;
+
+    // The server's policy.json and audit.jsonl in a scratch directory.
+    const temp = env.get("TEMP") orelse return .{ .failed = "TEMP is not set: no scratch directory for the server" };
+    const home = try std.fs.path.join(arena, &.{ temp, "neo-compute-selftest-cpu" });
+    try std.Io.Dir.cwd().createDirPath(io, home);
+    defer std.Io.Dir.cwd().deleteTree(io, home) catch {};
+    var server_env = try env.clone(arena);
+    try server_env.put("APPDATA", home);
+    try server_env.put("LOCALAPPDATA", home);
+    var server = try std.process.spawn(io, .{ .argv = &.{ exe, "--capture", capture }, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore, .environ_map = &server_env });
+    defer server.kill(io);
+    var wbuf: [1024]u8 = undefined;
+    var sw = server.stdin.?.writerStreaming(io, &wbuf);
+    var rbuf: [16 * 1024]u8 = undefined;
+    var sr = server.stdout.?.readerStreaming(io, &rbuf);
+    _ = try rpc(&sw, &sr, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"selftest\",\"version\":\"0\"}}}\n", true);
+    _ = try rpc(&sw, &sr, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n", false);
+    const call = "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_find\",\"arguments\":{{\"query\":\"neo-compute absent element\",\"window\":\"0x{x}\",\"wait_ms\":{d}}}}}}}\n";
+    var line_buf: [256]u8 = undefined;
+    // Not measured: the server's first UIA and capture setup.
+    _ = try rpc(&sw, &sr, try std.fmt.bufPrint(&line_buf, call, .{ 2, @intFromPtr(hwnd), 800 }), true);
+
+    const per_us = cyclesPerUs();
+    var c0: u64 = 0;
+    if (w.QueryProcessCycleTime(server.id.?, &c0) == 0) return .{ .failed = "QueryProcessCycleTime failed on the server process" };
+    const t0 = qpcUs();
+    const response = try arena.dupe(u8, try rpc(&sw, &sr, try std.fmt.bufPrint(&line_buf, call, .{ 3, @intFromPtr(hwnd), 5000 }), true));
+    const wall = qpcUs() - t0;
+    var c1: u64 = 0;
+    if (w.QueryProcessCycleTime(server.id.?, &c1) == 0) return .{ .failed = "QueryProcessCycleTime failed on the server process" };
+    return .{ .ok = .{ .cpu_us = @intFromFloat(@as(f64, @floatFromInt(c1 - c0)) / per_us), .wall_us = wall, .placed = placed, .response = response } };
+}
+
+/// Cycles per microsecond of the counter QueryProcessCycleTime reads,
+/// against QueryPerformanceCounter over a 100 ms busy loop of this thread.
+fn cyclesPerUs() f64 {
+    var c0: u64 = 0;
+    _ = w.QueryThreadCycleTime(w.GetCurrentThread(), &c0);
+    const t0 = qpcUs();
+    while (qpcUs() - t0 < 100_000) {}
+    var c1: u64 = 0;
+    _ = w.QueryThreadCycleTime(w.GetCurrentThread(), &c1);
+    return @as(f64, @floatFromInt(c1 - c0)) / @as(f64, @floatFromInt(qpcUs() - t0));
 }
 
 /// ui-range-timeout (US-022): a slider whose provider, in a process of its

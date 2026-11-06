@@ -1,9 +1,11 @@
 //! Windows bench scenarios. `capture` measures the DXGI path the tools use
-//! (backend.capture of the primary display), `snapshot` the UIA worker's
+//! (backend.capture of the primary display), `capture-gdi` its GDI fallback
+//! (US-032), `snapshot` the UIA worker's
 //! snapshot of the taskbar, and `screenshot`, `window_list` and `ui_tree`
 //! run the real tools through the dispatcher (`tools/call` in, JSON-RPC line
 //! out). `settle` times an action's wait for a still test window apart from
-//! its observation (US-015). The application scenarios (`notepad` ... `vscode`) open their
+//! its observation (US-015), `marks` ui_tree with its marked screenshot
+//! on a test window (US-031). The application scenarios (`notepad` ... `vscode`) open their
 //! reference application, time ui_tree on it and close what they opened.
 
 const std = @import("std");
@@ -19,6 +21,7 @@ const Windows = @import("../windows.zig").Windows;
 const display = @import("../../core/display.zig");
 const window = @import("window.zig");
 const TestWindow = @import("test_window.zig").TestWindow;
+const still_window = @import("still_window.zig");
 
 const CaptureScenario = struct {
     pub const default_iterations = 300;
@@ -150,7 +153,9 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
     const counted = counter.allocator();
     var backend: Windows = .init(counted);
     defer backend.deinit();
-    if (std.mem.eql(u8, name, "capture") or std.mem.eql(u8, name, "screenshot")) {
+    // US-032: the GDI fallback of the same capture.
+    if (std.mem.eql(u8, name, "capture-gdi")) backend.force_gdi = true;
+    if (std.mem.eql(u8, name, "capture") or std.mem.eql(u8, name, "capture-gdi") or std.mem.eql(u8, name, "screenshot")) {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         defer arena.deinit();
         switch (backend.capture(0, arena.allocator())) {
@@ -158,12 +163,27 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
             .failed => |msg| return unsupported(gpa, "primary display capture unavailable: {s}", .{msg}),
         }
     }
-    if (std.mem.eql(u8, name, "capture")) {
+    if (std.mem.eql(u8, name, "capture") or std.mem.eql(u8, name, "capture-gdi")) {
         var s: CaptureScenario = .{ .io = io, .backend = &backend, .arena = .init(gpa) };
         defer s.arena.deinit();
         return bench.measure(gpa, io, &s, iterations orelse CaptureScenario.default_iterations, counter);
     }
     if (std.mem.eql(u8, name, "screenshot")) {
+        // The mask stage waits for the password scan of the foreground
+        // window (US-019): with whatever Arthur has in front it measured
+        // that application (0.9 ms for a plain window, 7.7 ms for Chrome,
+        // 110 ms for a heavy page). The scenario puts a still window with a
+        // password field in the foreground, in a process of its own like a
+        // real application (`selftest-still`): an in-process window's
+        // provider answers on this process's threads, 6 ms per scan.
+        const displays = backend.displays();
+        if (displays.len == 0) return unsupported(gpa, "screenshot: no display enumerated", .{});
+        const d = displays[0].rect;
+        var still = StillWindow.start(io, .{ .x = d.x + 40, .y = d.y + 40, .w = 480, .h = 320 }) catch return unsupported(gpa, "screenshot: selftest-still window cannot be started", .{});
+        defer still.stop(io);
+        _ = window.focus(@intFromPtr(still.hwnd));
+        w.Sleep(200);
+        if (w.GetForegroundWindow() != still.hwnd) std.debug.print("bench: screenshot: the still window is not in the foreground, the mask stage measures another application\n", .{});
         // Display 0 is the primary display (native resolution to 1280 px).
         return runTool(gpa, io, counter, &backend, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"display\":0}}}", iterations orelse 200);
     }
@@ -221,6 +241,31 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
         var buf: [160]u8 = undefined;
         const line = try std.fmt.bufPrint(&buf, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"window_focus\",\"arguments\":{{\"window\":\"0x{x}\",\"observe\":\"delta\"}}}}}}", .{@intFromPtr(tw.window())});
         return runTool(gpa, io, counter, &backend, line, iterations orelse 30);
+    }
+    if (std.mem.eql(u8, name, "marks")) {
+        // US-031: ui_tree marks on a test window this scenario creates on
+        // display 0. What marks adds to the tree must stay within 8 ms of
+        // a screenshot of display 0: the witness is ui_tree without marks on
+        // the same window, timed before and after the series.
+        const displays = backend.displays();
+        if (displays.len == 0) return unsupported(gpa, "marks: no display enumerated", .{});
+        const d = displays[0].rect;
+        var tw: TestWindow = .{ .rect = .{ .left = d.x + 40, .top = d.y + 40, .right = d.x + 520, .bottom = d.y + 360 } };
+        tw.start() catch return unsupported(gpa, "marks: test window cannot be created", .{});
+        defer tw.stop();
+        _ = window.focus(@intFromPtr(tw.window()));
+        w.Sleep(200);
+        const n = iterations orelse 200;
+        const fmt_line = "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_tree\",\"arguments\":{{\"window\":\"0x{x}\",\"marks\":{}}}}}}}";
+        var buf: [160]u8 = undefined;
+        const plain = try std.fmt.bufPrint(&buf, fmt_line, .{ @intFromPtr(tw.window()), false });
+        const before = try runTool(gpa, io, counter, &backend, plain, n);
+        var marked_buf: [160]u8 = undefined;
+        const line = try std.fmt.bufPrint(&marked_buf, fmt_line, .{ @intFromPtr(tw.window()), true });
+        var outcome = try runTool(gpa, io, counter, &backend, line, n);
+        const after = try runTool(gpa, io, counter, &backend, plain, n);
+        setWitness(&outcome, totalP95(before), totalP95(after));
+        return outcome;
     }
     if (std.mem.eql(u8, name, "window_set")) return windowSetScenario(gpa, io, counter, &backend, iterations orelse 100);
     if (std.mem.eql(u8, name, "apps-catalog") or std.mem.eql(u8, name, "apps")) return catalogScenario(gpa, io, counter, &backend, name, iterations);
@@ -716,4 +761,41 @@ fn witnessP95(arena: std.mem.Allocator, io: std.Io, hwnd: u64, opts: Witness) ?u
     const p95_us = std.fmt.parseInt(u64, rest[0..end], 10) catch return null;
     std.debug.print("bench: witness probe_c{s} p95 {d} us on the same window\n", .{ if (opts.full) " full" else "", p95_us });
     return p95_us * std.time.ns_per_us;
+}
+
+/// `neo-compute selftest-still`: a still window with a password field in
+/// a process of its own (src/backend/windows/still_window.zig).
+const StillWindow = struct {
+    child: std.process.Child,
+    hwnd: w.HWND,
+
+    fn start(io: std.Io, r: display.Rect) !StillWindow {
+        var path_w: [1024:0]u16 = undefined;
+        const n = w.GetModuleFileNameW(null, &path_w, path_w.len);
+        var path: [3 * 1024]u8 = undefined;
+        const exe = path[0..std.unicode.wtf16LeToWtf8(&path, path_w[0..n])];
+        var bufs: [4][16]u8 = undefined;
+        var argv: [6][]const u8 = .{ exe, "selftest-still", "", "", "", "" };
+        for ([_]i32{ r.x, r.y, r.w, r.h }, &bufs, argv[2..]) |v, *buf, *arg| arg.* = try std.fmt.bufPrint(buf, "{d}", .{v});
+        var child = try std.process.spawn(io, .{ .argv = &argv, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore });
+        errdefer child.kill(io);
+        var waited: u32 = 0;
+        while (waited < 3000) : (waited += 20) {
+            const hwnd = w.FindWindowW(std.unicode.utf8ToUtf16LeStringLiteral(still_window.class_name), null);
+            if (hwnd != null) return .{ .child = child, .hwnd = hwnd };
+            w.Sleep(20);
+        }
+        return error.NoStillWindow;
+    }
+
+    fn stop(self: *StillWindow, io: std.Io) void {
+        self.child.kill(io);
+    }
+};
+
+fn totalP95(outcome: bench.Outcome) ?u64 {
+    return switch (outcome) {
+        .ok => |ok| ok.total.p95_ns,
+        .unsupported => null,
+    };
 }

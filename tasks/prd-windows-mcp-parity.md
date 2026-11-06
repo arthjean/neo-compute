@@ -328,7 +328,7 @@ Remplacer les attentes fixes par une attente sur condition, relier l'image aux I
 
 **Acceptance Criteria:**
 - [ ] `ui_find` accepte `wait_ms` optionnel (0 à 30 000, défaut 0) ; à 0, le comportement actuel est inchangé.
-- [ ] Avec `wait_ms > 0`, la recherche est relancée seulement après un dirty rect DXGI, un déplacement de fenêtre ou une nouvelle fenêtre de premier niveau, au plus une fois toutes les 100 ms, et au moins une fois toutes les 1 000 ms.
+- [ ] Avec `wait_ms > 0`, la recherche est relancée seulement après un dirty rect DXGI (sous GDI, une nouvelle empreinte de la zone de la fenêtre), un déplacement de fenêtre ou une nouvelle fenêtre de premier niveau, au plus une fois toutes les 100 ms, et au moins une fois toutes les 1 000 ms. Seule exception : une dernière recherche à l'échéance quand un changement est en attente, pour ne pas manquer un élément apparu dans les 100 dernières ms.
 - [ ] Dès qu'au moins un élément correspond, l'outil renvoie les lignes habituelles (20 au plus) précédées de `found after <n> ms`.
 - [ ] Étant donné aucun résultat à l'échéance, alors `isError: true` « Aucun élément « <requête> » après <n> ms : vérifie la requête ou augmente wait_ms ».
 - [ ] L'attente s'arrête au prochain point de contrôle sur `notifications/cancelled` et ne compte pas comme une action : elle reste permise en pause, comme `wait`.
@@ -360,7 +360,7 @@ Remplacer les attentes fixes par une attente sur condition, relier l'image aux I
 
 **Acceptance Criteria:**
 - [ ] Quand la duplication échoue avec `DXGI_ERROR_UNSUPPORTED`, ou que sa recréation échoue après `DXGI_ERROR_ACCESS_LOST`, la capture passe par `BitBlt` (`CAPTUREBLT`) de l'écran vers une DIB section, puis suit le même pipeline (masquage, réduction, JPEG).
-- [ ] Sans dirty rects, la stabilisation compare l'empreinte de deux images réduites successives à 50 ms d'intervalle ; deux empreintes égales valent « stable ».
+- [ ] Sans dirty rects, la stabilisation compare l'empreinte de la zone de la fenêtre cible, en pleine résolution et une ligne sur deux, sur deux captures successives à 50 ms d'intervalle ; deux empreintes égales valent « stable ». Pendant la stabilisation et l'attente de `ui_find`, `BitBlt` ne copie que cette zone.
 - [ ] Le drapeau `--capture gdi` force ce chemin pour le selftest et le bench ; le scénario `capture-gdi` tient < 40 ms p95 en 2560x1440.
 - [ ] Étant donné un bureau sécurisé, alors le refus existant (Edge Case 7) s'applique aussi au chemin GDI.
 - [ ] La réponse de `screenshot` en mode GDI porte la note « Capture GDI : les fenêtres protégées contre la capture apparaissent en noir ».

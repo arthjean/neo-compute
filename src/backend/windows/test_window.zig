@@ -22,6 +22,8 @@ const msg_animate = w.WM_APP + 2;
 const msg_hang = w.WM_APP + 3;
 const msg_menu = w.WM_APP + 4;
 const msg_select = w.WM_APP + 5;
+const msg_late_button = w.WM_APP + 6;
+const msg_remove_late = w.WM_APP + 7;
 
 /// Text of the plain edit field, and the part `select` selects (US-022).
 pub const note_text = "neo-compute selection";
@@ -34,6 +36,9 @@ pub const slider_pos = 40;
 pub const menu_items = [_][]const u8{ "neo-compute menu copy", "neo-compute menu paste" };
 const menu_first_id = 100;
 const animation_timer = 1;
+const late_timer = 2;
+/// Label of the button `lateButton` creates (US-030).
+pub const late_label = "neo-compute late button";
 
 var last_click: std.atomic.Value(u32) = .init(0xFFFF_FFFF);
 var clicks: std.atomic.Value(u32) = .init(0);
@@ -47,7 +52,11 @@ var commands: std.atomic.Value(u32) = .init(0);
 var menu_choice: std.atomic.Value(u32) = .init(0);
 var menu_open: std.atomic.Value(bool) = .init(false);
 var brush: w.HBRUSH = null;
+var late_button: w.HWND = null;
 var frame_parity: bool = false;
+/// Every animation frame in a new color (`animateRamp`), not two.
+var ramp: bool = false;
+var ramp_step: u32 = 0;
 
 pub const TestWindow = struct {
     hwnd: std.atomic.Value(usize) = .init(0),
@@ -93,6 +102,15 @@ pub const TestWindow = struct {
 
     /// Starts or stops repainting in alternating colors every 15 ms.
     pub fn animate(self: *TestWindow, on: bool) void {
+        ramp = false;
+        _ = w.PostMessageW(self.window(), msg_animate, @intFromBool(on), 0);
+    }
+
+    /// Starts or stops repainting every 15 ms in a color that differs from
+    /// every previous one: any two captures see different pixels (US-032,
+    /// settling by fingerprints).
+    pub fn animateRamp(self: *TestWindow, on: bool) void {
+        ramp = on;
         _ = w.PostMessageW(self.window(), msg_animate, @intFromBool(on), 0);
     }
 
@@ -117,6 +135,17 @@ pub const TestWindow = struct {
     /// (`on`), or gives the focus back to the window.
     pub fn select(self: *TestWindow, on: bool) void {
         _ = w.PostMessageW(self.window(), msg_select, @intFromBool(on), @bitCast(self.note.load(.acquire)));
+    }
+
+    /// Creates a button labeled `late_label` in `ms` (US-030: ui_find waits
+    /// for it), on the window's thread.
+    pub fn lateButton(self: *TestWindow, ms: u32) void {
+        _ = w.PostMessageW(self.window(), msg_late_button, ms, 0);
+    }
+
+    /// Destroys the button `lateButton` created.
+    pub fn removeLateButton(self: *TestWindow) void {
+        _ = w.PostMessageW(self.window(), msg_remove_late, 0, 0);
     }
 
     /// Makes the window's thread stop answering messages for `ms`.
@@ -222,9 +251,25 @@ pub const TestWindow = struct {
                 }
                 return 0;
             },
+            msg_late_button => {
+                _ = w.SetTimer(hwnd, late_timer, @truncate(wparam), null);
+                return 0;
+            },
+            msg_remove_late => {
+                if (late_button != null) _ = w.DestroyWindow(late_button);
+                late_button = null;
+                return 0;
+            },
             w.WM_TIMER => {
+                if (wparam == late_timer) {
+                    _ = w.KillTimer(hwnd, late_timer);
+                    late_button = w.CreateWindowExW(0, std.unicode.utf8ToUtf16LeStringLiteral("BUTTON"), std.unicode.utf8ToUtf16LeStringLiteral(late_label), w.WS_CHILD | w.WS_VISIBLE, 20, 130, 200, 40, hwnd, null, w.GetModuleHandleW(null), null);
+                    return 0;
+                }
                 frame_parity = !frame_parity;
-                _ = w.PostMessageW(hwnd, msg_set_color, if (frame_parity) cyan else magenta, 0);
+                ramp_step +%= 1;
+                const color: u32 = if (ramp) magenta ^ ((ramp_step % 256) << 8) else if (frame_parity) cyan else magenta;
+                _ = w.PostMessageW(hwnd, msg_set_color, color, 0);
                 return 0;
             },
             msg_menu => {
