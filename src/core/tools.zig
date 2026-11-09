@@ -16,6 +16,8 @@ const fmt = @import("session.zig").fmt;
 const policy = @import("policy.zig");
 const windowctl = @import("windowctl.zig");
 const launch = @import("launch.zig");
+const clipboard_mod = @import("clipboard.zig");
+const regread = @import("regread.zig");
 
 const Point = [2]i32;
 const Observe = a11y.Observe;
@@ -363,6 +365,34 @@ pub const app_launch = struct {
     }
 };
 
+pub const clipboard = struct {
+    pub const name = "clipboard";
+    pub const description = "Read (get) or write (set) the clipboard's text; content marked secret by its app is refused, and set keeps it out of the history and cloud.";
+    pub const extension = true;
+    pub const Args = struct {
+        mode: clipboard_mod.Mode,
+        text: ?[]const u8 = null,
+        pub const field_info = .{ .text = .{ .description = "mode set: the text, 1 MiB at most" } };
+    };
+    pub fn run(ctx: anytype, args: Args) Result {
+        return clipboard_mod.run(ctx, args.mode, args.text);
+    }
+};
+
+pub const registry_read = struct {
+    pub const name = "registry_read";
+    pub const description = "Read a registry value (name; empty for the default) or a key's values and subkeys, 64-bit view; never writes. path: HKCU\\..., HKLM, HKCR, HKU or HKCC.";
+    pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const extension = true;
+    pub const Args = struct {
+        path: []const u8,
+        name: ?[]const u8 = null,
+    };
+    pub fn run(ctx: anytype, args: Args) Result {
+        return regread.read(ctx, args.path, args.name);
+    }
+};
+
 /// Parses a window handle as printed by window_list (`0x1a2b` or `1a2b`).
 pub fn parseHandle(text: []const u8) ?u64 {
     const t = std.mem.trim(u8, text, " ");
@@ -462,4 +492,4 @@ pub const toolset = .{
     scroll,       @"type",         key,        hold_key,        wait,
 };
 
-pub const all = toolset ++ .{ ui_tree, ui_find, ui_act, window_list, window_focus, window_set, app_launch };
+pub const all = toolset ++ .{ ui_tree, ui_find, ui_act, window_list, window_focus, window_set, app_launch, clipboard, registry_read };

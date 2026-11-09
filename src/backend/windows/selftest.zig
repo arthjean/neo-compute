@@ -24,17 +24,17 @@ const Report = struct {
     log: *std.Io.Writer,
     failed: ?[]const u8 = null,
 
-    fn ok(self: *Report, name: []const u8, comptime f: []const u8, args: anytype) void {
+    pub fn ok(self: *Report, name: []const u8, comptime f: []const u8, args: anytype) void {
         self.log.print("selftest: {s} ok (" ++ f ++ ")\n", .{name} ++ args) catch {};
         self.log.flush() catch {};
     }
 
-    fn skip(self: *Report, name: []const u8, comptime f: []const u8, args: anytype) void {
+    pub fn skip(self: *Report, name: []const u8, comptime f: []const u8, args: anytype) void {
         self.log.print("selftest: {s} skipped (" ++ f ++ ")\n", .{name} ++ args) catch {};
         self.log.flush() catch {};
     }
 
-    fn fail(self: *Report, name: []const u8, comptime f: []const u8, args: anytype) void {
+    pub fn fail(self: *Report, name: []const u8, comptime f: []const u8, args: anytype) void {
         self.log.print("selftest: {s} FAILED: " ++ f ++ "\n", .{name} ++ args) catch {};
         self.log.flush() catch {};
         if (self.failed == null) self.failed = name;
@@ -80,7 +80,7 @@ const Caller = struct {
 
     const Res = struct { is_error: bool, text: []const u8, image_mime: ?[]const u8 };
 
-    fn call(self: *Caller, tool: []const u8, comptime args_fmt: []const u8, args: anytype) !Res {
+    pub fn call(self: *Caller, tool: []const u8, comptime args_fmt: []const u8, args: anytype) !Res {
         self.out.clearRetainingCapacity();
         const arguments = try std.fmt.allocPrint(self.arena, args_fmt, args);
         const line = try std.fmt.allocPrint(self.arena, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\",\"arguments\":{s}}}}}", .{ self.id, tool, arguments });
@@ -787,6 +787,11 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     windowsAndAppsChecks(&report, &caller, &backend, arena) catch |err| report.fail("windows-apps", "{t}", .{err});
 
     securityChecks(&report, gpa, io, arena, &backend, &tw) catch |err| report.fail("security", "{t}", .{err});
+
+    // EP-009: clipboard (US-035) and registry_read (US-036).
+    const system_checks = @import("selftest_system.zig");
+    system_checks.clipboardChecks(&report, &caller, gpa, io, arena, &backend, tw.window()) catch |err| report.fail("clipboard", "{t}", .{err});
+    system_checks.registryChecks(&report, &caller) catch |err| report.fail("registry", "{t}", .{err});
 
     // release: the shipped server releases a held key within 50 ms of stdin
     // EOF and exits with code 0.

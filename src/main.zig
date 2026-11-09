@@ -25,6 +25,7 @@ const usage =
     \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|APP>
     \\                         [--iterations N] [--check BASELINE.json] [--write-baseline FILE] [--capture auto|gdi]
     \\       neo-compute selftest [--capture auto|gdi]
+    \\       neo-compute clipboard-probe [SECONDS]
     \\       neo-compute --version
     \\
 ;
@@ -49,6 +50,15 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         }
         return selftestCommand(init);
+    }
+    // A11 (US-035): the formats and owner of each new clipboard content,
+    // never the content, for SECONDS (default 120).
+    if (args.len > 1 and std.mem.eql(u8, args[1], "clipboard-probe") and @hasDecl(Backend, "clipboardProbe")) {
+        const seconds = if (args.len > 2) std.fmt.parseInt(u32, args[2], 10) catch {
+            std.debug.print("{s}", .{usage});
+            return 2;
+        } else 120;
+        return Backend.clipboardProbe(init.io, seconds);
     }
     // Started by selftest only: a provider that stalls (US-022 timeout).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-stall") and @hasDecl(Backend, "stallProvider")) return Backend.stallProvider();
@@ -280,4 +290,7 @@ test {
     _ = @import("core/apps.zig");
     _ = @import("core/launch.zig");
     _ = @import("core/windows_test.zig");
+    _ = @import("core/clipboard.zig");
+    _ = @import("core/regread.zig");
+    _ = @import("core/system_test.zig");
 }

@@ -8,6 +8,8 @@ const keys = @import("../core/keys.zig");
 const uitree = @import("../core/uitree.zig");
 const Control = @import("../core/control.zig").Control;
 const apps = @import("../core/apps.zig");
+const clipboard = @import("../core/clipboard.zig");
+const regread = @import("../core/regread.zig");
 
 pub const displays_fixture = [_]display.Display{
     .{ .rect = .{ .x = 0, .y = 0, .w = 2560, .h = 1440 }, .name = "FAKE-1" },
@@ -55,6 +57,39 @@ pub const KeyCall = struct { combo: keys.Combo, action: input.KeyAction };
 /// A root served with the foreground tree: its window and its elements
 /// (the first at depth 0).
 pub const ExtraRoot = struct { window: uitree.RootWindow, modal: bool = false, elements: []const uitree.Element };
+
+/// A registry key of the fixture: its path as `Path.text` writes it.
+pub const RegKey = struct {
+    path: []const u8,
+    values: []const regread.Value = &.{},
+    subkeys: []const []const u8 = &.{},
+    denied: bool = false,
+};
+
+fn utf16Bytes(comptime s: []const u8) []const u8 {
+    const u = std.unicode.utf8ToUtf16LeStringLiteral(s);
+    return std.mem.sliceAsBytes(u[0 .. u.len + 1]);
+}
+
+pub const reg_fixture = [_]RegKey{
+    .{
+        .path = "HKCU\\Software\\Microsoft\\Notepad",
+        .values = &.{
+            .{ .name = "fWrap", .kind = .dword, .data = &.{ 1, 0, 0, 0 }, .size = 4 },
+            .{ .name = "lfFaceName", .kind = .sz, .data = utf16Bytes("Consolas"), .size = 18 },
+            .{ .name = "ProxyPassword", .kind = .sz, .data = utf16Bytes("hunter2"), .size = 16 },
+        },
+        .subkeys = &.{ "Recent", "Tabs" },
+    },
+    .{
+        .path = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+        .values = &.{
+            .{ .name = "ProductName", .kind = .sz, .data = utf16Bytes("Windows 11 Pro"), .size = 30 },
+            .{ .name = "SystemRoot", .kind = .expand_sz, .data = utf16Bytes("%SystemDrive%\\WINDOWS"), .size = 44, .expanded = "C:\\WINDOWS" },
+        },
+    },
+    .{ .path = "HKLM\\SOFTWARE\\Verrou", .denied = true },
+};
 
 pub const Fake = struct {
     /// Inputs currently held (keys or buttons), as a count.
@@ -187,6 +222,25 @@ pub const Fake = struct {
     /// Trips the kill switch on the next key press, as a physical Escape
     /// during the action would.
     trip_on_press: bool = false,
+
+    // clipboard (US-035)
+    /// Text content (null: no CF_UNICODETEXT) and the other formats.
+    clip_text: ?[]const u8 = null,
+    clip_formats: []const []const u8 = &.{},
+    /// A secret format the content carries.
+    clip_marker: ?clipboard.Marker = null,
+    clip_owner: ?u32 = null,
+    /// Another process keeps the clipboard open through every retry.
+    clip_busy: ?u32 = null,
+    clip_reads: u32 = 0,
+    clip_writes: u32 = 0,
+    /// Bytes of the last text written, and its first ones.
+    clip_written_len: usize = 0,
+    clip_written: [4096]u8 = undefined,
+
+    // registry_read (US-036)
+    reg_keys: []const RegKey = &reg_fixture,
+    reg_reads: u32 = 0,
 
     pub fn releaseAllInputs(self: *Fake) void {
         self.held = 0;
@@ -646,5 +700,62 @@ pub const Fake = struct {
         _ = self;
         _ = arena;
         return ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY";
+    }
+
+    // ------------------------------------------------------------ clipboard (US-035)
+
+    /// The fixture's content, the text cut to `max_chars` code points.
+    pub fn clipboardRead(self: *Fake, arena: std.mem.Allocator, max_chars: usize, cancel: *const std.atomic.Value(bool)) clipboard.Read {
+        _ = cancel;
+        _ = arena;
+        self.clip_reads += 1;
+        if (self.clip_busy) |pid| return .{ .busy = pid };
+        if (self.clip_marker) |m| return .{ .secret = .{ .marker = m, .owner_pid = self.clip_owner } };
+        const t = self.clip_text orelse return .{ .no_text = .{ .formats = self.clip_formats, .owner_pid = self.clip_owner } };
+        return .{ .text = .{ .text = clipboard.prefixChars(t, max_chars), .total = std.unicode.utf8CountCodepoints(t) catch t.len, .owner_pid = self.clip_owner } };
+    }
+
+    /// Becomes the owner (neo-compute's pid) of a text that, like the
+    /// Windows backend's own content, reads back despite its two markers.
+    pub fn clipboardWrite(self: *Fake, arena: std.mem.Allocator, text: []const u8, cancel: *const std.atomic.Value(bool)) clipboard.Write {
+        _ = cancel;
+        _ = arena;
+        if (self.clip_busy) |pid| return .{ .busy = pid };
+        self.clip_writes += 1;
+        self.clip_written_len = text.len;
+        const n = @min(text.len, self.clip_written.len);
+        @memcpy(self.clip_written[0..n], text[0..n]);
+        self.clip_text = self.clip_written[0..n];
+        self.clip_marker = null;
+        self.clip_owner = self.ancestors[0];
+        return .ok;
+    }
+
+    // ------------------------------------------------------------ registry_read (US-036)
+
+    fn regKey(self: *Fake, arena: std.mem.Allocator, path: regread.Path) ?RegKey {
+        const text = path.text(arena);
+        for (self.reg_keys) |k| if (std.ascii.eqlIgnoreCase(k.path, text)) return k;
+        return null;
+    }
+
+    pub fn registryValue(self: *Fake, arena: std.mem.Allocator, path: regread.Path, name: []const u8) regread.ValueResult {
+        self.reg_reads += 1;
+        const k = self.regKey(arena, path) orelse return .{ .failed = .missing_key };
+        if (k.denied) return .{ .failed = .denied };
+        for (k.values) |v| if (std.ascii.eqlIgnoreCase(v.name, name)) return .{ .ok = v };
+        return .{ .failed = .missing_value };
+    }
+
+    pub fn registryKey(self: *Fake, arena: std.mem.Allocator, path: regread.Path, max_values: usize, max_subkeys: usize) regread.KeyResult {
+        self.reg_reads += 1;
+        const k = self.regKey(arena, path) orelse return .{ .failed = .missing_key };
+        if (k.denied) return .{ .failed = .denied };
+        return .{ .ok = .{
+            .values = k.values[0..@min(k.values.len, max_values)],
+            .values_total = k.values.len,
+            .subkeys = k.subkeys[0..@min(k.subkeys.len, max_subkeys)],
+            .subkeys_total = k.subkeys.len,
+        } };
     }
 };

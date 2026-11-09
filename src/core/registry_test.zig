@@ -135,7 +135,7 @@ test "observation tools are read-only and idempotent; core tools are always load
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const map = try toolMap(arena.allocator());
-    const observers = [_][]const u8{ "screenshot", "zoom", "cursor_position", "ui_tree", "ui_find", "window_list" };
+    const observers = [_][]const u8{ "screenshot", "zoom", "cursor_position", "ui_tree", "ui_find", "window_list", "registry_read" };
     for (observers) |n| {
         const ann = map.get(n).?.object.get("annotations").?.object;
         try testing.expect(ann.get("readOnlyHint").?.bool);

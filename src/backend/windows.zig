@@ -17,6 +17,10 @@ const uia = @import("windows/uia.zig");
 const hooks = @import("windows/hooks.zig");
 const indicator_mod = @import("windows/indicator.zig");
 const shell_mod = @import("windows/shell.zig");
+const clip_mod = @import("windows/clipboard.zig");
+const reg_mod = @import("windows/regread.zig");
+const clipboard = @import("../core/clipboard.zig");
+const regread = @import("../core/regread.zig");
 const apps = @import("../core/apps.zig");
 const Control = @import("../core/control.zig").Control;
 const uitree = @import("../core/uitree.zig");
@@ -37,6 +41,8 @@ pub const Windows = struct {
     ui: uia.Worker,
     /// Shell APIs on their own STA thread (EP-006).
     shell: shell_mod.Shell,
+    /// Clipboard worker (US-035), created on first use.
+    clip: ?*clip_mod.Clipboard = null,
     kill: ?*hooks.KillSwitch = null,
     /// Control indicator (US-034), null when off or unavailable.
     indicator: ?*indicator_mod.Indicator = null,
@@ -75,6 +81,11 @@ pub const Windows = struct {
         self.stopIndicator();
         self.ui.deinit();
         self.shell.deinit();
+        if (self.clip) |c| {
+            c.deinit();
+            self.gpa.destroy(c);
+            self.clip = null;
+        }
         for (&self.gdi) |*g| g.deinit();
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
@@ -639,6 +650,40 @@ pub const Windows = struct {
         return out[0..std.unicode.wtf16LeToWtf8(out, buf[0..n])];
     }
 
+    // ------------------------------------------------------------ clipboard (US-035)
+
+    /// The clipboard worker, started on first use.
+    fn clipboardWorker(self: *Windows) ?*clip_mod.Clipboard {
+        if (self.clip) |c| return c;
+        const c = self.gpa.create(clip_mod.Clipboard) catch return null;
+        c.* = .{};
+        self.clip = c;
+        return c;
+    }
+
+    pub fn clipboardRead(self: *Windows, arena: std.mem.Allocator, max_chars: usize, cancel: *const std.atomic.Value(bool)) clipboard.Read {
+        const c = self.clipboardWorker() orelse return .{ .failed = "Mémoire insuffisante : réessaie." };
+        return c.read(arena, max_chars, cancel);
+    }
+
+    pub fn clipboardWrite(self: *Windows, arena: std.mem.Allocator, text: []const u8, cancel: *const std.atomic.Value(bool)) clipboard.Write {
+        _ = arena;
+        const c = self.clipboardWorker() orelse return .{ .failed = "Mémoire insuffisante : réessaie." };
+        return c.write(text, cancel);
+    }
+
+    // ------------------------------------------------------------ registry_read (US-036)
+
+    pub fn registryValue(self: *Windows, arena: std.mem.Allocator, path: regread.Path, name: []const u8) regread.ValueResult {
+        _ = self;
+        return reg_mod.value(arena, path, name);
+    }
+
+    pub fn registryKey(self: *Windows, arena: std.mem.Allocator, path: regread.Path, max_values: usize, max_subkeys: usize) regread.KeyResult {
+        _ = self;
+        return reg_mod.key(arena, path, max_values, max_subkeys);
+    }
+
     // ------------------------------------------------------------ tooling
 
     pub const selftest = @import("windows/selftest.zig").run;
@@ -647,6 +692,8 @@ pub const Windows = struct {
     /// `selftest-still`: the still window of another process the selftest
     /// times ui_find's GDI wait on.
     pub const stillWindow = @import("windows/still_window.zig").run;
+    /// `clipboard-probe`: formats and owner of each new clipboard content (A11).
+    pub const clipboardProbe = @import("windows/clipboard_probe.zig").run;
 
     pub fn benchScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name: []const u8, iterations: ?usize) !bench.Outcome {
         return @import("windows/bench.zig").run(gpa, io, counter, name, iterations);

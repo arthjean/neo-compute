@@ -156,5 +156,20 @@
         "DT_VCENTER",                                 "DT_SINGLELINE",                          "DT_CALCRECT",                                "HWND_TOPMOST",                              "SWP_NOMOVE",
         "SWP_SHOWWINDOW",                             "SW_HIDE",                                "WM_DISPLAYCHANGE",                           "FW_SEMIBOLD",                               "CLEARTYPE_QUALITY",
         "TRANSPARENT",                                "WM_DPICHANGED",
+
+        // clipboard (US-035): a message-only owner window on its own thread
+                                 "OpenClipboard",                              "CloseClipboard",                            "EmptyClipboard",
+        "GetClipboardData",                           "SetClipboardData",                       "IsClipboardFormatAvailable",                 "EnumClipboardFormats",                      "GetClipboardFormatNameW",
+        "RegisterClipboardFormatW",                   "GetClipboardOwner",                      "GetOpenClipboardWindow",                     "GetClipboardSequenceNumber",                "GlobalAlloc",
+        "GlobalLock",                                 "GlobalUnlock",                           "GlobalSize",                                 "GlobalFree",                                "GMEM_MOVEABLE",
+        "HWND_MESSAGE",                               "CF_UNICODETEXT",                         "CreateWaitableTimerExW",                     "SetWaitableTimer",                          "CREATE_WAITABLE_TIMER_HIGH_RESOLUTION",
+        "TIMER_ALL_ACCESS",
+
+        // registry_read (US-036): read functions only, never a write
+                                  "RegOpenKeyExW",                          "RegCloseKey",                                "RegQueryValueExW",                          "RegEnumValueW",
+        "RegEnumKeyExW",                              "RegQueryInfoKeyW",                       "HKEY_CURRENT_USER",                          "HKEY_LOCAL_MACHINE",                        "HKEY_CLASSES_ROOT",
+        "HKEY_USERS",                                 "HKEY_CURRENT_CONFIG",                    "KEY_QUERY_VALUE",                            "KEY_ENUMERATE_SUB_KEYS",                    "KEY_WOW64_64KEY",
+        "ERROR_FILE_NOT_FOUND",                       "ERROR_MORE_DATA",                        "ERROR_NO_MORE_ITEMS",                        "ERROR_SUCCESS",                             "ExpandEnvironmentStringsW",
+        "ERROR_NOT_ENOUGH_MEMORY",
     },
 }

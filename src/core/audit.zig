@@ -13,8 +13,8 @@ pub const file_name = "audit.jsonl";
 pub const max_bytes = 10 * 1024 * 1024;
 pub const kept_files = 5;
 
-/// What a tool of EP-006 adds to its line: never a window title, a
-/// document path or any text it read (FR-29).
+/// What a tool of EP-006 or EP-009 adds to its line: never a window title,
+/// a document path, clipboard text or registry data (FR-29).
 pub const Detail = struct {
     /// window_set: the requested state, or `placement` (US-027).
     state: ?[]const u8 = null,
@@ -24,6 +24,12 @@ pub const Detail = struct {
     terminated_exe_len: u8 = 0,
     /// app_launch: the AUMID, or the document's extension (US-029).
     launched: ?[]const u8 = null,
+    /// clipboard: the mode and the text's length in characters (US-035).
+    clipboard_mode: ?[]const u8 = null,
+    clipboard_len: ?usize = null,
+    /// registry_read: the key and the value name (US-036).
+    registry_path: ?[]const u8 = null,
+    registry_name: ?[]const u8 = null,
 
     pub fn setTerminatedExe(self: *Detail, exe: []const u8) void {
         self.terminated_exe_len = @intCast(@min(exe.len, self.terminated_exe_buf.len));
@@ -145,7 +151,49 @@ pub fn format(w: *Io.Writer, e: Entry, now_ns: i96) !void {
         // An AUMID is at most a few hundred bytes; cut to keep the line.
         try std.json.Stringify.value(l[0..@min(l.len, 256)], .{}, w);
     }
+    if (e.detail.clipboard_mode) |m| {
+        try w.print(",\"clipboard\":{{\"mode\":\"{s}\"", .{m});
+        if (e.detail.clipboard_len) |n| try w.print(",\"len\":{d}", .{n});
+        try w.writeByte('}');
+    }
+    if (e.detail.registry_path) |p| {
+        try w.writeAll(",\"registry\":{\"path\":");
+        try std.json.Stringify.value(prefix(p, 384), .{}, w);
+        if (e.detail.registry_name) |n| {
+            try w.writeAll(",\"name\":");
+            try std.json.Stringify.value(prefix(n, 128), .{}, w);
+        }
+        try w.writeByte('}');
+    }
     try w.writeAll("}\n");
+}
+
+/// At most `n` bytes of UTF-8 `s`, cut at a code point boundary so the line
+/// stays valid JSON.
+fn prefix(s: []const u8, n: usize) []const u8 {
+    if (s.len <= n) return s;
+    var end = n;
+    while (end > 0 and s[end] & 0xC0 == 0x80) end -= 1;
+    return s[0..end];
+}
+
+test "clipboard and registry_read lines carry the mode, the length, the path and the name, never the data" {
+    var buf: [1024]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try format(&w, .{ .tool = "clipboard", .duration_ns = 1, .result = "ok", .detail = .{ .clipboard_mode = "set", .clipboard_len = 42 } }, 0);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), ",\"result\":\"ok\",\"clipboard\":{\"mode\":\"set\",\"len\":42}}\n"));
+    w = .fixed(&buf);
+    try format(&w, .{ .tool = "registry_read", .duration_ns = 1, .result = "ok", .detail = .{ .registry_path = "HKCU\\Software\\Microsoft\\Notepad", .registry_name = "fWrap" } }, 0);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), ",\"registry\":{\"path\":\"HKCU\\\\Software\\\\Microsoft\\\\Notepad\",\"name\":\"fWrap\"}}\n"));
+    // A long path is cut at a code point, within the line's buffer.
+    var long: [2 * 400 + 5]u8 = undefined;
+    @memcpy(long[0..5], "HKCU\\");
+    for (0..400) |i| @memcpy(long[5 + 2 * i ..][0..2], "é");
+    const name: [300]u8 = @splat('n');
+    w = .fixed(&buf);
+    try format(&w, .{ .tool = "registry_read", .duration_ns = 1, .result = "ok", .detail = .{ .registry_path = &long, .registry_name = &name } }, 0);
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, w.buffered(), .{});
+    parsed.deinit();
 }
 
 test "window_set and app_launch lines carry the state, the terminated process and the AUMID or extension" {

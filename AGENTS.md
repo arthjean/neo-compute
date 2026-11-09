@@ -55,8 +55,9 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
 also needs `selftest`, with its output in the report. `selftest` moves the
-cursor, types, raises a topmost window and shows the control indicator;
-`bench` captures the screen, reads the taskbar and raises a topmost test
+cursor, types, raises a topmost window, shows the control indicator and
+overwrites the clipboard (its earlier text is put back, other formats are
+lost); `bench` captures the screen, reads the taskbar and raises a topmost test
 window (`settle`). Run them one at a time.
 
 ## Architecture and gotchas
