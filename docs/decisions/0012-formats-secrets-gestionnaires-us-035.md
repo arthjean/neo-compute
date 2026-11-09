@@ -1,6 +1,6 @@
 # 0012 : formats de secret posés par les gestionnaires de mots de passe (A11)
 
-- Statut : constaté ; aucun changement de contrat
+- Statut : constaté ; aucun changement de contrat ; trois risques résiduels ouverts, à reprendre par Arthur
 - Date : 2026-11-09
 - Story : US-035, hypothèse A11 et risque 8 (`tasks/prd-windows-mcp-parity.md`)
 
@@ -21,4 +21,21 @@ clipboard-probe: seq 10564 owner ? (pid 0): CF_UNICODETEXT, CanUploadToCloudClip
 
 ## Conséquence
 
-Pour Proton Pass, la protection repose seulement sur les marqueurs. Le risque 8 reste ouvert pour un gestionnaire qui, comme Proton Pass, écrit sans propriétaire et ne poserait aucun marqueur (Bitwarden selon le fil de forum cité par A11, non installé ici) : ni les marqueurs ni la politique `deny` ne le couvriraient. Aucun changement n'est fait : relancer la sonde quand un autre gestionnaire est installé, et ajouter ses lignes ici.
+Pour Proton Pass, la protection repose seulement sur les marqueurs.
+
+## Risques résiduels mesurés (2026-11-09)
+
+Une boucle jetable (un processus `powershell.exe` mis en `deny` par `--policy` écrit un canari aléatoire, puis le serveur réel répond à `clipboard get`) a donné le même résultat sur trois runs :
+
+| Scénario | Résultat |
+|---|---|
+| Écrivain `deny` vivant, presse-papiers ouvert sans propriétaire, sans marqueur | **le canari est renvoyé** |
+| Écrivain `deny` vivant, propriétaire = sa fenêtre | refusé |
+| Écrivain `deny` dont la fenêtre propriétaire est détruite avant la lecture | **le canari est renvoyé** |
+| Écrivain sans propriétaire avec `CanIncludeInClipboardHistory` à 0 | refusé |
+
+1. **Contenu sans propriétaire ni marqueur.** Le refus par application `deny` lit `GetClipboardOwner`, qui est null quand l'écrivain ouvre le presse-papiers sans fenêtre. Un gestionnaire qui écrit ainsi sans poser de marqueur n'est couvert par rien.
+2. **Propriétaire détruit.** Quand la fenêtre propriétaire est détruite, Windows remet le propriétaire à null : une application `deny` qui copie puis ferme sa fenêtre n'est plus refusée. Le critère de US-035 (« le propriétaire appartient à une application `deny` ») est tenu à la lettre au moment du `get`, pas sur la durée de vie du contenu.
+3. **Extensions de navigateur.** Un gestionnaire intégré au navigateur écrit sous le nom du navigateur, qui n'est pas `deny` ; seuls les marqueurs, s'il en pose, le couvrent.
+
+Ces risques ne sont pas traités. La boucle de reproduction est la base d'un test de régression du selftest le jour où ils le seront. Le risque 8 reste ouvert pour un gestionnaire qui, comme Proton Pass, écrit sans propriétaire et ne poserait aucun marqueur (Bitwarden selon le fil de forum cité par A11, non installé ici) : ni les marqueurs ni la politique `deny` ne le couvriraient. Aucun changement n'est fait : relancer la sonde quand un autre gestionnaire est installé, et ajouter ses lignes ici.
