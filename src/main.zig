@@ -21,7 +21,7 @@ pub const Server = mcp.Server(Backend, tools.all);
 
 const usage =
     \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision]
-    \\                   [--policy FILE] [--rearm-key COMBO] [--capture auto|gdi]
+    \\                   [--policy FILE] [--rearm-key COMBO] [--capture auto|gdi] [--no-indicator]
     \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|APP>
     \\                         [--iterations N] [--check BASELINE.json] [--write-baseline FILE] [--capture auto|gdi]
     \\       neo-compute selftest [--capture auto|gdi]
@@ -60,6 +60,7 @@ pub fn main(init: std.process.Init) !u8 {
     var mode: mcp.Mode = .a11y;
     var policy_path: ?[]const u8 = null;
     var rearm: keys.Combo = default_rearm;
+    var indicator = true;
     var i: usize = 1;
     if (i < args.len and std.mem.eql(u8, args[i], "serve")) i += 1;
     while (i < args.len) : (i += 1) {
@@ -103,6 +104,8 @@ pub fn main(init: std.process.Init) !u8 {
                 return 2;
             }
             i += 1;
+        } else if (std.mem.eql(u8, a, "--no-indicator")) {
+            indicator = false;
         } else if (std.mem.eql(u8, a, "--version")) {
             std.debug.print("{s} {s}\n", .{ mcp.server_name, mcp.server_version });
             return 0;
@@ -111,13 +114,13 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         }
     }
-    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size, .mode = mode }, policy_path, rearm);
+    return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size, .mode = mode }, policy_path, rearm, indicator);
 }
 
 /// The only way to lift a kill switch pause (US-018), physical only.
 const default_rearm: keys.Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
 
-fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, rearm: keys.Combo) !u8 {
+fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, rearm: keys.Combo, indicator: bool) !u8 {
     const arena = init.arena.allocator();
     const env = init.environ_map;
     var options = base;
@@ -154,6 +157,10 @@ fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, re
     defer if (@hasDecl(Backend, "deinit")) backend.deinit();
     var server: Server = .init(init.gpa, init.io, &backend, options);
     defer server.deinit();
+    // US-034: the frame and label shown while an action runs or the server
+    // is paused. Stopped after the kill switch, whose thread notifies it.
+    if (options.exclusive and indicator and @hasDecl(Backend, "startIndicator")) backend.startIndicator(&server.control, rearm);
+    defer if (@hasDecl(Backend, "stopIndicator")) backend.stopIndicator();
     if (options.exclusive and @hasDecl(Backend, "startKillSwitch")) backend.startKillSwitch(&server.control, rearm);
     defer if (@hasDecl(Backend, "stopKillSwitch")) backend.stopKillSwitch();
     try server.serve(&stdin.interface, &stdout.interface);
@@ -266,6 +273,8 @@ test {
     _ = @import("core/uitree.zig");
     _ = @import("core/a11y_test.zig");
     _ = @import("core/policy.zig");
+    _ = @import("core/control.zig");
+    _ = @import("core/indicator.zig");
     _ = @import("core/audit.zig");
     _ = @import("core/security_test.zig");
     _ = @import("core/apps.zig");

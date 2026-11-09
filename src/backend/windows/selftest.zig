@@ -256,6 +256,167 @@ fn gdiChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: std.mem
     if (!late.is_error and std.mem.startsWith(u8, late.text, "found after ") and late_ms < 1100) report.ok("ui-find-wait-gdi", "button created at 800 ms found in {d} ms through fingerprints", .{late_ms}) else report.fail("ui-find-wait-gdi", "{d} ms: {s}", .{ late_ms, late.text });
 }
 
+/// Share of the sampled pixels of `area` (desktop coordinates) in `color`,
+/// in a whole-display frame whose top-left pixel is `origin`.
+fn colorShare(f: display.Frame, origin: display.Rect, area: display.Rect, color: u32) f64 {
+    var hits: usize = 0;
+    var total: usize = 0;
+    var y = area.y;
+    while (y < area.bottom()) : (y += 3) {
+        var x = area.x;
+        while (x < area.right()) : (x += 3) {
+            const i = @as(usize, @intCast(y - origin.y)) * f.stride + @as(usize, @intCast(x - origin.x)) * 4;
+            total += 1;
+            if (isColor(f.pixels[i..][0..4].*, color)) hits += 1;
+        }
+    }
+    return @as(f64, @floatFromInt(hits)) / @as(f64, @floatFromInt(@max(total, 1)));
+}
+
+const probe_mod = @import("exclusion_probe.zig");
+
+/// What a capture shows over the probe's area: the probe's own colors,
+/// the test window's magenta under it, or neither (no frame).
+const Seen = struct {
+    probe: f64,
+    under: f64,
+
+    fn hidden(self: Seen) bool {
+        return self.probe == 0 and self.under > 0.95;
+    }
+
+    fn word(self: Seen) []const u8 {
+        return if (self.hidden()) "hidden" else if (self.probe > 0.95) "visible" else "mixed";
+    }
+};
+
+fn seenIn(r: display.CaptureResult, origin: display.Rect, area: display.Rect) ?Seen {
+    const f = switch (r) {
+        .frame => |f| f,
+        .failed => return null,
+    };
+    if (f.pixels.len == 0) return null;
+    return .{ .probe = colorShare(f, origin, area, probe_mod.amber) + colorShare(f, origin, area, probe_mod.green), .under = colorShare(f, origin, area, test_window.magenta) };
+}
+
+/// Captures the area by DXGI until a fresh frame shows `want` (or 1 s).
+/// The test window is repainted first: a window that only leaves the
+/// capture changes nothing on the monitor, so DXGI would not deliver a frame.
+fn dxgiSeen(backend: *Windows, arena: std.mem.Allocator, tw: *TestWindow, origin: display.Rect, area: display.Rect, want: enum { probe, hidden }) ?Seen {
+    tw.setColor(test_window.magenta);
+    var last: ?Seen = null;
+    var tries: u32 = 0;
+    while (tries < 60) : (tries += 1) {
+        w.Sleep(16);
+        const r = backend.capture(0, arena);
+        if (r == .frame and !r.frame.fresh and last != null) continue;
+        last = seenIn(r, origin, area) orelse continue;
+        const done = switch (want) {
+            .probe => last.?.probe > 0.95,
+            .hidden => last.?.hidden(),
+        };
+        if (done) break;
+    }
+    return last;
+}
+
+const DirtyCount = struct { rects: u32 = 0, frames: u32 = 0 };
+
+/// Dirty rects over `area` in DXGI looks for changes during 1 s, while the
+/// probe is repainted at 30 Hz (`.repaint`), shown and hidden every 100 ms
+/// (`.toggle`) or left alone (`.idle`).
+fn dirtyOver(backend: *Windows, arena: std.mem.Allocator, probe: *probe_mod.Probe, area: display.Rect, phase: enum { idle, repaint, toggle }) DirtyCount {
+    for (0..6) |_| {
+        _ = backend.changes(0, arena, null);
+        w.Sleep(20);
+    }
+    var count: DirtyCount = .{};
+    const t0 = qpcUs();
+    var next: u64 = 0;
+    var tick: u32 = 0;
+    while (qpcUs() - t0 < 1_000_000) {
+        if (qpcUs() - t0 >= next) {
+            tick += 1;
+            next += 33_333;
+            switch (phase) {
+                .idle => {},
+                .repaint => probe.setColor(if (tick % 2 == 0) probe_mod.amber else probe_mod.green),
+                .toggle => if (tick % 3 == 0) probe.show(tick % 6 != 0),
+            }
+        }
+        switch (backend.changes(0, arena, null)) {
+            .frame => |f| {
+                var hit = false;
+                for (f.dirty) |d| if (d.intersects(area)) {
+                    count.rects += 1;
+                    hit = true;
+                };
+                if (hit) count.frames += 1;
+            },
+            .failed => {},
+        }
+        w.Sleep(8);
+    }
+    probe.show(true);
+    probe.setColor(probe_mod.amber);
+    w.Sleep(100);
+    _ = backend.changes(0, arena, null);
+    return count;
+}
+
+/// US-033 (A8): a layered, topmost, click-through window of one color over
+/// the test window is captured by DXGI and by GDI, first as any window
+/// (control: both captures must show it), then with WDA_EXCLUDEFROMCAPTURE.
+/// Dirty rects over it are counted at rest, while it repaints at 30 Hz
+/// (captured, then excluded) and while it is shown and hidden. A
+/// measurement: the line gives the outcome, which decision 0011 records;
+/// only a control that does not hold fails it.
+fn exclusionProbe(report: *Report, gpa: std.mem.Allocator, arena: std.mem.Allocator, backend: *Windows, tw: *TestWindow) !void {
+    const name = "capture-exclusion";
+    _ = w.SetForegroundWindow(tw.window());
+    var wr: w.RECT = undefined;
+    _ = w.GetWindowRect(tw.window(), &wr);
+    // Below the test window's controls, over its magenta background.
+    const area: display.Rect = .{ .x = wr.left + 140, .y = wr.top + 150, .w = 200, .h = 120 };
+    const origin = backend.displays()[0].rect;
+    var probe: probe_mod.Probe = .{ .rect = .{ .left = area.x, .top = area.y, .right = area.right(), .bottom = area.bottom() } };
+    try probe.start();
+    defer probe.stop();
+    w.Sleep(150);
+
+    var gb: Windows = .init(gpa);
+    defer gb.deinit();
+    gb.force_gdi = true;
+    if (gb.displays().len == 0) return report.fail(name, "no display enumerated for GDI", .{});
+    const dxgi = Windows.capture_mode != .gdi;
+
+    // Control: without affinity, both captures show the probe.
+    const gdi_shown = seenIn(gb.capture(0, arena), origin, area) orelse return report.fail(name, "GDI capture failed", .{});
+    const dxgi_shown: ?Seen = if (dxgi) dxgiSeen(backend, arena, tw, origin, area, .probe) else null;
+    if (gdi_shown.probe < 0.95 or (dxgi and (dxgi_shown == null or dxgi_shown.?.probe < 0.95)))
+        return report.fail(name, "control: the probe without affinity is not captured (GDI {d:.2}, DXGI {d:.2})", .{ gdi_shown.probe, if (dxgi_shown) |s| s.probe else -1 });
+    const idle: DirtyCount = if (dxgi) dirtyOver(backend, arena, &probe, area, .idle) else .{};
+    const captured: DirtyCount = if (dxgi) dirtyOver(backend, arena, &probe, area, .repaint) else .{};
+
+    if (probe.setAffinity(w.WDA_EXCLUDEFROMCAPTURE)) |code| {
+        return report.skip(name, "SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) failed with error {d}: the indicator hides its windows around each capture", .{code});
+    }
+    const affinity = probe.affinity() orelse 0xFFFF_FFFF;
+    w.Sleep(100);
+    const gdi_excluded = seenIn(gb.capture(0, arena), origin, area) orelse return report.fail(name, "GDI capture failed", .{});
+    if (!dxgi) return report.ok(name, "affinity 0x{x}; GDI: {s} (probe {d:.0} %, window under it {d:.0} %); DXGI not measured (--capture gdi)", .{ affinity, gdi_excluded.word(), gdi_excluded.probe * 100, gdi_excluded.under * 100 });
+    const dxgi_excluded = dxgiSeen(backend, arena, tw, origin, area, .hidden) orelse return report.fail(name, "DXGI capture failed", .{});
+    const excluded = dirtyOver(backend, arena, &probe, area, .repaint);
+    const toggled = dirtyOver(backend, arena, &probe, area, .toggle);
+    _ = probe.setAffinity(w.WDA_NONE);
+    report.ok(name, "affinity 0x{x}; DXGI: {s} (probe {d:.0} %, window under it {d:.0} %); GDI: {s} (probe {d:.0} %, under {d:.0} %); dirty rects over it in 1 s (rects/frames): idle {d}/{d}, captured at 30 Hz {d}/{d}, excluded at 30 Hz {d}/{d}, excluded shown and hidden every 100 ms {d}/{d}", .{
+        affinity,            dxgi_excluded.word(),     dxgi_excluded.probe * 100, dxgi_excluded.under * 100,
+        gdi_excluded.word(), gdi_excluded.probe * 100, gdi_excluded.under * 100,  idle.rects,
+        idle.frames,         captured.rects,           captured.frames,           excluded.rects,
+        excluded.frames,     toggled.rects,            toggled.frames,
+    });
+}
+
 /// Runs every subtest; returns null when all pass.
 pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, log: *std.Io.Writer) !?[]const u8 {
     var report: Report = .{ .log = log };
@@ -401,6 +562,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
         _ = backend.capture(0, arena);
         if (hit and recolored) report.ok("capture-changes", "dirty rect seen without readback, next capture shows the new color", .{}) else report.fail("capture-changes", "dirty rect seen: {}, next capture shows the new color: {}", .{ hit, recolored });
     }
+
+    // capture-exclusion (US-033, A8): whether WDA_EXCLUDEFROMCAPTURE hides
+    // a layered window from DXGI and GDI, and the dirty rects it produces.
+    exclusionProbe(&report, gpa, arena, &backend, &tw) catch |err| report.fail("capture-exclusion", "{t}", .{err});
 
     // access-lost: the recovery path recreates the duplication in < 500 ms
     // and the next capture succeeds.
@@ -626,6 +791,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     // release: the shipped server releases a held key within 50 ms of stdin
     // EOF and exits with code 0.
     releaseCheck(io, &report, arena);
+    noIndicatorCheck(io, env, &report, arena, displays.len);
 
     return report.failed;
 }
@@ -1173,7 +1339,13 @@ fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: st
     defer server.deinit();
     var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
     defer caller.out.deinit();
-    backend.startKillSwitch(&server.control, .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } });
+    const rearm_combo: @import("../../core/keys.zig").Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
+    // The control indicator runs with the kill switch (US-034), so the kill
+    // checks below also time the hooks with it. Stopped after the kill
+    // switch, whose thread notifies it.
+    backend.startIndicator(&server.control, rearm_combo);
+    defer backend.stopIndicator();
+    backend.startKillSwitch(&server.control, rearm_combo);
     defer backend.stopKillSwitch();
     const ks = backend.kill orelse {
         report.fail("kill-switch", "low-level hooks could not be installed", .{});
@@ -1269,6 +1441,483 @@ fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: st
         else
             report.fail("hook-reinstall", "reinstalls {d} -> {d}, hooks live {}", .{ before, after, live });
     }
+    indicatorChecks(report, gpa, arena, &caller, &server, backend, ks, tw, rearm_combo) catch |err| report.fail("indicator", "{t}", .{err});
+}
+
+const IndicatorLook = @import("../../core/indicator.zig").Look;
+const Indicator = @import("indicator.zig").Indicator;
+
+fn waitLook(ind: *const Indicator, look: IndicatorLook, timeout_ms: u32) ?u64 {
+    const t0 = qpcUs();
+    while (qpcUs() - t0 < @as(u64, timeout_ms) * 1000) {
+        if (ind.current() == look) return (qpcUs() - t0) / 1000;
+        w.Sleep(5);
+    }
+    return null;
+}
+
+fn allVisible(hwnds: []const w.HWND, visible: bool) bool {
+    for (hwnds) |h| if ((w.IsWindowVisible(h) != 0) != visible) return false;
+    return hwnds.len > 0;
+}
+
+/// Points the indicator covers on every display: the middle of the left
+/// strip and the middle of the label (`geometry` order: 5 acting rects,
+/// then the paused label, per display).
+fn indicatorPoints(ind: *Indicator, out: *[2 * display.max_displays][2]i32) [][2]i32 {
+    var buf: [display.max_displays * 6]display.Rect = undefined;
+    const g = ind.geometry(&buf);
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + 6 <= g.len) : (i += 6) {
+        const left = g[i + 2];
+        const label = g[i + 4];
+        out[n] = .{ left.x + 1, left.y + @divTrunc(left.h, 2) };
+        out[n + 1] = .{ label.x + @divTrunc(label.w, 2), label.y + @divTrunc(label.h, 2) - 2 };
+        n += 2;
+    }
+    return out[0..n];
+}
+
+/// Share of `points` in the indicator's amber in each display's frame,
+/// for `backend`'s captures (DXGI, or GDI when forced).
+fn amberAt(backend: *Windows, arena: std.mem.Allocator, points: []const [2]i32) !usize {
+    const displays = backend.displays();
+    var hits: usize = 0;
+    for (displays, 0..) |d, di| {
+        const f = switch (backend.capture(di, arena)) {
+            .frame => |f| f,
+            .failed => |msg| {
+                std.debug.print("selftest: capture of display {d} failed: {s}\n", .{ di, msg });
+                return error.CaptureFailed;
+            },
+        };
+        for (points) |p| {
+            if (!d.rect.contains(p[0], p[1])) continue;
+            const i = @as(usize, @intCast(p[1] - d.rect.y)) * f.stride + @as(usize, @intCast(p[0] - d.rect.x)) * 4;
+            if (isColor(f.pixels[i..][0..4].*, @import("indicator.zig").acting_fill)) hits += 1;
+        }
+    }
+    return hits;
+}
+
+/// US-034: the control indicator of the selftest's server, the kill switch
+/// running. Shown during an action and 1 s after, paused until the re-arm,
+/// drawn but absent from every capture, its own dirty rects dropped,
+/// absent from window_list, point resolution, the policy and ui_tree, a
+/// state change cheap for the caller; a failure to start leaves tools
+/// working.
+fn indicatorChecks(report: *Report, gpa: std.mem.Allocator, arena: std.mem.Allocator, caller: *Caller, server: *Server, backend: *Windows, ks: *@import("hooks.zig").KillSwitch, tw: *TestWindow, rearm: @import("../../core/keys.zig").Combo) !void {
+    const core_ind = @import("../../core/indicator.zig");
+    const policy = @import("../../core/policy.zig");
+    const ind = backend.indicator orelse return report.fail("indicator-start", "the indicator did not start (see stderr)", .{});
+    if (!ind.ready(2000)) return report.fail("indicator-start", "its windows were not built (see stderr)", .{});
+    var hbuf: [display.max_displays * 5]w.HWND = undefined;
+    const hwnds = ind.windows(&hbuf);
+    const displays = backend.displays();
+    _ = w.SetForegroundWindow(tw.window());
+    var wr: w.RECT = undefined;
+    _ = w.GetWindowRect(tw.window(), &wr);
+    const m = display.Mapping.of(0, displays[0].rect, display.default_long_side);
+    const center = m.toScreenshot(@divTrunc(wr.left + wr.right, 2), @divTrunc(wr.top + wr.bottom, 2));
+
+    // indicator-start: five excluded windows per display (four strips and
+    // the label), hidden at rest.
+    _ = waitLook(ind, .hidden, 2000);
+    {
+        var excluded: usize = 0;
+        for (hwnds) |h| {
+            var a: u32 = 0;
+            if (w.GetWindowDisplayAffinity(h, &a) != 0 and a == w.WDA_EXCLUDEFROMCAPTURE) excluded += 1;
+        }
+        if (hwnds.len == 5 * displays.len and excluded == hwnds.len and allVisible(hwnds, false))
+            report.ok("indicator-start", "{d} layered windows, five per display, WDA_EXCLUDEFROMCAPTURE, hidden at rest", .{hwnds.len})
+        else
+            report.fail("indicator-start", "{d} window(s) for {d} display(s), {d} excluded, hidden {}", .{ hwnds.len, displays.len, excluded, allVisible(hwnds, false) });
+    }
+
+    // indicator-acting: shown during hold_key, still 1 s after, then gone.
+    {
+        const Sample = struct {
+            look: IndicatorLook = .hidden,
+            visible: bool = false,
+            fn run(self: *@This(), i: *const Indicator, hs: []const w.HWND) void {
+                w.Sleep(300);
+                self.look = i.current();
+                self.visible = allVisible(hs, true);
+            }
+        };
+        var sample: Sample = .{};
+        const th = try std.Thread.spawn(.{}, Sample.run, .{ &sample, ind, hwnds });
+        const r = try caller.call("hold_key", "{{\"text\":\"shift\",\"duration\":0.8,\"observe\":\"none\"}}", .{});
+        th.join();
+        const end = qpcUs();
+        const after = ind.current();
+        const lingered = allVisible(hwnds, true);
+        const gone = waitLook(ind, .hidden, 2500);
+        const gone_ms = (qpcUs() - end) / 1000;
+        if (!r.is_error and sample.look == .acting and sample.visible and after == .acting and lingered and gone != null and gone_ms >= 900 and gone_ms <= 1300 and allVisible(hwnds, false))
+            report.ok("indicator-acting", "`{s}` on every display during hold_key, still shown after it, hidden {d} ms after its end", .{ core_ind.acting_label, gone_ms })
+        else
+            report.fail("indicator-acting", "during: {t} visible {}; after: {t} visible {}; hidden after {d} ms ({any}); `{s}`", .{ sample.look, sample.visible, after, lingered, gone_ms, gone, r.text });
+    }
+
+    // indicator-settle: a click that changes nothing settles as fast with
+    // the indicator appearing (its dirty rects dropped) as without it
+    // (observer detached, the indicator stays hidden): medians of three, in
+    // the same run. An echo left in settling cost about 15 ms under DXGI.
+    {
+        const Click = struct {
+            fn settledMs(c: *Caller, at: [2]i32) !u32 {
+                const r = try c.call("left_click", "{{\"coordinate\":[{d},{d}]}}", .{ at[0], at[1] });
+                const line = std.mem.sliceTo(r.text, '\n');
+                const i = std.mem.indexOf(u8, line, "settled in ") orelse return error.NotSettled;
+                return std.fmt.parseInt(u32, std.mem.sliceTo(line[i + "settled in ".len ..], ' '), 10);
+            }
+        };
+        var with: [3]u32 = undefined;
+        var without: [3]u32 = undefined;
+        for (&with) |*ms| {
+            _ = waitLook(ind, .hidden, 2500);
+            ms.* = try Click.settledMs(caller, center);
+        }
+        _ = waitLook(ind, .hidden, 2500);
+        server.control.observe(null);
+        for (&without) |*ms| ms.* = try Click.settledMs(caller, center);
+        server.control.observe(&ind.observer);
+        const stayed_hidden = ind.current() == .hidden;
+        std.mem.sort(u32, &with, {}, std.sort.asc(u32));
+        std.mem.sort(u32, &without, {}, std.sort.asc(u32));
+        // GDI settling compares fingerprints 50 ms apart: its own noise is
+        // tens of ms, and the excluded indicator is not in its captures.
+        const tolerance: u32 = if (Windows.capture_mode == .gdi) 50 else 8;
+        if (stayed_hidden and with[1] <= without[1] + tolerance)
+            report.ok("indicator-settle", "left_click on the still test window settles in {d} ms median with the indicator appearing, {d} ms without it (tolerance {d} ms)", .{ with[1], without[1], tolerance })
+        else
+            report.fail("indicator-settle", "medians {d} ms with the indicator, {d} ms without (tolerance {d} ms), hidden while detached {}", .{ with[1], without[1], tolerance, stayed_hidden });
+        _ = waitLook(ind, .hidden, 2500);
+    }
+
+    // indicator-capture: shown, it is in no DXGI or GDI frame; let into the
+    // capture, the same points are its amber (drawn on every display).
+    {
+        var pbuf: [2 * display.max_displays][2]i32 = undefined;
+        const points = indicatorPoints(ind, &pbuf);
+        var gb: Windows = .init(gpa);
+        defer gb.deinit();
+        gb.force_gdi = true;
+        server.control.beginAction();
+        _ = waitLook(ind, .acting, 500);
+        w.Sleep(100);
+        const dxgi_hits: ?usize = if (Windows.capture_mode == .gdi) null else try amberAt(backend, arena, points);
+        const gdi_hits = try amberAt(&gb, arena, points);
+        const exposed = ind.excludeFromCapture(false);
+        w.Sleep(150);
+        const drawn = try amberAt(&gb, arena, points);
+        const restored = ind.excludeFromCapture(true);
+        _ = server.control.endAction();
+        w.Sleep(100);
+        if ((dxgi_hits orelse 0) == 0 and gdi_hits == 0 and exposed and restored and drawn == points.len)
+            report.ok("indicator-capture", "{d} frame and label points: in no DXGI frame{s} nor GDI frame; without the exclusion, {d}/{d} are its amber", .{ points.len, if (dxgi_hits == null) " (not measured, --capture gdi)" else "", drawn, points.len })
+        else
+            report.fail("indicator-capture", "amber points: DXGI {any}, GDI {d}, drawn {d}/{d} (exposed {}, restored {})", .{ dxgi_hits, gdi_hits, drawn, points.len, exposed, restored });
+        _ = waitLook(ind, .hidden, 2500);
+    }
+
+    // indicator-echo: the dirty rects of its appearance and of its
+    // disappearance, looked at seconds later, are dropped as its own.
+    if (Windows.capture_mode == .gdi) report.skip("indicator-echo", "{s}", .{gdi_skip}) else {
+        var gbuf: [display.max_displays * 6]display.Rect = undefined;
+        const g = ind.geometry(&gbuf);
+        const Count = struct {
+            var seen: [16]display.Rect = undefined;
+            var seen_len: usize = 0;
+            fn left(b: *Windows, a: std.mem.Allocator, n: usize, geo: []const display.Rect) usize {
+                var count: usize = 0;
+                for (0..n) |di| switch (b.changes(di, a, null)) {
+                    .frame => |f| for (f.dirty) |d| {
+                        if (core_ind.covered(geo, d)) count += 1;
+                        var touches = false;
+                        for (geo) |r| if (r.intersects(d)) {
+                            touches = true;
+                        };
+                        if (touches and seen_len < seen.len) {
+                            seen[seen_len] = d;
+                            seen_len += 1;
+                        }
+                    },
+                    .failed => {},
+                };
+                return count;
+            }
+        };
+        for (0..3) |_| {
+            _ = Count.left(backend, arena, displays.len, g);
+            w.Sleep(30);
+        }
+        const dropped0 = ind.dropped.load(.acquire);
+        server.control.beginAction();
+        var shown_left: usize = 0;
+        for (0..20) |_| {
+            shown_left += Count.left(backend, arena, displays.len, g);
+            w.Sleep(10);
+        }
+        _ = server.control.endAction();
+        const dropped_shown = ind.dropped.load(.acquire) - dropped0;
+        // No look while it lingers and hides: the next one, 1.5 s later,
+        // gets the disappearance's dirty rects.
+        w.Sleep(1500);
+        const hidden_left = Count.left(backend, arena, displays.len, g);
+        const dropped_hidden = ind.dropped.load(.acquire) - dropped0 - dropped_shown;
+        if (shown_left == 0 and hidden_left == 0 and dropped_shown > 0 and dropped_hidden > 0 and ind.current() == .hidden)
+            report.ok("indicator-echo", "its own dirty rects dropped: {d} when it appears, {d} when it hides (looked at 1.5 s later); none left over its frame or label", .{ dropped_shown, dropped_hidden })
+        else
+            report.fail("indicator-echo", "dropped {d} shown, {d} hidden; left over it {d} shown, {d} hidden; now {t}; dirty rects touching it {any}; geometry {any}", .{ dropped_shown, dropped_hidden, shown_left, hidden_left, ind.current(), Count.seen[0..Count.seen_len], g });
+    }
+
+    // indicator-paused: a physical Escape during hold_key turns the label
+    // to the pause, which stays until the physical re-arm.
+    var stamp_hidden: u64 = 0;
+    var stamp_shown: u64 = 0;
+    {
+        const Escape = struct {
+            fn run(k: *@import("hooks.zig").KillSwitch) void {
+                w.Sleep(300);
+                k.simulateKey(w.VK_ESCAPE, true);
+                k.simulateKey(w.VK_ESCAPE, false);
+            }
+        };
+        stamp_hidden = backend.topWindowStamp();
+        const th = try std.Thread.spawn(.{}, Escape.run, .{ks});
+        const r = try caller.call("hold_key", "{{\"text\":\"shift\",\"duration\":5,\"observe\":\"none\"}}", .{});
+        th.join();
+        const first = ind.current();
+        stamp_shown = backend.topWindowStamp();
+        w.Sleep(1500);
+        const later = ind.current();
+        const visible = allVisible(hwnds, true);
+        var lbuf: [96]u8 = undefined;
+        const label = core_ind.pausedLabel(&lbuf, rearm);
+        if (r.is_error and first == .paused and later == .paused and visible)
+            report.ok("indicator-paused", "`{s}` from the trip, still shown 1.5 s after the cancelled action", .{label})
+        else
+            report.fail("indicator-paused", "after the trip {t}, 1.5 s later {t}, visible {}; `{s}`", .{ first, later, visible, r.text });
+    }
+
+    // indicator-absent (while paused, so shown): not in window_list, not
+    // the window under a point of it (policy target), not a
+    // ui_tree root of this process's test window, no new window stamp.
+    {
+        const list = try caller.call("window_list", "{{\"include_hidden\":true}}", .{});
+        var listed = false;
+        for (hwnds) |h| {
+            if (std.mem.indexOf(u8, list.text, try std.fmt.allocPrint(arena, "0x{x} ", .{@intFromPtr(h)})) != null) listed = true;
+        }
+        var pbuf: [2 * display.max_displays][2]i32 = undefined;
+        const points = indicatorPoints(ind, &pbuf);
+        var under = false;
+        var ctx: Server.ToolCtx = .{ .arena = arena, .io = caller.server.io, .backend = backend, .cancel = &server.control.cancel, .timings = &server.timings, .session = &server.session };
+        for (points) |p| {
+            if (backend.windowAt(p)) |ref| for (hwnds) |h| if (ref.handle == @intFromPtr(h)) {
+                under = true;
+            };
+            ctx.target = null;
+            _ = policy.requireAt(&ctx, p, .observe);
+            if (ctx.target) |t| for (hwnds) |h| if (t.handle == @intFromPtr(h)) {
+                under = true;
+            };
+        }
+        var rooted = false;
+        for (backend.uiRoots(arena, @intFromPtr(tw.window()))) |root| for (hwnds) |h| if (root.handle == @intFromPtr(h)) {
+            rooted = true;
+        };
+        const tree = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{@intFromPtr(tw.window())});
+        for (hwnds) |h| {
+            if (std.mem.indexOf(u8, tree.text, try std.fmt.allocPrint(arena, "0x{x}", .{@intFromPtr(h)})) != null) rooted = true;
+        }
+        const same_stamp = stamp_shown == stamp_hidden;
+        if (allVisible(hwnds, true) and !listed and !under and !rooted and same_stamp)
+            report.ok("indicator-absent", "shown, yet absent from window_list (include_hidden), the window and policy target under {d} of its points, ui_tree roots, and the window stamp", .{points.len})
+        else
+            report.fail("indicator-absent", "visible {}, listed {}, under a point {}, ui_tree root {}, same stamp {}", .{ allVisible(hwnds, true), listed, under, rooted, same_stamp });
+    }
+
+    // The physical re-arm hides it at once.
+    {
+        const combo = [_]u16{ w.VK_LCONTROL, w.VK_LMENU, w.VK_LSHIFT, 'R' };
+        const t0 = qpcUs();
+        for (combo) |vk| ks.simulateKey(vk, true);
+        for (combo) |vk| ks.simulateKey(vk, false);
+        const gone = waitLook(ind, .hidden, 500);
+        const gone_ms = (qpcUs() - t0) / 1000;
+        if (gone != null and !server.control.isPaused() and gone_ms < 200) report.ok("indicator-rearm", "hidden {d} ms after the physical re-arm", .{gone_ms}) else report.fail("indicator-rearm", "paused {}, look {t} after {d} ms", .{ server.control.isPaused(), ind.current(), gone_ms });
+    }
+
+    // indicator-cost: every state change (an action's start and end, the
+    // kill switch's trip and re-arm, which run on the hook thread) costs
+    // the calling thread one posted message (budget 2 ms); the hooks' own
+    // budget is kill-mouse's.
+    {
+        var samples: [400]u64 = undefined;
+        var k: usize = 0;
+        for (0..100) |_| {
+            const c = &server.control;
+            var t: [5]u64 = undefined;
+            t[0] = qpcUs();
+            c.beginAction();
+            t[1] = qpcUs();
+            _ = c.trip();
+            t[2] = qpcUs();
+            _ = c.endAction();
+            t[3] = qpcUs();
+            _ = c.rearm();
+            t[4] = qpcUs();
+            for (0..4) |j| samples[k + j] = t[j + 1] - t[j];
+            k += 4;
+        }
+        server.control.cancel.store(false, .release);
+        std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+        const p95 = samples[379];
+        const worst = samples[399];
+        const gone = waitLook(ind, .hidden, 2500);
+        const hook_us = @as(f64, @floatFromInt(ks.max_proc_ns.load(.acquire))) / 1000;
+        if (worst < 2000 and gone != null and hook_us < 1000)
+            report.ok("indicator-cost", "400 state changes (begin, trip, end, re-arm): p95 {d} us, slowest {d} us for the caller (budget 2000 us); slowest hook call so far {d:.1} us (budget 1000 us)", .{ p95, worst, hook_us })
+        else
+            report.fail("indicator-cost", "state change p95 {d} us, slowest {d} us; hidden after {any}; slowest hook {d:.1} us", .{ p95, worst, gone, hook_us });
+    }
+
+    // indicator-brief: an action that begins and ends before the
+    // indicator's thread wakes up is never seen busy, yet still shows the
+    // indicator and its 1 s linger.
+    {
+        _ = waitLook(ind, .hidden, 2500);
+        server.control.beginAction();
+        _ = server.control.endAction();
+        const end = qpcUs();
+        const shown = waitLook(ind, .acting, 200);
+        const gone = waitLook(ind, .hidden, 2500);
+        const gone_ms = (qpcUs() - end) / 1000;
+        if (shown != null and gone != null and gone_ms >= 900 and gone_ms <= 1300)
+            report.ok("indicator-brief", "an action ended before the indicator saw it: shown after {d} ms, hidden {d} ms after its end", .{ shown.?, gone_ms })
+        else
+            report.fail("indicator-brief", "shown {any}, hidden after {d} ms ({any})", .{ shown, gone_ms, gone });
+    }
+
+    // indicator-rebuild: a display change during the linger rebuilds the
+    // windows, which still hide about 1 s later instead of staying shown.
+    {
+        server.control.beginAction();
+        _ = waitLook(ind, .acting, 500);
+        _ = server.control.endAction();
+        w.Sleep(200);
+        var before: [display.max_displays * 5]w.HWND = undefined;
+        const old = ind.windows(&before);
+        const t0 = qpcUs();
+        _ = w.SendMessageW(old[0], w.WM_DISPLAYCHANGE, 0, 0);
+        var rebuilt = false;
+        var after: [display.max_displays * 5]w.HWND = undefined;
+        var n: usize = 0;
+        while (qpcUs() - t0 < 1_000_000 and !rebuilt) : (w.Sleep(5)) {
+            const now = ind.windows(&after);
+            n = now.len;
+            rebuilt = n == 5 * displays.len and now[0] != old[0];
+        }
+        // The windows exist before the look is applied to them.
+        const look: IndicatorLook = if (waitLook(ind, .acting, 200) != null) .acting else ind.current();
+        const gone = waitLook(ind, .hidden, 2500);
+        const gone_ms = (qpcUs() - t0) / 1000;
+        if (rebuilt and look == .acting and gone != null and gone_ms >= 800 and gone_ms <= 1400)
+            report.ok("indicator-rebuild", "display change during the linger: {d} windows rebuilt, still acting, hidden {d} ms later", .{ n, gone_ms })
+        else
+            report.fail("indicator-rebuild", "rebuilt {} ({d} windows), look {t}, hidden after {d} ms ({any})", .{ rebuilt, n, look, gone_ms, gone });
+    }
+
+    // indicator-refused: windows that cannot be built are logged on stderr
+    // by the indicator's thread, and the tools keep working, state changes
+    // included.
+    {
+        backend.stopIndicator();
+        backend.refuse_indicator = true;
+        backend.startIndicator(&server.control, rearm);
+        backend.refuse_indicator = false;
+        const refused = backend.indicator orelse return report.fail("indicator-refused", "the indicator thread did not start", .{});
+        const built = refused.ready(2000);
+        var rbuf: [display.max_displays * 5]w.HWND = undefined;
+        const left = refused.windows(&rbuf).len;
+        const r = try caller.call("left_click", "{{\"coordinate\":[{d},{d}],\"observe\":\"none\"}}", .{ center[0], center[1] });
+        if (!built and refused.failed.load(.acquire) and left == 0 and !r.is_error) report.ok("indicator-refused", "windows refused: logged, none left, left_click `{s}`", .{r.text}) else report.fail("indicator-refused", "built {}, windows {d}, left_click `{s}`", .{ built, left, r.text });
+    }
+}
+
+/// no-indicator: the shipped server builds its indicator windows (five per
+/// display, hidden) once started, and none with `--no-indicator` (looked
+/// for 500 ms). Skipped when another neo-compute controls the desktop:
+/// a second instance never shows the indicator.
+fn noIndicatorCheck(io: std.Io, env: *const std.process.Environ.Map, report: *Report, arena: std.mem.Allocator, displays: usize) void {
+    const name = std.unicode.utf8ToUtf16LeStringLiteral("Local\\neo-compute-desktop");
+    const mutex = w.CreateMutexW(null, 0, name);
+    const taken = mutex != null and w.GetLastError() == w.ERROR_ALREADY_EXISTS;
+    if (mutex != null) _ = w.CloseHandle(mutex);
+    if (taken) return report.skip("no-indicator", "another neo-compute controls this desktop: its second instance never shows the indicator", .{});
+    const with = indicatorWindowsOf(io, env, arena, false) catch |err| return report.fail("no-indicator", "server without the flag: {t}", .{err});
+    const without = indicatorWindowsOf(io, env, arena, true) catch |err| return report.fail("no-indicator", "server with --no-indicator: {t}", .{err});
+    if (with == 5 * displays and without == 0) report.ok("no-indicator", "shipped server: {d} indicator windows, five per display; with --no-indicator: none", .{with}) else report.fail("no-indicator", "{d} window(s) without the flag (expected {d}), {d} with --no-indicator", .{ with, 5 * displays, without });
+}
+
+/// Indicator windows of a `neo-compute [--no-indicator]` server once it
+/// answered `initialize`. Its policy and audit log go to a scratch
+/// directory.
+fn indicatorWindowsOf(io: std.Io, env: *const std.process.Environ.Map, arena: std.mem.Allocator, flag: bool) !usize {
+    var path_w: [1024:0]u16 = undefined;
+    const n = w.GetModuleFileNameW(null, &path_w, path_w.len);
+    const path = try arena.alloc(u8, n * 3);
+    const exe = path[0..std.unicode.wtf16LeToWtf8(path, path_w[0..n])];
+    const temp = env.get("TEMP") orelse return error.NoTempDirectory;
+    const home = try std.fs.path.join(arena, &.{ temp, "neo-compute-selftest-indicator" });
+    try std.Io.Dir.cwd().createDirPath(io, home);
+    defer std.Io.Dir.cwd().deleteTree(io, home) catch {};
+    var server_env = try env.clone(arena);
+    try server_env.put("APPDATA", home);
+    try server_env.put("LOCALAPPDATA", home);
+    const argv: []const []const u8 = if (flag) &.{ exe, "--no-indicator" } else &.{exe};
+    var server = try std.process.spawn(io, .{ .argv = argv, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore, .environ_map = &server_env });
+    defer server.kill(io);
+    var wbuf: [1024]u8 = undefined;
+    var sw = server.stdin.?.writerStreaming(io, &wbuf);
+    var rbuf: [16 * 1024]u8 = undefined;
+    var sr = server.stdout.?.readerStreaming(io, &rbuf);
+    _ = try rpc(&sw, &sr, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"selftest\",\"version\":\"0\"}}}\n", true);
+    const Find = struct {
+        pid: u32,
+        count: usize = 0,
+        fn callback(hwnd: w.HWND, lparam: w.LPARAM) callconv(.winapi) w.BOOL {
+            const self: *@This() = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            var pid: u32 = 0;
+            _ = w.GetWindowThreadProcessId(hwnd, &pid);
+            if (pid != self.pid) return 1;
+            var class: [64:0]u16 = undefined;
+            const len = w.GetClassNameW(hwnd, &class, class.len);
+            if (len > 0 and std.mem.eql(u16, class[0..@intCast(len)], std.unicode.utf8ToUtf16LeStringLiteral(@import("indicator.zig").class_name))) self.count += 1;
+            return 1;
+        }
+    };
+    // Built in the background: wait up to 2 s for them.
+    var find: Find = .{ .pid = w.GetProcessId(@ptrCast(server.id.?)) };
+    var waited: u32 = 0;
+    while (true) : (waited += 20) {
+        find.count = 0;
+        _ = w.EnumWindows(Find.callback, @bitCast(@intFromPtr(&find)));
+        if (find.count > 0 or waited >= 2000 or flag and waited >= 500) break;
+        w.Sleep(20);
+    }
+    // The first windows exist: let the build finish, then count them all.
+    if (find.count > 0) {
+        w.Sleep(300);
+        find.count = 0;
+        _ = w.EnumWindows(Find.callback, @bitCast(@intFromPtr(&find)));
+    }
+    return find.count;
 }
 
 /// ui-find-wait-cpu (US-030): a 5 s ui_find wait without change on a still

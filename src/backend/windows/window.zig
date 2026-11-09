@@ -5,6 +5,7 @@ const std = @import("std");
 const w = @import("win32");
 const display = @import("../../core/display.zig");
 const input = @import("input.zig");
+const indicator = @import("indicator.zig");
 
 const max_windows = 512;
 
@@ -13,10 +14,13 @@ const Collect = struct {
     len: usize = 0,
 
     /// Keeps visible windows only, so hidden ones (often hundreds) never
-    /// use up the cap ahead of visible windows lower in the z-order.
+    /// use up the cap ahead of visible windows lower in the z-order. The
+    /// control indicator's windows (US-034) are never part of the desktop
+    /// neo-compute reports: window_list, ui_tree roots, masking, the
+    /// window stamp of ui_find's wait.
     fn callback(hwnd: w.HWND, lparam: w.LPARAM) callconv(.winapi) w.BOOL {
         const self: *Collect = @ptrFromInt(@as(usize, @bitCast(lparam)));
-        if (w.IsWindowVisible(hwnd) == 0) return 1;
+        if (w.IsWindowVisible(hwnd) == 0 or indicator.owns(hwnd)) return 1;
         if (self.len == max_windows) return 0;
         self.hwnds[self.len] = hwnd;
         self.len += 1;

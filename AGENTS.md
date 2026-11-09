@@ -55,8 +55,9 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
 also needs `selftest`, with its output in the report. `selftest` moves the
-cursor, types, and raises a topmost window; `bench` captures the screen,
-reads the taskbar and raises a topmost test window (`settle`). Run them one at a time.
+cursor, types, raises a topmost window and shows the control indicator;
+`bench` captures the screen, reads the taskbar and raises a topmost test
+window (`settle`). Run them one at a time.
 
 ## Architecture and gotchas
 
@@ -85,6 +86,11 @@ reads the taskbar and raises a topmost test window (`settle`). Run them one at a
   until the thread answers. Before a UIA round trip that must stay bounded,
   check the window with `responsive` in `uia.zig` (selftest
   `ui-range-timeout` proves it through `neo-compute selftest-stall`).
+- A window with `WDA_EXCLUDEFROMCAPTURE` is absent from DXGI and GDI frames,
+  but each change of it still produces DXGI dirty rects, and DWM dirties a
+  window's whole rectangle whatever its region. An overlay that must not
+  disturb settling stays small and static, and its windows are skipped by
+  `Collect` in `window.zig`, as the control indicator does (decision 0011).
 - Zig 0.17's std (`std.Io`, `std.process.Init`, `std.lang.Optimize`) differs
   from older releases. Verify APIs against the installed std (`std_dir` in
   `zig env`) or against Ghostty, which pins the same version (`C:/dev/ghostty`

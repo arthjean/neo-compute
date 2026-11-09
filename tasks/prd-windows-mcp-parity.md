@@ -395,7 +395,7 @@ Montrer à Arthur quand l'agent agit, sans bloquer ses entrées physiques.
 **Dependencies:** Blocked by US-033
 
 **Acceptance Criteria:**
-- [ ] Un thread dédié possède une fenêtre layered par écran (`WS_EX_LAYERED`, `WS_EX_TRANSPARENT`, `WS_EX_TOPMOST`, `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`) : un cadre de 4 px et une étiquette « neo-compute is acting: Esc pauses » pendant une action et sa stabilisation, puis 1 s après.
+- [ ] Un thread dédié possède, par écran, cinq fenêtres layered (`WS_EX_LAYERED`, `WS_EX_TRANSPARENT`, `WS_EX_TOPMOST`, `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`), quatre bandes le long des bords et la boîte de l'étiquette, pour que chaque changement ne salisse que leur surface (décision 0011) : un cadre de 4 px et une étiquette « neo-compute is acting: Esc pauses » pendant une action et sa stabilisation, puis 1 s après.
 - [ ] En pause (kill switch), l'étiquette devient « neo-compute paused: Ctrl+Alt+Shift+R resumes » et reste affichée jusqu'au réarmement.
 - [ ] Les fenêtres de l'indicateur n'apparaissent dans aucune capture de neo-compute : par `WDA_EXCLUDEFROMCAPTURE` si US-033 l'a validé, sinon parce qu'elles sont masquées avant chaque capture et réaffichées après.
 - [ ] Si US-033 a montré que l'animation produit des dirty rects, l'indicateur reste statique pendant la stabilisation.

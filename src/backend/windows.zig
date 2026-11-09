@@ -15,6 +15,7 @@ const window = @import("windows/window.zig");
 const com = @import("windows/com.zig");
 const uia = @import("windows/uia.zig");
 const hooks = @import("windows/hooks.zig");
+const indicator_mod = @import("windows/indicator.zig");
 const shell_mod = @import("windows/shell.zig");
 const apps = @import("../core/apps.zig");
 const Control = @import("../core/control.zig").Control;
@@ -37,6 +38,13 @@ pub const Windows = struct {
     /// Shell APIs on their own STA thread (EP-006).
     shell: shell_mod.Shell,
     kill: ?*hooks.KillSwitch = null,
+    /// Control indicator (US-034), null when off or unavailable.
+    indicator: ?*indicator_mod.Indicator = null,
+    /// Selftest only: the indicator fails to start, as if its windows
+    /// could not be created.
+    refuse_indicator: bool = false,
+    /// Per display, the indicator change its last look saw (`dropEchoes`).
+    indicator_seen: [display.max_displays]i64 = @splat(0),
     /// GDI capture per display (US-032), and the displays whose duplication
     /// Windows refuses for good (DXGI_ERROR_UNSUPPORTED).
     gdi: [display.max_displays]capture_mod.Gdi = @splat(.{}),
@@ -64,6 +72,7 @@ pub const Windows = struct {
 
     pub fn deinit(self: *Windows) void {
         self.stopKillSwitch();
+        self.stopIndicator();
         self.ui.deinit();
         self.shell.deinit();
         for (&self.gdi) |*g| g.deinit();
@@ -176,6 +185,8 @@ pub const Windows = struct {
             },
             else => return self.failure(arena, index, o, err, false),
         };
+        // The indicator's own changes are not changes of the screen (US-034).
+        if (self.indicator) |ind| ind.dropEchoes(&o.dirty, &self.indicator_seen[index]);
         if (!o.has_frame) return .{ .failed = "Capture réinitialisée : réessaie." };
         // A look for changes left the newest frame on the GPU.
         if (read and o.unread) {
@@ -365,6 +376,31 @@ pub const Windows = struct {
     fn releaseFromHook(ctx: *anyopaque) void {
         const self: *Windows = @ptrCast(@alignCast(ctx));
         self.releaseAllInputs();
+    }
+
+    /// Starts the control indicator (US-034) on its own thread and has
+    /// `control` tell it of every state change. Its windows are built in
+    /// the background; a failure is logged on stderr and leaves every tool
+    /// working without it.
+    pub fn startIndicator(self: *Windows, control: *Control, rearm: keys.Combo) void {
+        const ind = self.gpa.create(indicator_mod.Indicator) catch return;
+        ind.* = .{ .control = control, .refuse = self.refuse_indicator };
+        ind.start(rearm) catch |err| {
+            std.debug.print("neo-compute: control indicator unavailable ({t}): tools run without it\n", .{err});
+            self.gpa.destroy(ind);
+            return;
+        };
+        control.observe(&ind.observer);
+        self.indicator = ind;
+    }
+
+    /// Stop the kill switch first: its hook thread notifies the indicator.
+    pub fn stopIndicator(self: *Windows) void {
+        const ind = self.indicator orelse return;
+        ind.control.observe(null);
+        ind.stop();
+        self.gpa.destroy(ind);
+        self.indicator = null;
     }
 
     pub fn stopKillSwitch(self: *Windows) void {

@@ -148,5 +148,13 @@
 
         // Server CPU in cycles for the selftest's wait budgets (US-030)
         "QueryProcessCycleTime",                      "QueryThreadCycleTime",                   "GetCurrentThread",
+
+        // Capture exclusion probe (US-033) and the control indicator (US-034)
+                                  "SetWindowDisplayAffinity",                  "GetWindowDisplayAffinity",
+        "WDA_EXCLUDEFROMCAPTURE",                     "WDA_NONE",                               "SetLayeredWindowAttributes",                 "LWA_ALPHA",                                 "EnumDisplayMonitors",
+        "CreateFontW",                                "SetTextColor",                           "SetBkMode",                                  "DrawTextW",                                 "DT_CENTER",
+        "DT_VCENTER",                                 "DT_SINGLELINE",                          "DT_CALCRECT",                                "HWND_TOPMOST",                              "SWP_NOMOVE",
+        "SWP_SHOWWINDOW",                             "SW_HIDE",                                "WM_DISPLAYCHANGE",                           "FW_SEMIBOLD",                               "CLEARTYPE_QUALITY",
+        "TRANSPARENT",                                "WM_DPICHANGED",
     },
 }
