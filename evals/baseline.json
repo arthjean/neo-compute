@@ -1,0 +1,6 @@
+{
+  "note": "Success of the 20 existing tasks (US-016, canary excluded) in a11y mode, against which evals/report.ps1 flags a regression of more than 5 points (US-038).",
+  "existing_a11y_success": 1.0,
+  "date": "2026-11-03",
+  "source": "evals/reports/2026-11-03.md"
+}

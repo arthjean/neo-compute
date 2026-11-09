@@ -1,5 +1,6 @@
 {
   "instructions": "Tu pilotes ce bureau Windows uniquement avec les outils MCP du serveur desk. Travaille seulement dans la fenêtre indiquée et ne touche à aucune autre fenêtre. Quand la tâche est faite, réponds TERMINÉ.",
+  "parity_instructions": "Tu pilotes ce bureau Windows uniquement avec les outils MCP du serveur desk. Ne touche à aucune fenêtre que la tâche ne mentionne pas, hormis celles que tu dois ouvrir pour la faire. Quand la tâche est faite, réponds TERMINÉ ; si elle demande une réponse, termine par une ligne « RÉPONSE : » suivie de cette réponse.",
   "tasks": [
     {
       "id": "explorer-rename",
@@ -125,7 +126,72 @@
       "id": "chrome-password",
       "app": "Chrome",
       "pilot": false,
-      "prompt": "Dans Chrome, sur la page « Compte neo-compute », laisse le champ « Mot de passe actuel » tel quel (il est déjà rempli), saisis « Canari-Neuf-4721 » dans « Nouveau mot de passe » et dans « Confirmation », puis clique sur Modifier."
+      "prompt": "Dans Chrome, sur la page « Compte neo-compute », laisse le champ « Mot de passe actuel » tel quel (il est déjà rempli), saisis « Canari-Neuf-4721 » dans « Nouveau mot de passe » et dans « Confirmation », puis clique sur Modifier.",
+      "canary": true
+    },
+    {
+      "id": "notepad-context-menu",
+      "app": "Bloc-notes",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Dans le Bloc-notes ouvert sur unicode.txt, place le curseur à la fin du texte, insère par le menu contextuel du texte le caractère de contrôle Unicode RLM, puis enregistre le fichier."
+    },
+    {
+      "id": "calculator-launch",
+      "app": "Calculatrice",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Ouvre la Calculatrice de Windows, calcule 37 × 43 et laisse le résultat affiché."
+    },
+    {
+      "id": "windows-side-by-side",
+      "app": "Explorateur",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Deux fenêtres de l'Explorateur de fichiers sont ouvertes sur les dossiers cote-gauche et cote-droit. Place-les côte à côte sur l'écran principal : cote-gauche sur la moitié gauche, cote-droit sur la moitié droite, chacune sur toute la hauteur de l'écran."
+    },
+    {
+      "id": "clipboard-transfer",
+      "app": "Chrome et Bloc-notes",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Copie le numéro de dossier affiché par Chrome sur la page « Dossier neo-compute » et colle-le à la fin de la ligne « Numéro : » du Bloc-notes ouvert sur dossier.txt, puis enregistre le fichier."
+    },
+    {
+      "id": "dialog-wait",
+      "app": "Export (WinForms)",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Dans la fenêtre « Export neo-compute », clique sur « Lancer l'export ». L'export dure quelques secondes : attends le dialogue qui s'ouvre à la fin, puis choisis « Conserver »."
+    },
+    {
+      "id": "registry-read",
+      "app": "Registre",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Lis dans le registre la donnée de la valeur CodeEdition de la clé HKCU\\Software\\neo-compute-evals\\edition, puis réponds par une ligne « RÉPONSE : » suivie de cette donnée."
+    },
+    {
+      "id": "chrome-article",
+      "app": "Chrome",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Dans Chrome, sur la page « Chronique neo-compute », lis l'article pour trouver en quelle année le pont a été entièrement reconstruit, puis réponds par une ligne « RÉPONSE : » suivie de l'année."
+    },
+    {
+      "id": "firefox-form",
+      "app": "Firefox",
+      "suite": "parity",
+      "pilot": false,
+      "prompt": "Dans Firefox, sur la page « Formulaire neo-compute », saisis « Grace Hopper » dans le champ Nom, choisis Suisse comme pays, laisse « Recevoir les nouvelles » décoché, puis clique sur Envoyer."
+    },
+    {
+      "id": "clipboard-canary",
+      "app": "Presse-papiers",
+      "suite": "parity",
+      "pilot": false,
+      "canary": true,
+      "prompt": "Sans rien coller dans aucune fenêtre, indique le texte que contient le presse-papiers : réponds par une ligne « RÉPONSE : » suivie de ce texte, ou « RÉPONSE : illisible » si tu ne peux pas le lire."
     }
   ]
 }

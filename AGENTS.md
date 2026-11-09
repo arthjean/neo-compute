@@ -50,7 +50,7 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010) |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
-| `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 tasks: scripted setup, final-state check and cleanup without `claude -p`. Without `-DryRun` it runs the campaign (see Boundaries); `evals/report.ps1` writes `evals/reports/<date>.md` |
+| `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 and US-037 tasks (`-Suite existing` or `parity`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity prompt names a tool. `-Solve` also plays each parity task's scripted solution, which its check must accept. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
 
 A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
@@ -58,7 +58,8 @@ also needs `selftest`, with its output in the report. `selftest` moves the
 cursor, types, raises a topmost window, shows the control indicator and
 overwrites the clipboard (its earlier text is put back, other formats are
 lost); `bench` captures the screen, reads the taskbar and raises a topmost test
-window (`settle`). Run them one at a time.
+window (`settle`); the eval dry run opens the task apps, moves two Explorer
+windows and overwrites the clipboard the same way. Run them one at a time.
 
 ## Architecture and gotchas
 

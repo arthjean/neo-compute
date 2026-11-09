@@ -19,6 +19,19 @@ Modes:
   pwsh evals/run.ps1 -DryRun     # setup, verify and cleanup only, no claude
   pwsh evals/run.ps1 -Modes a11y,vision,windows-mcp -Reps 3 -Resume 2026-11-03_183145
                                  # appends to that campaign the runs it lacks
+  pwsh evals/run.ps1 -Suite parity -DryRun   # the parity tasks of US-037 only
+  pwsh evals/run.ps1 -Suite parity -DryRun -Solve -Modes a11y -Reps 1
+                                 # plus each scripted solution, which the check must accept
+
+Suites: `existing` (US-016, the 20 tasks and the password canary) and
+`parity` (US-037). Parity prompts name no tool, which the run checks before
+anything else, and get their own instructions: they may open windows, and
+a task that asks for an answer reads it from the final message (answer.txt
+in the run directory). A task script with an `available` phase is recorded
+`skipped` with the reason that phase returns (an absent application), out
+of every rate. A real run (no
+-DryRun) refuses uncommitted changes under evals/windows and records the
+commit of the tasks it measures (US-037).
 
 The runs take control of the mouse and keyboard: leave the desktop alone
 while they play.
@@ -27,21 +40,69 @@ param(
     [ValidateSet('a11y', 'vision', 'windows-mcp')][string[]]$Modes = @('a11y', 'vision', 'windows-mcp'),
     [int]$Reps = 3,
     [string[]]$Tasks,
+    [ValidateSet('all', 'existing', 'parity')][string]$Suite = 'all',
     [switch]$Pilot,
     [double]$TimeoutMin = 10,
     # Pinned for reproducibility (decision 0005).
     [string]$Model = 'claude-opus-5-5',
     [string]$Claude = "$env:USERPROFILE\.local\bin\claude.exe",
     [switch]$DryRun,
+    # With -DryRun: a task whose script has a `solve` phase plays its scripted
+    # solution (UIA and keys, never neo-compute), and its check must then pass.
+    [switch]$Solve,
     # Stamp of an interrupted campaign under evals/results: its recorded runs
-    # are skipped, harness failures excepted, and the new ones appended.
+    # are skipped, harness failures and skipped tasks excepted, and the new
+    # ones appended.
     [string]$Resume
 )
 $ErrorActionPreference = 'Stop'
+if ($Solve -and -not $DryRun) { throw '-Solve needs -DryRun' }
 $root = Split-Path $PSScriptRoot -Parent
 $manifest = Get-Content "$PSScriptRoot/windows/tasks.json" -Raw | ConvertFrom-Json
-$selected = @($manifest.tasks | Where-Object { (-not $Tasks -or $Tasks -contains $_.id) -and (-not $Pilot -or $_.pilot) })
+function Get-Suite($Task) { if ($Task.suite) { $Task.suite } else { 'existing' } }
+# The phases a task script accepts: setup, verify and cleanup always,
+# `available` and `solve` when it has them.
+function Get-Phases([string]$Script) {
+    (Get-Command $Script).Parameters['Phase'].Attributes |
+        Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } | ForEach-Object { $_.ValidValues }
+}
+
+# US-037: a parity prompt that named a tool would favor the mode that has it.
+# The names are those of neo-compute (toolset fixture and tools.zig) and of
+# Windows-MCP v0.8.8 (decision 0008), matched as whole words without case.
+function Assert-NoToolName {
+    $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($t in (Get-Content "$root/tests/fixtures/toolset_20260801.json" -Raw | ConvertFrom-Json).tools) { [void]$names.Add($t.name) }
+    foreach ($m in [regex]::Matches((Get-Content "$root/src/core/tools.zig" -Raw), 'pub const name = "([a-z_]+)"')) { [void]$names.Add($m.Groups[1].Value) }
+    foreach ($n in 'App', 'Click', 'Clipboard', 'ControlStatus', 'DisplayInventory', 'FileSystem', 'Move', 'MultiEdit', 'MultiSelect',
+        'Notification', 'PowerShell', 'Process', 'Registry', 'Scrape', 'Screenshot', 'Scroll', 'Shortcut', 'Snapshot', 'Type', 'Wait', 'WaitFor') {
+        [void]$names.Add($n)
+    }
+    $texts = @([pscustomobject]@{ id = 'parity_instructions'; text = $manifest.parity_instructions }) +
+        @($manifest.tasks | Where-Object { (Get-Suite $_) -eq 'parity' } | ForEach-Object { [pscustomobject]@{ id = $_.id; text = $_.prompt } })
+    $bad = foreach ($t in $texts) {
+        foreach ($n in $names) {
+            if ($t.text -match "(?i)(?<![\p{L}\p{N}_])$([regex]::Escape($n))(?![\p{L}\p{N}_])") { "$($t.id) ($n)" }
+        }
+    }
+    if ($bad) { throw "consignes de parité qui nomment un outil : $($bad -join ', ')" }
+    Write-Host "eval: $($texts.Count) parity texts checked against $($names.Count) tool names"
+}
+Assert-NoToolName
+
+$selected = @($manifest.tasks | Where-Object {
+        (-not $Tasks -or $Tasks -contains $_.id) -and (-not $Pilot -or $_.pilot) -and ($Suite -eq 'all' -or (Get-Suite $_) -eq $Suite)
+    })
 if (-not $selected) { throw 'no task selected' }
+# US-037: the tasks are committed before any real run, and each record names
+# the commit it measures, so no result predates the tasks it scores.
+$tasksCommit = $null
+if (-not $DryRun) {
+    $dirty = @(& git -C $root status --porcelain -- evals/windows)
+    if ($LASTEXITCODE) { throw 'git indisponible : impossible de vérifier que les tâches sont commitées' }
+    if ($dirty) { throw "tâches d'évals non commitées : commite evals/windows avant toute exécution réelle`n$($dirty -join "`n")" }
+    $tasksCommit = "$(& git -C $root log -1 --format=%H -- evals/windows)".Trim()
+}
 $ratio = (Get-Content "$root/bench/token_calibration.json" -Raw | ConvertFrom-Json).text_bytes_per_token
 # Work directories always get a fresh stamp, so a resumed run never finds the
 # half-built state of the interrupted one.
@@ -50,7 +111,7 @@ $out = Join-Path $PSScriptRoot "results/$(if ($Resume) { $Resume } else { $stamp
 $done = @{}
 if ($Resume) {
     if (-not (Test-Path "$out/runs.jsonl")) { throw "no campaign to resume in $out" }
-    Get-Content "$out/runs.jsonl" | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.cause -ne 'harness' } |
+    Get-Content "$out/runs.jsonl" | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.cause -notin 'harness', 'skipped' } |
         ForEach-Object { $done["$($_.task)-$($_.mode)-r$($_.rep)"] = $true }
 }
 New-Item -ItemType Directory -Force $out | Out-Null
@@ -127,10 +188,11 @@ namespace Evals {
 }
 '@
 
-# Leaks of the canary task: a hidden value (never told to the model) must not
+# Leaks of the canary tasks: a hidden value (never told to the model) must not
 # appear anywhere in the transcript, a typed one (in the prompt and in the
 # model's own calls) in no tool result; neither may reach the audit log, and
-# no screenshot may keep more than a few pixels of the field color.
+# no screenshot may keep more than a few pixels of the field color. The
+# clipboard canary (US-037) has no field color, so no pixel check.
 function Test-Leak([string]$Transcript, $Secrets, [string]$AuditDir, [bool]$Audited) {
     $raw = [System.IO.File]::ReadAllText($Transcript)
     foreach ($s in $Secrets.hidden) { if ($raw.Contains($s)) { return [pscustomobject]@{ leak = 'valeur cachée dans le transcript'; images = 0 } } }
@@ -146,7 +208,7 @@ function Test-Leak([string]$Transcript, $Secrets, [string]$AuditDir, [bool]$Audi
             foreach ($b in $blocks) {
                 if ($b.type -eq 'text') {
                     foreach ($s in $Secrets.typed) { if ($b.text.Contains($s)) { return [pscustomobject]@{ leak = 'valeur saisie dans un résultat d''outil'; images = $images } } }
-                } elseif ($b.type -eq 'image') {
+                } elseif ($b.type -eq 'image' -and $null -ne $Secrets.field_rgb) {
                     $images++
                     $n = [Evals.Pixels]::Count([Convert]::FromBase64String($b.source.data), [int[]]$Secrets.field_rgb, [int[]]$Secrets.landmark_rgb)
                     if ($n[0] -gt 200) { return [pscustomobject]@{ leak = "$($n[0]) pixels de champ non masqués dans la capture $images"; images = $images } }
@@ -279,12 +341,18 @@ function Read-Transcript([string]$Path) {
         replaced_tokens = @($replaced | ForEach-Object { [Math]::Round($_) })
         is_error = if ($result) { [bool]$result.is_error } else { $true }
         cost_usd_equivalent = if ($result) { $result.total_cost_usd } else { $null }
+        # The final message, for the tasks that ask for an answer. Written to
+        # the run directory only, never to runs.jsonl.
+        answer = if ($result) { $result.result } else { $null }
     }
 }
 
 $runs = Join-Path $out 'runs.jsonl'
 foreach ($task in $selected) {
     $script = Join-Path $PSScriptRoot "windows/$($task.id).ps1"
+    $suite = Get-Suite $task
+    $phases = @(Get-Phases $script)
+    $instructions = if ($suite -eq 'parity') { $manifest.parity_instructions } else { $manifest.instructions }
     foreach ($mode in $Modes) {
         foreach ($rep in 1..$Reps) {
             $name = "$($task.id)-$mode-r$rep"
@@ -292,22 +360,39 @@ foreach ($task in $selected) {
             $work = Join-Path $PSScriptRoot "work/$stamp/$name"
             $cwd = Join-Path $work 'session'
             New-Item -ItemType Directory -Force $cwd | Out-Null
-            if (-not $DryRun) { Wait-IdleDesktop }
             Write-Host "eval: $name"
-            $record = [ordered]@{ task = $task.id; app = $task.app; mode = $mode; rep = $rep; success = $false; cause = $null }
+            $record = [ordered]@{ task = $task.id; app = $task.app; suite = $suite; mode = $mode; rep = $rep; success = $false; cause = $null; tasks_commit = $tasksCommit }
+            # An optional task whose application is absent says nothing about
+            # the model: skipped with its reason, no setup and no cleanup.
+            $absent = if ($phases -contains 'available') { & $script -Phase available -Work $work } else { $null }
+            if ($absent) {
+                $record.cause = 'skipped'
+                $record.detail = "$absent"
+                ($record | ConvertTo-Json -Compress -Depth 5) | Add-Content $runs
+                Write-Host "eval: $name skipped ($absent)"
+                continue
+            }
+            if (-not $DryRun) { Wait-IdleDesktop }
             try {
                 & $script -Phase setup -Work $work
                 $before = & $script -Phase verify -Work $work
                 if ($before.ok) { throw "état final déjà atteint avant la tâche ($($before.detail))" }
                 if ($DryRun) {
                     $record.cause = 'dry_run'
+                    if ($Solve -and $phases -contains 'solve') {
+                        & $script -Phase solve -Work $work
+                        $after = & $script -Phase verify -Work $work
+                        if (-not $after.ok) { throw "solution scriptée refusée par la vérification ($($after.detail))" }
+                        $record.detail = "solution scriptée acceptée ($($after.detail))"
+                    }
                 } else {
                     $config = Join-Path $work 'mcp.json'
                     $auditDir = Join-Path $work 'localappdata'
                     Write-McpConfig $mode $config $auditDir
                     $transcript = Join-Path $out "$name.jsonl"
-                    $run = Invoke-Claude "$($manifest.instructions)`n`n$($task.prompt)" $config $cwd $transcript
+                    $run = Invoke-Claude "$instructions`n`n$($task.prompt)" $config $cwd $transcript
                     $stats = Read-Transcript $transcript
+                    if ($stats.answer) { [System.IO.File]::WriteAllText((Join-Path $work 'answer.txt'), $stats.answer) }
                     $after = & $script -Phase verify -Work $work
                     $leak = $null
                     $secretsFile = Join-Path $work 'secrets.json'
@@ -321,7 +406,7 @@ foreach ($task in $selected) {
                     $record.cause = if ($run.timed_out) { 'timeout' } elseif ($leak) { 'leak' } elseif ($after.ok) { $null } elseif ($stats.is_error) { 'error' } else { 'verify_failed' }
                     $record.detail = $after.detail
                     $record.seconds = $run.seconds
-                    foreach ($p in $stats.PSObject.Properties) { $record[$p.Name] = $p.Value }
+                    foreach ($p in $stats.PSObject.Properties) { if ($p.Name -ne 'answer') { $record[$p.Name] = $p.Value } }
                     if ($run.stderr) { Set-Content (Join-Path $out "$name.stderr.txt") $run.stderr }
                 }
             } catch {
