@@ -41,10 +41,10 @@
     {
       "id": "EP-009",
       "title": "Presse-papiers et registre",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "stories_total": 2,
-      "stories_done": 0
+      "stories_done": 2
     },
     {
       "id": "EP-010",
@@ -256,31 +256,31 @@
       "id": "US-035",
       "title": "`clipboard`, lecture et écriture de texte",
       "epic": "EP-009",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": [
         "US-020",
         "US-021"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-09",
+      "completed_at": "2026-11-09",
+      "reviewed_at": "2026-11-09"
     },
     {
       "id": "US-036",
       "title": "`registry_read`, lecture du registre",
       "epic": "EP-009",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": [
         "US-020",
         "US-021"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-09",
+      "completed_at": "2026-11-09",
+      "reviewed_at": "2026-11-09"
     },
     {
       "id": "US-037",
