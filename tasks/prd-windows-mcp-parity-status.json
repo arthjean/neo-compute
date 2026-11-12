@@ -49,7 +49,7 @@
     {
       "id": "EP-010",
       "title": "Mesure de la parité",
-      "status": "TODO",
+      "status": "BLOCKED",
       "priority": "P1",
       "stories_total": 2,
       "stories_done": 0
@@ -286,7 +286,7 @@
       "id": "US-037",
       "title": "Tâches d'évals de parité",
       "epic": "EP-010",
-      "status": "TODO",
+      "status": "IN_REVIEW",
       "priority": "P1",
       "size": "M",
       "blocked_by": [
@@ -296,7 +296,7 @@
         "US-030",
         "US-035"
       ],
-      "started_at": null,
+      "started_at": "2026-11-09",
       "completed_at": null,
       "reviewed_at": null
     },
@@ -304,13 +304,13 @@
       "id": "US-038",
       "title": "Campagne de parité",
       "epic": "EP-010",
-      "status": "TODO",
+      "status": "BLOCKED",
       "priority": "P1",
       "size": "S",
       "blocked_by": [
         "US-037"
       ],
-      "started_at": null,
+      "started_at": "2026-11-09",
       "completed_at": null,
       "reviewed_at": null
     }
