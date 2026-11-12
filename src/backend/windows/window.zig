@@ -178,8 +178,7 @@ pub fn focus(handle: u64) display.FocusResult {
         switch (attempt) {
             0 => _ = w.SetForegroundWindow(hwnd),
             1 => {
-                var nudge = [_]w.INPUT{.{ .type = w.INPUT_MOUSE, .Anonymous = .{ .mi = .{ .dx = 0, .dy = 0, .mouseData = 0, .dwFlags = w.MOUSEEVENTF_MOVE, .time = 0, .dwExtraInfo = 0 } } }};
-                _ = w.SendInput(1, &nudge, @sizeOf(w.INPUT));
+                input.nudge();
                 _ = w.SetForegroundWindow(hwnd);
             },
             else => {
@@ -310,11 +309,13 @@ fn near(a: display.Rect, b: display.Rect) bool {
 /// window rectangle, invisible resize borders included, so they are added;
 /// a move to a display of another DPI resizes the window and its borders
 /// (WM_DPICHANGED), hence up to three corrections.
-pub fn place(handle: u64, frame: display.Rect) display.SetResult {
+pub fn place(handle: u64, frame: display.Rect, activate: bool) display.SetResult {
     const hwnd: w.HWND = @ptrFromInt(handle);
     if (w.IsWindow(hwnd) == 0) return .closed;
     if (!answers(hwnd)) return .hung;
-    if (w.IsIconic(hwnd) != 0 or w.IsZoomed(hwnd) != 0) _ = w.ShowWindow(hwnd, w.SW_RESTORE);
+    if (w.IsIconic(hwnd) != 0 or w.IsZoomed(hwnd) != 0) {
+        if (activate) _ = w.ShowWindow(hwnd, w.SW_RESTORE) else restoreQuiet(hwnd);
+    }
     var got = rect(hwnd) orelse return .closed;
     var attempt: u32 = 0;
     while (attempt < 3 and !near(got, frame)) : (attempt += 1) {
@@ -331,17 +332,49 @@ pub fn place(handle: u64, frame: display.Rect) display.SetResult {
     return .{ .ok = got };
 }
 
+/// Restores `hwnd` without activating it (decision 0013, US-040).
+/// SW_SHOWNOACTIVATE on a minimized window that is still the active window
+/// of its own thread brings it to the foreground, past the foreground lock:
+/// a maximize or restore the window handled itself leaves it in that state.
+/// Hiding it first ends the state, and the window then comes back without
+/// activation (35 restores out of 35 on the test window and the six
+/// reference applications).
+fn restoreQuiet(hwnd: w.HWND) void {
+    if (w.IsIconic(hwnd) != 0) {
+        var info = std.mem.zeroes(w.GUITHREADINFO);
+        info.cbSize = @sizeOf(w.GUITHREADINFO);
+        if (w.GetGUIThreadInfo(w.GetWindowThreadProcessId(hwnd, null), &info) != 0 and info.hwndActive == hwnd)
+            _ = w.ShowWindow(hwnd, w.SW_HIDE);
+    }
+    _ = w.ShowWindow(hwnd, w.SW_SHOWNOACTIVATE);
+}
+
 /// Restores, minimizes or maximizes `handle`, then waits up to 500 ms for
 /// the state to show.
-pub fn show(handle: u64, state: display.ShowState) display.SetResult {
+pub fn show(handle: u64, state: display.ShowState, activate: bool) display.SetResult {
     const hwnd: w.HWND = @ptrFromInt(handle);
     if (w.IsWindow(hwnd) == 0) return .closed;
     if (!answers(hwnd)) return .hung;
-    _ = w.ShowWindow(hwnd, switch (state) {
-        .normal => w.SW_RESTORE,
-        .minimized => w.SW_MINIMIZE,
-        .maximized => w.SW_MAXIMIZE,
-    });
+    if (activate) {
+        _ = w.ShowWindow(hwnd, switch (state) {
+            .normal => w.SW_RESTORE,
+            .minimized => w.SW_MINIMIZE,
+            .maximized => w.SW_MAXIMIZE,
+        });
+    } else switch (state) {
+        // The routes US-040 measured (decision 0013). SW_MAXIMIZE activates
+        // the window; the title bar's own command, posted, does not.
+        .normal => {
+            restoreQuiet(hwnd);
+            // A window minimized while maximized comes back maximized.
+            if (w.IsZoomed(hwnd) != 0) _ = w.ShowWindow(hwnd, w.SW_SHOWNOACTIVATE);
+        },
+        .minimized => _ = w.ShowWindow(hwnd, w.SW_SHOWMINNOACTIVE),
+        .maximized => {
+            if (w.IsIconic(hwnd) != 0) restoreQuiet(hwnd);
+            _ = w.PostMessageW(hwnd, w.WM_SYSCOMMAND, w.SC_MAXIMIZE, 0);
+        },
+    }
     var waited: u32 = 0;
     while (waited < 500) : (waited += 10) {
         if (w.IsWindow(hwnd) == 0) return .closed;

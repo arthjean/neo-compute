@@ -491,6 +491,14 @@ pub const Windows = struct {
         return self.ui.act(arena, hwnd, key, action, value);
     }
 
+    /// Whether a control pattern call first gives the focus to its target
+    /// (UI Automation's default). Off in background mode: that focus brings
+    /// the target's window to the foreground.
+    pub fn uiAutoFocus(self: *Windows, enabled: bool) void {
+        _ = self;
+        uia.auto_set_focus.store(enabled, .monotonic);
+    }
+
     // ------------------------------------------------------------ windows
 
     /// Visible frame of `hwnd`, else of the foreground window (settling).
@@ -534,14 +542,26 @@ pub const Windows = struct {
         return window.placement(handle);
     }
 
-    pub fn placeWindow(self: *Windows, handle: u64, frame: display.Rect) display.SetResult {
+    /// `activate` false (background mode): a minimized or maximized window
+    /// is restored without being activated.
+    pub fn placeWindow(self: *Windows, handle: u64, frame: display.Rect, activate: bool) display.SetResult {
         _ = self;
-        return window.place(handle, frame);
+        return window.place(handle, frame, activate);
     }
 
-    pub fn showWindow(self: *Windows, handle: u64, state: display.ShowState) display.SetResult {
+    /// `activate` false (background mode): the state changes by the routes
+    /// US-040 measured without a foreground change.
+    pub fn showWindow(self: *Windows, handle: u64, state: display.ShowState, activate: bool) display.SetResult {
         _ = self;
-        return window.show(handle, state);
+        return window.show(handle, state, activate);
+    }
+
+    /// The foreground window, to tell whether it changed around a launch
+    /// (US-043). Never the window to act on.
+    pub fn foregroundWindow(self: *Windows) ?u64 {
+        _ = self;
+        const fg = w.GetForegroundWindow();
+        return if (fg == null) null else @intFromPtr(fg);
     }
 
     pub fn closeWindow(self: *Windows, handle: u64) display.SetResult {
@@ -579,10 +599,10 @@ pub const Windows = struct {
 
     /// A packaged application through IApplicationActivationManager, which
     /// gives its pid; any other through `shell:AppsFolder\<AUMID>`.
-    pub fn launchApp(self: *Windows, arena: std.mem.Allocator, app: apps.App, cancel: *const std.atomic.Value(bool)) apps.Launch {
-        if (app.packaged) return self.shell.activate(app.aumid, cancel);
+    pub fn launchApp(self: *Windows, arena: std.mem.Allocator, app: apps.App, show: apps.Show, cancel: *const std.atomic.Value(bool)) apps.Launch {
+        if (app.packaged and show == .normal) return self.shell.activate(app.aumid, cancel);
         const file = std.fmt.allocPrint(arena, "shell:AppsFolder\\{s}", .{app.aumid}) catch return .{ .unavailable = "Mémoire insuffisante : réessaie." };
-        return self.shell.execute(file, cancel);
+        return self.shell.execute(file, show, cancel);
     }
 
     /// Executable a non-packaged Start menu entry's shortcut starts, read
@@ -592,8 +612,8 @@ pub const Windows = struct {
     }
 
     /// Opens a document or folder with its default application.
-    pub fn openPath(self: *Windows, path: []const u8, cancel: *const std.atomic.Value(bool)) apps.Launch {
-        return self.shell.execute(path, cancel);
+    pub fn openPath(self: *Windows, path: []const u8, show: apps.Show, cancel: *const std.atomic.Value(bool)) apps.Launch {
+        return self.shell.execute(path, show, cancel);
     }
 
     /// Executable of the default application of extension `ext`.
@@ -687,11 +707,19 @@ pub const Windows = struct {
     // ------------------------------------------------------------ tooling
 
     pub const selftest = @import("windows/selftest.zig").run;
+    /// `selftest --background`: every background action reaches its target
+    /// and takes nothing from the user (US-044).
+    pub const selftestBackground = @import("windows/selftest_background.zig").run;
     /// `selftest-stall`: the out-of-process provider the selftest times out on.
     pub const stallProvider = @import("windows/stall_provider.zig").run;
     /// `selftest-still`: the still window of another process the selftest
     /// times ui_find's GDI wait on.
     pub const stillWindow = @import("windows/still_window.zig").run;
+    /// `selftest-decoy`: the foreground window of another process the
+    /// background probe and selftest work behind (EP-011).
+    pub const decoyWindow = @import("windows/decoy_window.zig").run;
+    /// `bg-probe`: which background primitives take the foreground (US-040).
+    pub const bgProbe = @import("windows/bg_probe.zig").run;
     /// `clipboard-probe`: formats and owner of each new clipboard content (A11).
     pub const clipboardProbe = @import("windows/clipboard_probe.zig").run;
 

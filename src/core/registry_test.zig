@@ -171,6 +171,15 @@ test "tool definitions stay within the token and description budgets" {
     });
 }
 
+test "the background registry stays within the same budgets (FR-22, US-041)" {
+    const BgReg = registry.Background(tools.all);
+    try testing.expect(BgReg.always_load_tokens <= registry.max_always_load_tokens);
+    try testing.expect(BgReg.definition_tokens <= registry.max_definition_tokens);
+    std.debug.print("background tools/list: {d} bytes, about {d} tokens (limit {d}); alwaysLoad definitions about {d} tokens (limit {d})\n", .{
+        BgReg.list_result.len, BgReg.definition_tokens, registry.max_definition_tokens, BgReg.always_load_tokens, registry.max_always_load_tokens,
+    });
+}
+
 test "the tools of the Windows-MCP parity PRD are never always loaded (FR-22)" {
     for ([_][]const u8{ "window_set", "app_launch", "clipboard", "registry_read" }) |n| {
         if (!Reg.has(n)) continue;

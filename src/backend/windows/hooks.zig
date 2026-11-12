@@ -56,6 +56,14 @@ pub const KillSwitch = struct {
     last_event_tick: std.atomic.Value(u32) = .init(0),
     reinstalls: std.atomic.Value(u32) = .init(0),
     trips: std.atomic.Value(u32) = .init(0),
+    /// Injected events either hook saw, whoever sent them: never part of
+    /// the kill switch, counted for the background selftest (EP-011).
+    injected: std.atomic.Value(u32) = .init(0),
+    /// Physical mouse events the hook saw and the tick of the last one,
+    /// counted for the same selftest: a cursor that moved with the user's
+    /// own mouse is not the server's doing. Never part of the kill switch.
+    user_mouse: std.atomic.Value(u32) = .init(0),
+    user_mouse_tick: std.atomic.Value(u32) = .init(0),
     /// Longest time spent in a hook procedure (selftest: < 1 ms).
     max_proc_ns: std.atomic.Value(u64) = .init(0),
 
@@ -256,6 +264,7 @@ fn keyboardProc(code: i32, wparam: w.WPARAM, lparam: w.LPARAM) callconv(.winapi)
     const info: *const w.KBDLLHOOKSTRUCT = @ptrFromInt(@as(usize, @bitCast(lparam)));
     ks.last_event_tick.store(w.GetTickCount(), .release);
     const down = wparam == w.WM_KEYDOWN or wparam == w.WM_SYSKEYDOWN;
+    if (info.flags & w.LLKHF_INJECTED != 0) _ = ks.injected.fetchAdd(1, .monotonic);
     const eat = ks.onKey(info.vkCode, down, info.flags & w.LLKHF_INJECTED != 0);
     ks.recordLatency(t0);
     return if (eat) 1 else w.CallNextHookEx(null, code, wparam, lparam);
@@ -267,6 +276,12 @@ fn mouseProc(code: i32, wparam: w.WPARAM, lparam: w.LPARAM) callconv(.winapi) w.
     const t0 = qpc();
     const info: *const w.MSLLHOOKSTRUCT = @ptrFromInt(@as(usize, @bitCast(lparam)));
     ks.last_event_tick.store(w.GetTickCount(), .release);
+    if (info.flags & w.LLMHF_INJECTED != 0) {
+        _ = ks.injected.fetchAdd(1, .monotonic);
+    } else {
+        ks.user_mouse_tick.store(w.GetTickCount(), .monotonic);
+        _ = ks.user_mouse.fetchAdd(1, .monotonic);
+    }
     ks.onMouse(@intCast(wparam), .{ info.pt.x, info.pt.y }, info.flags & w.LLMHF_INJECTED != 0);
     ks.recordLatency(t0);
     return w.CallNextHookEx(null, code, wparam, lparam);

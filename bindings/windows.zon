@@ -171,5 +171,13 @@
         "HKEY_USERS",                                 "HKEY_CURRENT_CONFIG",                    "KEY_QUERY_VALUE",                            "KEY_ENUMERATE_SUB_KEYS",                    "KEY_WOW64_64KEY",
         "ERROR_FILE_NOT_FOUND",                       "ERROR_MORE_DATA",                        "ERROR_NO_MORE_ITEMS",                        "ERROR_SUCCESS",                             "ExpandEnvironmentStringsW",
         "ERROR_NOT_ENOUGH_MEMORY",
+
+        // Background mode (EP-011): the decoy window and the non-interference
+        // witness (foreground, keyboard focus), the probe and selftest controls.
+                           "GetGUIThreadInfo",                       "GUITHREADINFO",                              "SW_SHOWMAXIMIZED",                          "SC_MAXIMIZE",
+        "WM_SETFOCUS",                                "BS_AUTOCHECKBOX",                        "BM_GETCHECK",                                "LBS_NOTIFY",                                "LB_ADDSTRING",
+        "LB_GETCURSEL",                               "LB_GETTOPINDEX",                         "CBS_DROPDOWNLIST",                           "CB_ADDSTRING",                              "CB_SETCURSEL",
+        "CB_GETDROPPEDSTATE",                         "CreateMenu",                             "SetMenu",                                    "MF_POPUP",                                  "WM_CANCELMODE",
+        "GetFocus",                                   "CUIAutomation8",                         "CB_SHOWDROPDOWN",                            "SC_RESTORE",
     },
 }

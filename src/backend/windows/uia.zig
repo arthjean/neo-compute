@@ -79,6 +79,20 @@ const max_name_units = 256;
 const max_text_units = 1024;
 const max_value_units = 256;
 
+/// IUIAutomationElement::SetFocus calls made by this process: the background
+/// selftest proves the background mode makes none (EP-011).
+pub var set_focus_calls: std.atomic.Value(u32) = .init(0);
+
+/// Whether a control pattern call may first give the keyboard focus to its
+/// target (IUIAutomation2 AutoSetFocus). UI Automation does it by default,
+/// which brings the target's window to the foreground past the foreground
+/// lock: US-040 measured it on Invoke, Toggle, SetValue, Expand, Collapse and
+/// Select, on every reference application. The background mode turns it off
+/// (EP-011), which takes the Windows 8 automation object: see `Session.init`.
+pub var auto_set_focus: std.atomic.Value(bool) = .init(true);
+
+const no_auto_focus_message = "Mode arrière-plan : UI Automation ne peut pas agir sans prendre le focus sur ce système (CUIAutomation8 indisponible). Aucune action exécutée. Demande à Arthur de relancer en mode a11y.";
+
 pub const closed_message = "Fenêtre fermée : rappelle window_list";
 const msaa_set_value_message = "Action set_value indisponible sur cet élément Firefox : clique puis utilise type";
 const hung_message = "L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot.";
@@ -228,7 +242,7 @@ pub const Worker = struct {
         var session: ?Session = null;
         const com_ok = if (com.check(w.CoInitializeEx(null, @bitCast(w.COINIT_MULTITHREADED)))) true else |_| false;
         if (com_ok) {
-            session = Session.init(self.gpa) catch |err| blk: {
+            session = Session.init(self.gpa, !auto_set_focus.load(.monotonic)) catch |err| blk: {
                 std.debug.print("neo-compute: UI Automation init failed: {t} hr=0x{x}\n", .{ err, com.lastHr() });
                 self.init_error = "UI Automation indisponible (CUIAutomation) : détail sur stderr, utilise screenshot.";
                 break :blk null;
@@ -237,6 +251,18 @@ pub const Worker = struct {
         _ = w.SetEvent(self.done);
         while (true) {
             _ = w.WaitForSingleObject(self.wake, w.INFINITE);
+            // The background mode is selected after this thread started:
+            // its automation object replaces the default one before the
+            // first job, while no element is retained yet.
+            if (session) |*s| if (!s.background and !auto_set_focus.load(.monotonic) and !s.upgrade_failed) {
+                if (Session.init(self.gpa, true)) |fresh| {
+                    s.deinit();
+                    s.* = fresh;
+                } else |err| {
+                    std.debug.print("neo-compute: UI Automation without AutoSetFocus unavailable: {t} hr=0x{x}; background actions are refused\n", .{ err, com.lastHr() });
+                    s.upgrade_failed = true;
+                }
+            };
             switch (self.job) {
                 .quit => break,
                 .snapshot => |*j| {
@@ -289,6 +315,11 @@ const Retained = struct {
 const Session = struct {
     gpa: std.mem.Allocator,
     automation: *w.IUIAutomation,
+    /// The Windows 8 automation object with AutoSetFocus off (EP-011).
+    background: bool = false,
+    /// That object could not be created: actions are refused while
+    /// `auto_set_focus` is off.
+    upgrade_failed: bool = false,
     subtree: *w.IUIAutomationCacheRequest,
     control_view: *w.IUIAutomationCondition,
     /// The window element's own properties, for a partial tree.
@@ -317,14 +348,28 @@ const Session = struct {
     retained: [4]Retained = @splat(.{}),
     clock: u64 = 0,
 
-    fn init(gpa: std.mem.Allocator) com.Error!Session {
+    /// `background`: the Windows 8 automation object (CUIAutomation8), the
+    /// only one that exposes IUIAutomation2, with AutoSetFocus off. The
+    /// default object (CUIAutomation) keeps the Windows 7 behavior, where a
+    /// pattern call always focuses its target.
+    fn init(gpa: std.mem.Allocator, background: bool) com.Error!Session {
         var raw: ?*anyopaque = null;
-        try check(w.CoCreateInstance(&w.CLSID_CUIAutomation, null, w.CLSCTX_INPROC_SERVER, &w.IUIAutomation.iid, &raw));
+        try check(w.CoCreateInstance(if (background) &w.CLSID_CUIAutomation8 else &w.CLSID_CUIAutomation, null, w.CLSCTX_INPROC_SERVER, &w.IUIAutomation.iid, &raw));
         const automation: *w.IUIAutomation = @ptrCast(@alignCast(raw.?));
         errdefer release(automation);
-        // Bounded waits on providers (Windows 8+).
         var raw2: ?*anyopaque = null;
-        if (automation.vtable.QueryInterface(automation, &w.IUIAutomation2.iid, &raw2) >= 0) {
+        if (background) {
+            try check(automation.vtable.QueryInterface(automation, &w.IUIAutomation2.iid, &raw2));
+            const a2: *w.IUIAutomation2 = @ptrCast(@alignCast(raw2.?));
+            defer release(a2);
+            try check(a2.vtable.put_AutoSetFocus(a2, 0));
+            // The timeouts stay at UI Automation's defaults, as the default
+            // object runs them: see below and decision 0013.
+        } else if (automation.vtable.QueryInterface(automation, &w.IUIAutomation2.iid, &raw2) >= 0) {
+            // Bounded waits on providers. US-040 found that CUIAutomation
+            // answers this QueryInterface with E_NOINTERFACE on Windows 11:
+            // these timeouts have never been applied. Applying them changes
+            // every mode's behavior and bench: left to decision 0013.
             const a2: *w.IUIAutomation2 = @ptrCast(@alignCast(raw2.?));
             defer release(a2);
             try check(a2.vtable.put_TransactionTimeout(a2, transaction_timeout_ms));
@@ -341,7 +386,7 @@ const Session = struct {
         for (position_patterns) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
         try check(cache.?.vtable.put_TreeScope(cache.?, w.TreeScope_Subtree));
         try check(cache.?.vtable.put_TreeFilter(cache.?, cond.?));
-        return .{ .gpa = gpa, .automation = automation, .subtree = cache.?, .control_view = cond.? };
+        return .{ .gpa = gpa, .automation = automation, .background = background, .subtree = cache.?, .control_view = cond.? };
     }
 
     fn deinit(self: *Session) void {
@@ -1061,6 +1106,9 @@ const Session = struct {
     fn act(self: *Session, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
         const hwnd: w.HWND = @ptrFromInt(window);
         if (w.IsWindow(hwnd) == 0) return .gone;
+        // Acting with the focus side effect the background mode excludes is
+        // never a fallback.
+        if (!self.background and !auto_set_focus.load(.monotonic)) return .{ .failed = no_auto_focus_message };
         if (!responsive(hwnd)) return .{ .failed = hung_message };
         const el = self.find(window, key) orelse blk: {
             // Not in a retained snapshot (evicted): read the window again.
@@ -1082,7 +1130,10 @@ const Session = struct {
         check(el.vtable.get_CurrentBoundingRectangle(el, &r)) catch |e| return actError(arena, e);
         const rect: display.Rect = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
         const hr = switch (action) {
-            .focus => el.vtable.SetFocus(el),
+            .focus => blk: {
+                _ = set_focus_calls.fetchAdd(1, .monotonic);
+                break :blk el.vtable.SetFocus(el);
+            },
             // Through the MSAA proxy, the element's default action is
             // accDoDefaultAction (US-025).
             .invoke => if (msaa)

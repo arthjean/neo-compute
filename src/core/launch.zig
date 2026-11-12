@@ -150,8 +150,15 @@ fn waitWindow(ctx: anytype, pid: ?u32, before: []const u64, exe: ?[]const u8) ?d
         if (pid == null or elapsed >= pid_only_ms or !ctx.backend.processAlive(pid.?)) {
             for (wins) |win| if (!contains(before, win.handle)) return win;
         }
-        if (exe) |e| if (elapsed >= existing_after_ms) if (ctx.backend.windowAt(null)) |fg| for (wins) |win| {
-            if (win.handle == fg.handle and std.ascii.eqlIgnoreCase(win.exe, e)) return win;
+        if (exe) |e| if (elapsed >= existing_after_ms) {
+            if (ctx.session.background) {
+                // Background mode never asks which window is in front: the
+                // application's window highest in the z-order is the one
+                // it last showed.
+                for (wins) |win| if (std.ascii.eqlIgnoreCase(win.exe, e)) return win;
+            } else if (ctx.backend.windowAt(null)) |fg| {
+                for (wins) |win| if (win.handle == fg.handle and std.ascii.eqlIgnoreCase(win.exe, e)) return win;
+            }
         };
         if (elapsed >= ctx.session.launch_wait_ms) return null;
         if (!ctx.sleep(poll_ms * std.time.ns_per_ms)) return null;
@@ -169,6 +176,12 @@ pub fn launch(ctx: anytype, name: ?[]const u8, path: ?[]const u8, observe: ?a11y
     var exe: ?[]const u8 = null;
     var started: apps.Launch = undefined;
     var before: []const u64 = &.{};
+    // Background mode (US-043): the route US-040 measured without
+    // activation, and the foreground window compared before and after,
+    // only to report an application that came in front anyway.
+    const background = ctx.session.background;
+    const show: apps.Show = if (background) .no_activate else .normal;
+    const fg_before: ?u64 = if (background) ctx.backend.foregroundWindow() else null;
     if (name) |n| {
         const app = switch (lookup(ctx, n)) {
             .ok => |a| a,
@@ -183,7 +196,7 @@ pub fn launch(ctx: anytype, name: ?[]const u8, path: ?[]const u8, observe: ?a11y
             return Result.err(denyMessage(ctx, e));
         };
         before = snapshotHandles(ctx) orelse return Result.err(oom);
-        started = ctx.backend.launchApp(ctx.arena, app, ctx.cancel);
+        started = ctx.backend.launchApp(ctx.arena, app, show, ctx.cancel);
     } else {
         const p = path.?;
         const pathext = ctx.backend.pathExtensions(ctx.arena);
@@ -223,7 +236,7 @@ pub fn launch(ctx: anytype, name: ?[]const u8, path: ?[]const u8, observe: ?a11y
         };
         label = exe orelse if (ext.len > 0) ext else "le document";
         before = snapshotHandles(ctx) orelse return Result.err(oom);
-        started = ctx.backend.openPath(info.full, ctx.cancel);
+        started = ctx.backend.openPath(info.full, show, ctx.cancel);
     }
     const pid = switch (started) {
         .ok => |pid| pid,
@@ -256,8 +269,15 @@ pub fn launch(ctx: anytype, name: ?[]const u8, path: ?[]const u8, observe: ?a11y
         app_pid = p;
         app_exe = hosted;
     };
-    // The agent types into the foreground window next.
-    if (ctx.backend.windowAt(null)) |fg| {
+    // The window the agent works on next (US-042).
+    a11y.setTarget(ctx, win.handle);
+    var took_foreground = false;
+    if (background) {
+        // Never activated here. Some applications activate themselves
+        // whatever the launch asked (US-040: Notepad opening a document).
+        took_foreground = a11y.cameInFront(ctx, win.handle, fg_before);
+    } else if (ctx.backend.windowAt(null)) |fg| {
+        // The agent types into the foreground window next.
         if (fg.handle != win.handle) _ = ctx.backend.focusWindow(win.handle);
     } else _ = ctx.backend.focusWindow(win.handle);
     var title: std.Io.Writer.Allocating = .init(ctx.arena);
@@ -270,7 +290,10 @@ pub fn launch(ctx: anytype, name: ?[]const u8, path: ?[]const u8, observe: ?a11y
         }
         title.writer.writeAll(if (cp[0] == '\n' or cp[0] == '\r' or cp[0] == '"') " " else cp) catch break;
     }
-    const line = fmt(ctx.arena, "0x{x} \"{s}\" {s} pid={d}", .{ win.handle, title.written(), app_exe, app_pid });
+    const line = if (took_foreground)
+        fmt(ctx.arena, "0x{x} \"{s}\" {s} pid={d}\n{s} a pris le premier plan", .{ win.handle, title.written(), app_exe, app_pid, app_exe })
+    else
+        fmt(ctx.arena, "0x{x} \"{s}\" {s} pid={d}", .{ win.handle, title.written(), app_exe, app_pid });
     return a11y.observeWith(ctx, Result.text(line), observe, settle_timeout_ms, win.handle, true);
 }
 

@@ -56,6 +56,8 @@ pub const Shell = struct {
     /// Input of the current job, owned by the worker so an abandoned job
     /// never reads the dispatcher's request arena.
     text: [2048:0]u16 = undefined,
+    /// How `execute` asks the application to show its window.
+    show: apps.Show = .normal,
     // Outputs, written by the worker before it signals `done`.
     catalog_arena: std.heap.ArenaAllocator,
     catalog_apps: []const apps.App = &.{},
@@ -121,18 +123,19 @@ pub const Shell = struct {
 
     /// Launches a packaged application by AUMID.
     pub fn activate(self: *Shell, aumid: []const u8, cancel: *const std.atomic.Value(bool)) Launch {
-        return self.launchJob(.activate, aumid, cancel);
+        return self.launchJob(.activate, aumid, .normal, cancel);
     }
 
     /// Opens `file` (`shell:AppsFolder\<AUMID>` or a document) with
-    /// ShellExecuteExW, without arguments or verb.
-    pub fn execute(self: *Shell, file: []const u8, cancel: *const std.atomic.Value(bool)) Launch {
-        return self.launchJob(.execute, file, cancel);
+    /// ShellExecuteExW, without arguments or verb, asking for `show`.
+    pub fn execute(self: *Shell, file: []const u8, show: apps.Show, cancel: *const std.atomic.Value(bool)) Launch {
+        return self.launchJob(.execute, file, show, cancel);
     }
 
-    fn launchJob(self: *Shell, comptime kind: std.meta.Tag(Job), input: []const u8, cancel: *const std.atomic.Value(bool)) Launch {
+    fn launchJob(self: *Shell, comptime kind: std.meta.Tag(Job), input: []const u8, show: apps.Show, cancel: *const std.atomic.Value(bool)) Launch {
         if (self.begin()) |msg| return .{ .unavailable = msg };
         if (!self.setText(input)) return .{ .unavailable = "Nom ou chemin trop long." };
+        self.show = show;
         self.job = kind;
         if (!self.wait(cancel)) return .cancelled;
         return self.launch;
@@ -389,7 +392,11 @@ pub const Shell = struct {
         info.cbSize = @sizeOf(w.SHELLEXECUTEINFOW);
         info.fMask = w.SEE_MASK_NOCLOSEPROCESS | w.SEE_MASK_FLAG_NO_UI;
         info.lpFile = &self.text;
-        info.nShow = w.SW_SHOWNORMAL;
+        info.nShow = switch (self.show) {
+            .normal => w.SW_SHOWNORMAL,
+            .no_activate => w.SW_SHOWNOACTIVATE,
+            .minimized => w.SW_SHOWMINNOACTIVE,
+        };
         if (w.ShellExecuteExW(&info) == 0) {
             const err = w.GetLastError();
             return .{ .refused = 0x80070000 | (err & 0xFFFF) };

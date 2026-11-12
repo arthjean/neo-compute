@@ -36,6 +36,11 @@ pub const App = struct {
 /// The backend's Start menu enumeration.
 pub const CatalogResult = union(enum) { ok: []const App, err: []const u8 };
 
+/// How a launched application is asked to show its window: `normal`
+/// activates it, the two others ask Windows not to (background mode,
+/// US-043). An application is free to ignore the request.
+pub const Show = enum { normal, no_activate, minimized };
+
 /// Outcome of a launch (US-029): the process id when Windows gives it.
 pub const Launch = union(enum) {
     ok: ?u32,

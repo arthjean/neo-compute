@@ -8,8 +8,20 @@ const core_input = @import("../../core/input.zig");
 const keys = @import("../../core/keys.zig");
 const InputError = core_input.InputError;
 
+/// SendInput calls made by this process: the background selftest proves
+/// the background mode makes none (EP-011).
+pub var send_calls: std.atomic.Value(u32) = .init(0);
+
+/// A null relative mouse move: Windows grants the foreground to the process
+/// that sent the last input (window_focus).
+pub fn nudge() void {
+    var inputs = [_]w.INPUT{.{ .type = w.INPUT_MOUSE, .Anonymous = .{ .mi = .{ .dx = 0, .dy = 0, .mouseData = 0, .dwFlags = w.MOUSEEVENTF_MOVE, .time = 0, .dwExtraInfo = 0 } } }};
+    send(&inputs) catch {};
+}
+
 fn send(inputs: []w.INPUT) InputError!void {
     if (inputs.len == 0) return;
+    _ = send_calls.fetchAdd(1, .monotonic);
     const sent = w.SendInput(@intCast(inputs.len), inputs.ptr, @sizeOf(w.INPUT));
     if (sent != inputs.len) return error.InputBlocked;
 }

@@ -192,6 +192,30 @@ pub const Fake = struct {
     exe_lookups: u32 = 0,
     launched: ?apps.App = null,
     launch_calls: u32 = 0,
+    /// How the last launch asked its window to show (US-043).
+    launch_show: ?apps.Show = null,
+    /// UI Automation AutoSetFocus as the server last set it (US-041).
+    auto_focus: bool = true,
+    /// Calls that asked which window is in the foreground to work on it
+    /// (US-042): the background mode makes none.
+    foreground_reads: u32 = 0,
+    /// Calls of `foregroundWindow`, which only compares the foreground
+    /// before and after a launch (US-043).
+    foreground_checks: u32 = 0,
+    /// The foreground window `foregroundWindow` reports, and the one it
+    /// reports once a launch ran (an application that came in front).
+    foreground_window: ?u64 = null,
+    foreground_after_launch: ?u64 = null,
+    /// The one it reports once showWindow ran (a maximize that activates).
+    foreground_after_show: ?u64 = null,
+    /// Reads of `foregroundWindow` that find no window once a launch ran:
+    /// Windows names none while it switches from one window to the next.
+    switching_after_launch: u32 = 0,
+    foreground_switching: u32 = 0,
+    /// `activate` of the last placeWindow or showWindow, and the calls
+    /// that asked to activate.
+    last_activate: ?bool = null,
+    activations: u32 = 0,
     launch_result: apps.Launch = .{ .ok = 7000 },
     /// The windows once the launch happened (the new window among them).
     after_launch: ?[]const display.WindowInfo = null,
@@ -261,7 +285,19 @@ pub const Fake = struct {
     }
 
     pub fn foregroundDisplay(self: *Fake) ?usize {
+        self.foreground_reads += 1;
         return self.foreground;
+    }
+
+    /// The foreground window, to tell whether it changed (never to act on
+    /// it).
+    pub fn foregroundWindow(self: *Fake) ?u64 {
+        self.foreground_checks += 1;
+        if (self.foreground_switching > 0) {
+            self.foreground_switching -= 1;
+            return null;
+        }
+        return self.foreground_window;
     }
 
     pub fn capture(self: *Fake, index: usize, arena: std.mem.Allocator) display.CaptureResult {
@@ -389,6 +425,7 @@ pub const Fake = struct {
 
     /// Rectangle of `window`, else of the foreground (accessibility) window.
     pub fn windowRect(self: *Fake, window: ?u64) ?display.Rect {
+        if (window == null) self.foreground_reads += 1;
         if (window) |h| for (self.windows) |win| if (win.handle == h) return win.rect;
         return if (self.ui_elements.len > 0) self.ui_elements[0].rect else null;
     }
@@ -400,6 +437,7 @@ pub const Fake = struct {
     /// Top window under physical point `p`, else the foreground window
     /// (`ui_window`).
     pub fn windowAt(self: *Fake, point: ?[2]i32) ?display.WindowRef {
+        if (point == null) self.foreground_reads += 1;
         const p = point orelse return self.windowRef(self.ui_window) orelse .{ .handle = self.ui_window, .pid = 0 };
         for (self.windows) |win| if (!win.cloaked and !win.minimized and win.rect.contains(p[0], p[1])) return refOf(win);
         return null;
@@ -460,6 +498,7 @@ pub const Fake = struct {
 
     /// Extra roots of the foreground window (`ui_window`).
     pub fn uiRoots(self: *Fake, arena: std.mem.Allocator, window: ?u64) []const uitree.RootWindow {
+        if (window == null) self.foreground_reads += 1;
         if (window) |h| if (h != self.ui_window) return &.{};
         const out = arena.alloc(uitree.RootWindow, self.ui_extra.len) catch return &.{};
         for (self.ui_extra, out) |x, *o| o.* = x.window;
@@ -467,6 +506,7 @@ pub const Fake = struct {
     }
 
     pub fn uiSnapshot(self: *Fake, arena: std.mem.Allocator, window: ?u64, request: uitree.Request) uitree.SnapshotResult {
+        if (window == null) self.foreground_reads += 1;
         if (window) |h| if (h != self.ui_window) {
             // An owned dialog read by its own handle.
             for (self.ui_extra) |x| if (x.window.handle == h) {
@@ -506,6 +546,10 @@ pub const Fake = struct {
         return .{ .ok = snap };
     }
 
+    pub fn uiAutoFocus(self: *Fake, enabled: bool) void {
+        self.auto_focus = enabled;
+    }
+
     pub fn uiAct(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
         _ = arena;
         _ = window;
@@ -533,6 +577,7 @@ pub const Fake = struct {
     }
 
     pub fn focusWindow(self: *Fake, handle: u64) display.FocusResult {
+        self.activations += 1;
         for (self.windows) |win| if (win.handle == handle) {
             self.focused = handle;
             return .ok;
@@ -548,7 +593,7 @@ pub const Fake = struct {
         return null;
     }
 
-    fn markGone(self: *Fake, handle: u64) void {
+    pub fn markGone(self: *Fake, handle: u64) void {
         if (self.gone_len < self.gone_buf.len) {
             self.gone_buf[self.gone_len] = handle;
             self.gone_len += 1;
@@ -561,9 +606,11 @@ pub const Fake = struct {
     }
 
     /// Places the frame, as large as `min_size` at least.
-    pub fn placeWindow(self: *Fake, handle: u64, frame: display.Rect) display.SetResult {
+    pub fn placeWindow(self: *Fake, handle: u64, frame: display.Rect, activate: bool) display.SetResult {
         _ = self.live(handle) orelse return .closed;
         if (self.hung) return .hung;
+        self.last_activate = activate;
+        self.activations += @intFromBool(activate);
         var got = frame;
         if (self.min_size) |m| {
             got.w = @max(got.w, m[0]);
@@ -574,9 +621,12 @@ pub const Fake = struct {
         return .{ .ok = got };
     }
 
-    pub fn showWindow(self: *Fake, handle: u64, state: display.ShowState) display.SetResult {
+    pub fn showWindow(self: *Fake, handle: u64, state: display.ShowState, activate: bool) display.SetResult {
         const win = self.live(handle) orelse return .closed;
         if (self.hung) return .hung;
+        self.last_activate = activate;
+        self.activations += @intFromBool(activate);
+        if (self.foreground_after_show) |f| self.foreground_window = f;
         self.shown = state;
         self.set_calls += 1;
         const r = self.placed orelse win.rect;
@@ -636,13 +686,16 @@ pub const Fake = struct {
         return .{ .ok = self.catalog };
     }
 
-    pub fn launchApp(self: *Fake, arena: std.mem.Allocator, app: apps.App, cancel: *const std.atomic.Value(bool)) apps.Launch {
+    pub fn launchApp(self: *Fake, arena: std.mem.Allocator, app: apps.App, show: apps.Show, cancel: *const std.atomic.Value(bool)) apps.Launch {
         _ = arena;
         _ = cancel;
         self.launched = app;
+        self.launch_show = show;
         self.launch_calls += 1;
         if (self.cancel_on_launch) |c| c.store(true, .release);
         if (self.after_launch) |wins| self.windows = wins;
+        if (self.foreground_after_launch) |f| self.foreground_window = f;
+        self.foreground_switching = self.switching_after_launch;
         return self.launch_result;
     }
 
@@ -655,12 +708,15 @@ pub const Fake = struct {
         return null;
     }
 
-    pub fn openPath(self: *Fake, path: []const u8, cancel: *const std.atomic.Value(bool)) apps.Launch {
+    pub fn openPath(self: *Fake, path: []const u8, show: apps.Show, cancel: *const std.atomic.Value(bool)) apps.Launch {
         _ = cancel;
+        self.launch_show = show;
         self.opened_len = @min(path.len, self.opened_buf.len);
         @memcpy(self.opened_buf[0..self.opened_len], path[0..self.opened_len]);
         self.launch_calls += 1;
         if (self.after_launch) |wins| self.windows = wins;
+        if (self.foreground_after_launch) |f| self.foreground_window = f;
+        self.foreground_switching = self.switching_after_launch;
         return self.launch_result;
     }
 

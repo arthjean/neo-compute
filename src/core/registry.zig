@@ -17,11 +17,24 @@ pub const max_always_load_tokens = 1500;
 /// loads a deferred definition only through tool search (A12).
 pub const max_definition_tokens = 4500;
 
+/// What a tool takes from the user while it runs (EP-011, decision 0013):
+/// `foreground` changes the active window, `input` drives the mouse, the
+/// keyboard or the cursor.
+pub const Intrusion = enum { none, foreground, input };
+
 pub const Annotations = struct {
     read_only: bool = false,
     idempotent: bool = false,
     always_load: bool = false,
+    /// A tool that does not declare it is `input`: a new tool stays out of
+    /// the background mode until its declaration says it may enter.
+    intrusion: Intrusion = .input,
 };
+
+/// Start of every refusal of the background mode (PRD, Edge Cases 2 to 4).
+pub const background_prefix = "Mode arrière-plan : ";
+/// End of the refusal of an intrusive variant, before its alternative.
+const refused = " Aucune action exécutée. ";
 
 // ---------------------------------------------------------------- comptime JSON
 
@@ -122,7 +135,7 @@ pub fn inputSchema(comptime Args: type) []const u8 {
     }
 }
 
-fn annotationsOf(comptime T: type) Annotations {
+pub fn annotationsOf(comptime T: type) Annotations {
     var a: Annotations = .{};
     if (!@hasDecl(T, "annotations")) return a;
     const raw = T.annotations;
@@ -134,12 +147,22 @@ fn annotationsOf(comptime T: type) Annotations {
 
 /// One `Tool` object of `tools/list`.
 pub fn toolDefinition(comptime T: type) []const u8 {
+    return definitionWith(T, T.description);
+}
+
+/// The tool's description in the background mode: `background_description`
+/// when the default one speaks of the foreground window.
+fn backgroundDescription(comptime T: type) []const u8 {
+    return if (@hasDecl(T, "background_description")) T.background_description else T.description;
+}
+
+fn definitionWith(comptime T: type, comptime description: []const u8) []const u8 {
     comptime {
         @setEvalBranchQuota(100_000);
-        if (T.description.len > max_description_len)
-            @compileError(std.fmt.comptimePrint("tool `{s}`: description is {d} characters, limit is {d}", .{ T.name, T.description.len, max_description_len }));
+        if (description.len > max_description_len)
+            @compileError(std.fmt.comptimePrint("tool `{s}`: description is {d} characters, limit is {d}", .{ T.name, description.len, max_description_len }));
         const a = annotationsOf(T);
-        var out: []const u8 = "{\"name\":" ++ jsonString(T.name) ++ ",\"description\":" ++ jsonString(T.description) ++ ",\"inputSchema\":" ++ inputSchema(T.Args);
+        var out: []const u8 = "{\"name\":" ++ jsonString(T.name) ++ ",\"description\":" ++ jsonString(description) ++ ",\"inputSchema\":" ++ inputSchema(T.Args);
         if (a.read_only or a.idempotent) {
             out = out ++ ",\"annotations\":{" ++ (if (a.read_only) "\"readOnlyHint\":true" else "\"readOnlyHint\":false") ++ (if (a.idempotent) ",\"idempotentHint\":true" else "") ++ "}";
         }
@@ -222,6 +245,138 @@ pub fn Registry(comptime tools: anytype) type {
                     return switch (parsed) {
                         .invalid => |msg| @TypeOf(ctx.*).Result.err(msg),
                         .ok => |a| T.run(ctx, a),
+                    };
+                }
+            }
+            return null;
+        }
+    };
+}
+
+// ---------------------------------------------------------------- background mode
+
+/// The tools of the background mode: those declaring `background`. A member
+/// whose class is not `none` does not compile.
+fn backgroundMembers(comptime tools: anytype) []const type {
+    comptime {
+        var list: []const type = &.{};
+        for (tools) |T| if (@hasDecl(T, "background")) {
+            const class = annotationsOf(T).intrusion;
+            if (class != .none)
+                @compileError(std.fmt.comptimePrint("tool `{s}` is listed in the background mode but its intrusion class is `{s}`: only `none` tools may be listed", .{ T.name, @tagName(class) }));
+            list = list ++ &[_]type{T};
+        };
+        return list;
+    }
+}
+
+/// Refusal of a call whose arguments select an intrusive variant, from the
+/// tool's `Args.intrusive` table: `.{ .<field> = .{ .<value> = "<what it
+/// would take>. Aucune action exécutée. <alternative>" } }`, the value being
+/// an enum tag, or `true` for a boolean. Null when no variant is selected.
+pub fn intrusiveVariant(comptime Args: type, args: Args) ?[]const u8 {
+    if (!@hasDecl(Args, "intrusive")) return null;
+    const table = Args.intrusive;
+    inline for (@typeInfo(@TypeOf(table)).@"struct".field_names) |fname| {
+        const variants = @field(table, fname);
+        const raw = @field(args, fname);
+        const present = if (@typeInfo(@TypeOf(raw)) == .optional) raw else @as(?@TypeOf(raw), raw);
+        if (present) |v| {
+            inline for (@typeInfo(@TypeOf(variants)).@"struct".field_names) |vname| {
+                const hit = switch (@typeInfo(@TypeOf(v))) {
+                    .bool => v and comptime std.mem.eql(u8, vname, "true"),
+                    .@"enum" => v == @field(@TypeOf(v), vname),
+                    else => @compileError("intrusive variants are enum tags or booleans: " ++ fname),
+                };
+                if (hit) return background_prefix ++ @as([]const u8, @field(variants, vname));
+            }
+        }
+    }
+    return null;
+}
+
+/// One refusal of an `Args.intrusive` table.
+pub const Variant = struct { field: []const u8, value: []const u8, message: []const u8 };
+
+/// Every refusal of `Args.intrusive`, for the tests that enumerate them.
+pub fn intrusiveVariants(comptime Args: type) []const Variant {
+    comptime {
+        const Entry = Variant;
+        var out: []const Entry = &.{};
+        if (!@hasDecl(Args, "intrusive")) return out;
+        const table = Args.intrusive;
+        for (@typeInfo(@TypeOf(table)).@"struct".field_names) |fname| {
+            const variants = @field(table, fname);
+            for (@typeInfo(@TypeOf(variants)).@"struct".field_names) |vname| {
+                out = out ++ &[_]Entry{.{ .field = fname, .value = vname, .message = background_prefix ++ @as([]const u8, @field(variants, vname)) }};
+            }
+        }
+        return out;
+    }
+}
+
+/// The background mode's registry (US-041): the `background` tools of
+/// `tools`, their intrusive variants refused before `run`, and a refusal
+/// for every other tool of `tools`.
+pub fn Background(comptime tools: anytype) type {
+    const members = backgroundMembers(tools);
+    const Base = Registry(members);
+    return struct {
+        pub const list_result: []const u8 = blk: {
+            @setEvalBranchQuota(1_000_000);
+            var defs: []const u8 = "";
+            var always: []const u8 = "";
+            for (members, 0..) |T, i| {
+                const def = definitionWith(T, backgroundDescription(T));
+                defs = defs ++ (if (i == 0) "" else ",") ++ def;
+                if (annotationsOf(T).always_load) always = always ++ (if (always.len == 0) "" else ",") ++ def;
+            }
+            if (estimateTokens(always.len) > max_always_load_tokens)
+                @compileError(std.fmt.comptimePrint("background alwaysLoad definitions estimate {d} tokens, limit is {d}", .{ estimateTokens(always.len), max_always_load_tokens }));
+            if (estimateTokens(defs.len) > max_definition_tokens)
+                @compileError(std.fmt.comptimePrint("background tool definitions estimate {d} tokens, limit is {d}", .{ estimateTokens(defs.len), max_definition_tokens }));
+            break :blk "{\"tools\":[" ++ defs ++ "]}";
+        };
+
+        pub const definition_tokens = estimateTokens(list_result.len);
+        pub const always_load_tokens = blk: {
+            @setEvalBranchQuota(1_000_000);
+            var always: []const u8 = "";
+            for (members) |T| if (annotationsOf(T).always_load) {
+                always = always ++ (if (always.len == 0) "" else ",") ++ definitionWith(T, backgroundDescription(T));
+            };
+            break :blk estimateTokens(always.len);
+        };
+        pub const names = Base.names;
+        pub const has = Base.has;
+        pub const isAction = Base.isAction;
+
+        /// The refusal of a tool of `tools` that the mode does not list;
+        /// null for a listed or unknown tool.
+        pub fn unlisted(name: []const u8) ?[]const u8 {
+            inline for (tools) |T| if (!@hasDecl(T, "background") and std.mem.eql(u8, T.name, name)) {
+                return comptime switch (annotationsOf(T).intrusion) {
+                    .foreground, .input => background_prefix ++ T.name ++ " prendrait la souris, le clavier ou le premier plan de l'utilisateur." ++ refused ++ "Utilise ui_act, ou demande à Arthur de relancer en mode a11y.",
+                    // Reads the screen or the cursor, which show the user's
+                    // window, not the agent's.
+                    .none => background_prefix ++ T.name ++ " lirait l'écran ou le curseur de l'utilisateur, pas ta fenêtre cible." ++ refused ++ "Utilise ui_tree ou ui_find, ou demande à Arthur de relancer en mode a11y.",
+                };
+            };
+            return null;
+        }
+
+        /// As `Registry.call`, with the intrusive variants refused after
+        /// validation and before `run`.
+        pub fn call(ctx: anytype, name: []const u8, args: ?std.json.Value) ?@TypeOf(ctx.*).Result {
+            inline for (members) |T| {
+                if (std.mem.eql(u8, T.name, name)) {
+                    const parsed = parseArgs(T.Args, ctx.arena, args);
+                    return switch (parsed) {
+                        .invalid => |msg| @TypeOf(ctx.*).Result.err(msg),
+                        .ok => |a| if (intrusiveVariant(T.Args, a)) |msg| blk: {
+                            if (@hasField(@TypeOf(ctx.*), "denied")) ctx.denied = true;
+                            break :blk @TypeOf(ctx.*).Result.err(msg);
+                        } else T.run(ctx, a),
                     };
                 }
             }

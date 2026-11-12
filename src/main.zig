@@ -20,12 +20,15 @@ else
 pub const Server = mcp.Server(Backend, tools.all);
 
 const usage =
-    \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision]
+    \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision|background]
     \\                   [--policy FILE] [--rearm-key COMBO] [--capture auto|gdi] [--no-indicator]
     \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|APP>
     \\                         [--iterations N] [--check BASELINE.json] [--write-baseline FILE] [--capture auto|gdi]
     \\       neo-compute selftest [--capture auto|gdi]
+    \\       neo-compute selftest --background
     \\       neo-compute clipboard-probe [SECONDS]
+    \\       neo-compute bg-probe [dump] [autofocus=on|off] [only=PRIMITIVE]
+    \\                            [window|show|launch|notepad|calculator|settings|explorer|chrome|vscode]...
     \\       neo-compute --version
     \\
 ;
@@ -44,12 +47,14 @@ pub fn main(init: std.process.Init) !u8 {
     if (@hasDecl(Backend, "initProcess")) Backend.initProcess();
     if (args.len > 1 and std.mem.eql(u8, args[1], "bench")) return benchCommand(init, args[2..]);
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest")) {
-        if (args.len == 4 and std.mem.eql(u8, args[2], "--capture") and captureMode(args[3])) return selftestCommand(init);
+        // US-044: the background actions against a covered window.
+        if (args.len == 3 and std.mem.eql(u8, args[2], "--background")) return selftestCommand(init, true);
+        if (args.len == 4 and std.mem.eql(u8, args[2], "--capture") and captureMode(args[3])) return selftestCommand(init, false);
         if (args.len != 2) {
             std.debug.print("{s}{s}", .{ capture_usage, usage });
             return 2;
         }
-        return selftestCommand(init);
+        return selftestCommand(init, false);
     }
     // A11 (US-035): the formats and owner of each new clipboard content,
     // never the content, for SECONDS (default 120).
@@ -62,6 +67,15 @@ pub fn main(init: std.process.Init) !u8 {
     }
     // Started by selftest only: a provider that stalls (US-022 timeout).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-stall") and @hasDecl(Backend, "stallProvider")) return Backend.stallProvider();
+    // Started by the background probe and selftest only: the user's window (EP-011).
+    if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-decoy") and @hasDecl(Backend, "decoyWindow")) return Backend.decoyWindow(args[2..]);
+    // US-040: which background primitives take the foreground, on stderr.
+    if (args.len > 1 and std.mem.eql(u8, args[1], "bg-probe") and @hasDecl(Backend, "bgProbe")) {
+        var err_buf: [4096]u8 = undefined;
+        var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
+        defer stderr.interface.flush() catch {};
+        return Backend.bgProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
+    }
     // Started by selftest only: a still window of another process (US-032 wait CPU).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-still") and @hasDecl(Backend, "stillWindow")) return Backend.stillWindow(args[2..]);
 
@@ -88,7 +102,7 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, a, "--mode")) {
             const v = if (i + 1 < args.len) args[i + 1] else "";
             mode = std.meta.stringToEnum(mcp.Mode, v) orelse {
-                std.debug.print("neo-compute: --mode needs a11y or vision\n", .{});
+                std.debug.print("neo-compute: --mode needs a11y, vision or background\n", .{});
                 return 2;
             };
             i += 1;
@@ -252,7 +266,7 @@ fn benchCommand(init: std.process.Init, args: []const [:0]const u8) !u8 {
     return 0;
 }
 
-fn selftestCommand(init: std.process.Init) !u8 {
+fn selftestCommand(init: std.process.Init, background: bool) !u8 {
     var err_buf: [4096]u8 = undefined;
     var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
     defer stderr.interface.flush() catch {};
@@ -260,7 +274,14 @@ fn selftestCommand(init: std.process.Init) !u8 {
         try stderr.interface.print("selftest: platform FAILED: this build has no platform backend\n", .{});
         return 1;
     }
-    const failed = try Backend.selftest(init.gpa, init.io, init.environ_map, &stderr.interface);
+    if (background and !@hasDecl(Backend, "selftestBackground")) {
+        try stderr.interface.print("selftest: platform FAILED: this build has no background selftest\n", .{});
+        return 1;
+    }
+    const failed = if (background)
+        try Backend.selftestBackground(init.gpa, init.io, init.environ_map, &stderr.interface)
+    else
+        try Backend.selftest(init.gpa, init.io, init.environ_map, &stderr.interface);
     if (failed) |name| {
         try stderr.interface.print("selftest: FAILED ({s})\n", .{name});
         return 1;
@@ -293,4 +314,5 @@ test {
     _ = @import("core/clipboard.zig");
     _ = @import("core/regread.zig");
     _ = @import("core/system_test.zig");
+    _ = @import("core/background_test.zig");
 }

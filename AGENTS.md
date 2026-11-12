@@ -49,15 +49,24 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010) |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
+| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`) |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 and US-037 tasks (`-Suite existing` or `parity`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity prompt names a tool. `-Solve` also plays each parity task's scripted solution, which its check must accept. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
 
 A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
-also needs `selftest`, with its output in the report. `selftest` moves the
+also needs `selftest`, with its output in the report; a change to the
+background mode, the intrusion classes or a path they share (`ui_act`,
+`window_set`, `app_launch`, `uia.zig`, `window.zig`) also needs
+`selftest --background`. `selftest` moves the
 cursor, types, raises a topmost window, shows the control indicator and
 overwrites the clipboard (its earlier text is put back, other formats are
-lost); `bench` captures the screen, reads the taskbar and raises a topmost test
+lost); `selftest --background` puts a large decoy window of a second
+neo-compute process in the foreground for about a minute (it presses F15
+there), opens and closes Calculator (skipped when one is already open) and
+ends with one real click on the decoy; `neo-compute bg-probe` (US-040) does the
+same with the six reference applications, which it opens and closes; `bench`
+captures the screen, reads the taskbar and raises a topmost test
 window (`settle`); the eval dry run opens the task apps, moves two Explorer
 windows and overwrites the clipboard the same way. Run them one at a time.
 
@@ -88,6 +97,20 @@ windows and overwrites the clipboard the same way. Run them one at a time.
   until the thread answers. Before a UIA round trip that must stay bounded,
   check the window with `responsive` in `uia.zig` (selftest
   `ui-range-timeout` proves it through `neo-compute selftest-stall`).
+- Background mode (decision 0013). A tool's `intrusion` class defaults to
+  `input`; only class `none` tools may set `background = true` (compile
+  error otherwise), and an intrusive variant of a listed tool is declared in
+  its `Args.intrusive` table, refused before the tool runs. Three measured
+  facts carry the mode. UIA focuses the target of every pattern call and
+  brings its window in front unless `AutoSetFocus` is off, and only the
+  `CUIAutomation8` object exposes that setting (`IUIAutomation2`): the
+  background session is created from it. `SW_SHOWNOACTIVATE` on a minimized
+  window that is still the active window of its own thread takes the
+  foreground past the foreground lock: restore through `restoreQuiet` in
+  `window.zig`. A process started from a chain that received the last input
+  may take the foreground: a non-interference measure is valid only once the
+  decoy has pressed a key itself (`decoy_window.zig`), and each `bg-probe`
+  target prints that control line.
 - A window with `WDA_EXCLUDEFROMCAPTURE` is absent from DXGI and GDI frames,
   but each change of it still produces DXGI dirty rects, and DWM dirties a
   window's whole rectangle whatever its region. An overlay that must not

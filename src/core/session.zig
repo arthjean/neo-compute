@@ -33,6 +33,12 @@ pub const Session = struct {
     ui: uitree.State = .{},
     /// Observation of action tools without `observe`.
     default_observe: Observe = .delta,
+    /// `--mode background` (decision 0013): no tool reads or takes the
+    /// foreground, and a tool without `window` works on `target`.
+    background: bool = false,
+    /// The window the agent works on (US-042): the last one a `window`
+    /// argument named, or the one app_launch returned.
+    target: ?u64 = null,
     /// Control level per application (US-017) and its pid cache.
     policy: *const policy.Policy = &policy.defaults,
     apps: policy.Cache = .{},

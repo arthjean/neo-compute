@@ -44,6 +44,52 @@ const Snap = struct {
 
 const intersection = display.intersection;
 
+pub const target_missing = "Aucune fenêtre cible : passe window (handle de window_list) ou lance l'application avec app_launch.";
+pub const target_closed = "Fenêtre cible fermée : rappelle window_list";
+
+/// Makes `window` the session's target (US-042): the window a later call
+/// without `window` works on in background mode.
+pub fn setTarget(ctx: anytype, window: u64) void {
+    ctx.session.target = window;
+}
+
+/// Longest wait for Windows to name a foreground window again.
+const front_wait_ms = 200;
+const front_poll_ms = 10;
+
+/// Whether `window` came in front of the user since `before` was read
+/// (US-043): an application that activated itself whatever the launch or
+/// the state change asked. Windows names no foreground window while it
+/// switches from one to the next (US-040 saw it as Notepad opened a
+/// document), so a read without one is made again, for 200 ms at most.
+pub fn cameInFront(ctx: anytype, window: u64, before: ?u64) bool {
+    const b = before orelse return if (ctx.backend.foregroundWindow()) |fg| fg == window else false;
+    if (b == window) return false;
+    var waited: u32 = 0;
+    while (true) : (waited += front_poll_ms) {
+        if (ctx.backend.foregroundWindow()) |fg| return fg == window;
+        if (waited >= front_wait_ms or !ctx.sleep(front_poll_ms * std.time.ns_per_ms)) return false;
+    }
+}
+
+/// The window a tool reads: `window`, which becomes the session's target,
+/// else the foreground window (null). In background mode the foreground
+/// window is the user's: a call without `window` reads the target, and
+/// says so when there is none or when it was closed.
+pub fn resolveWindow(ctx: anytype, window: ?u64) union(enum) { ok: ?u64, err: []const u8 } {
+    if (window) |h| {
+        if (ctx.backend.windowRef(h) != null) setTarget(ctx, h);
+        return .{ .ok = h };
+    }
+    if (!ctx.session.background) return .{ .ok = null };
+    const t = ctx.session.target orelse return .{ .err = target_missing };
+    if (ctx.backend.windowRef(t) == null) {
+        ctx.session.target = null;
+        return .{ .err = target_closed };
+    }
+    return .{ .ok = t };
+}
+
 /// Snapshot of `window` (the foreground window when null) and the mapping of
 /// the display it sits on. With `record`, the mapping becomes the space of
 /// incoming coordinates, like a screenshot's (FR-03). Post-action deltas do
@@ -95,12 +141,20 @@ fn snapshot(ctx: anytype, window: ?u64, record: bool, text: bool) union(enum) { 
 fn extraRoots(ctx: anytype, window: ?u64) []const uitree.RootWindow {
     const listed = ctx.backend.uiRoots(ctx.arena, window);
     if (listed.len == 0) return listed;
+    // Background mode (US-042): only the target's own process. A menu open
+    // in the application the user works in is theirs, not the target's.
+    const only_pid: ?u32 = if (ctx.session.background) blk: {
+        const h = window orelse return &.{};
+        break :blk ctx.backend.appPid(h) orelse (ctx.backend.windowRef(h) orelse return &.{}).pid;
+    } else null;
     const kept = ctx.arena.alloc(uitree.RootWindow, listed.len) catch return &.{};
     var n: usize = 0;
-    for (listed) |r| if (policy.resolve(ctx, .{ .handle = r.handle, .pid = r.pid }).level != .deny) {
+    for (listed) |r| {
+        if (only_pid) |pid| if (r.pid != pid and ctx.backend.appPid(r.handle) != pid) continue;
+        if (policy.resolve(ctx, .{ .handle = r.handle, .pid = r.pid }).level == .deny) continue;
         kept[n] = r;
         n += 1;
-    };
+    }
     return kept[0..n];
 }
 
@@ -110,7 +164,11 @@ fn extraRoots(ctx: anytype, window: ?u64) []const uitree.RootWindow {
 /// changed since the last tree of that window. With `text`, a web page's
 /// visible text nodes too (US-024); with `with_marks`, the screenshot of the
 /// root's display with each actionable element's id drawn on it (US-031).
-pub fn tree(ctx: anytype, window: ?u64, since_last: bool, text: bool, with_marks: bool) Result {
+pub fn tree(ctx: anytype, named: ?u64, since_last: bool, text: bool, with_marks: bool) Result {
+    const window = switch (resolveWindow(ctx, named)) {
+        .ok => |h| h,
+        .err => |e| return Result.err(e),
+    };
     if (!with_marks) return treeOf(ctx, window, since_last, true, text);
     const s = switch (snapshot(ctx, window, true, text)) {
         .ok => |s| s,
@@ -396,9 +454,13 @@ test "a GDI look waits 100 ms per 1920x1080 of window, a DXGI look 20 ms" {
 /// `ui_find`: elements of `window` matching `query`, at most 20 lines in the
 /// ui_tree format. Off-screen elements are included (scroll_into_view).
 /// With `wait_ms`, searches again until a match or the deadline (US-030).
-pub fn find(ctx: anytype, query: []const u8, window: ?u64, wait_ms: u32) Result {
+pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32) Result {
     const q = switch (uitree.Query.parse(ctx.arena, query) catch return Result.err(oom)) {
         .ok => |q| q,
+        .err => |e| return Result.err(e),
+    };
+    const window = switch (resolveWindow(ctx, named)) {
+        .ok => |h| h,
         .err => |e| return Result.err(e),
     };
     if (wait_ms > 0) return findWaiting(ctx, q, query, window, wait_ms);
@@ -564,6 +626,10 @@ pub fn act(ctx: anytype, id_text: []const u8, action: uitree.Action, value: ?[]c
         .read_only => Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est en lecture seule. Aucune action exécutée.", .{name})),
         .unsupported => |rect| if (fallback_click)
             clickCenter(ctx, rect, action, name)
+        else if (ctx.session.background)
+            // The mode refuses fallback click: the message never names it
+            // (PRD, Edge Cases 5).
+            Result.err(fmt(ctx.arena, "Précondition non remplie : {s} ne supporte pas {t} (pattern {s} absent). En arrière-plan, {s} n'est possible : essaie une autre action, ou demande à Arthur de relancer en mode a11y. Aucune action exécutée.", .{ name, action, patternName(action), if (action == .set_value) "aucune saisie clavier" else "aucun clic" }))
         else
             Result.err(fmt(ctx.arena, "Précondition non remplie : {s} ne supporte pas {t} (pattern {s} absent). Essaie une autre action ou fallback: \"click\". Aucune action exécutée.", .{ name, action, patternName(action) })),
         .failed => |msg| Result.err(msg),
@@ -606,7 +672,8 @@ const Watch = struct {
     fn target(ctx: anytype, window: ?u64) Target {
         const area = ctx.backend.windowRect(window);
         const displays = ctx.backend.displays();
-        const index = if (area) |a| display.displayAt(displays, a.x + @divTrunc(a.w, 2), a.y + @divTrunc(a.h, 2)) orelse 0 else ctx.backend.foregroundDisplay() orelse 0;
+        // Background mode never asks where the foreground window is.
+        const index = if (area) |a| display.displayAt(displays, a.x + @divTrunc(a.w, 2), a.y + @divTrunc(a.h, 2)) orelse 0 else if (ctx.session.background) 0 else ctx.backend.foregroundDisplay() orelse 0;
         return .{ .area = area, .index = index };
     }
 
@@ -681,10 +748,18 @@ pub fn observeAfter(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_m
 
 /// `observeAfter` whose `delta` is the full tree when `full` (app_launch
 /// returns the whole tree of the window it opened, US-029).
-pub fn observeWith(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms: ?u32, window: ?u64, full: bool) Result {
+pub fn observeWith(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms: ?u32, named: ?u64, full: bool) Result {
     if (r.is_error or r.len == 0 or r.blocks[0] != .text) return r;
     const mode = observe orelse ctx.session.default_observe;
     if (mode == .none) return r;
+    // Background mode observes the target, never the foreground window; an
+    // action that left no window to observe (a minimize, a close) returns
+    // its own line.
+    const window = if (named == null and ctx.session.background) blk: {
+        const t = ctx.session.target orelse return r;
+        if (ctx.backend.windowRef(t) == null) return r;
+        break :blk t;
+    } else named;
     const status = switch (settle(ctx, settle_timeout_ms orelse default_settle_ms, window)) {
         .settled => |n| fmt(ctx.arena, "settled in {d} ms", .{n}),
         .timeout => "settle timeout",

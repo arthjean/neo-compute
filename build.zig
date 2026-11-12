@@ -21,6 +21,10 @@ pub fn build(b: *std.Build) void {
         .filters = if (test_filter) |f| &.{f} else &.{},
     });
     tests.root_module.addAnonymousImport("toolset_fixture", .{ .root_source_file = b.path("tests/fixtures/toolset_20260801.json") });
+    // `tools/list` of the a11y and vision modes as it was before the
+    // background mode (US-041): neither may change.
+    tests.root_module.addAnonymousImport("tools_list_a11y", .{ .root_source_file = b.path("tests/fixtures/tools_list_a11y.json") });
+    tests.root_module.addAnonymousImport("tools_list_vision", .{ .root_source_file = b.path("tests/fixtures/tools_list_vision.json") });
     const test_step = b.step("test", "Run unit and integration tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
@@ -31,6 +35,7 @@ pub fn build(b: *std.Build) void {
         .{ "tests/compile_errors/long_description.zig", "description is 301 characters, limit is 300" },
         .{ "tests/compile_errors/definition_budget.zig", "tokens, limit is 4500" },
         .{ "tests/compile_errors/always_load_budget.zig", "tokens with always-loaded tool `tool_9`, limit is 1500" },
+        .{ "tests/compile_errors/background_intrusion.zig", "tool `click` is listed in the background mode but its intrusion class is `input`: only `none` tools may be listed" },
     }) |case| {
         const bad = b.addObject(.{
             .name = std.fs.path.stem(case[0]),

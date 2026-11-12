@@ -592,7 +592,7 @@ fn findApp(backend: *Windows, app: App) ?u64 {
     return null;
 }
 
-fn expandArgs(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8, firefox_profile: []const u8) ![]const []const u8 {
+pub fn expandArgs(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8, firefox_profile: []const u8) ![]const []const u8 {
     const out = try arena.dupe([]const u8, argv);
     const abs = std.Io.Dir.cwd().realPathFileAlloc(io, page, arena) catch return error.PageNotFound;
     const root = std.Io.Dir.cwd().realPathFileAlloc(io, ".", arena) catch return error.PageNotFound;

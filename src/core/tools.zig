@@ -23,6 +23,11 @@ const Point = [2]i32;
 const Observe = a11y.Observe;
 const settle_info = .{ .maximum = a11y.max_settle_ms };
 
+/// Background mode (US-041): a screenshot shows the screen, which is the
+/// user's window and not the covered target. Window capture comes with
+/// EP-015 (US-061); until then the variant is refused.
+const observe_intrusive = .{ .screenshot = "observe screenshot montrerait l'écran de l'utilisateur, pas ta fenêtre cible. Aucune action exécutée. Utilise observe delta ou none." };
+
 /// Observation after an action (US-015), from the tool's arguments.
 fn observed(ctx: anytype, r: Result, args: anytype, window: ?u64) Result {
     return a11y.observeAfter(ctx, r, args.observe, args.settle_timeout_ms, window);
@@ -31,7 +36,7 @@ fn observed(ctx: anytype, r: Result, args: anytype, window: ?u64) Result {
 pub const screenshot = struct {
     pub const name = "screenshot";
     pub const description = "JPEG screenshot of a display.";
-    pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true };
+    pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true, .intrusion = .none };
     pub const Args = struct {
         display: ?u32 = null,
     };
@@ -43,7 +48,7 @@ pub const screenshot = struct {
 pub const zoom = struct {
     pub const name = "zoom";
     pub const description = "Region of the last screenshot at full resolution.";
-    pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
     pub const Args = struct {
         region: [4]i32,
     };
@@ -127,7 +132,7 @@ pub const left_mouse_up = ButtonTool("left_mouse_up", "Release the left button a
 pub const cursor_position = struct {
     pub const name = "cursor_position";
     pub const description = "Cursor position in screenshot pixels.";
-    pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
     pub const Args = struct {};
     pub fn run(ctx: anytype, args: Args) Result {
         _ = args;
@@ -209,6 +214,8 @@ pub const wait = struct {
     pub const description = "Pause for duration seconds.";
     /// Not an action: allowed while paused and in a second instance.
     pub const inert = true;
+    pub const annotations = .{ .intrusion = .none };
+    pub const background = true;
     pub const Args = struct {
         duration: f64,
         pub const field_info = .{ .duration = duration_info };
@@ -222,7 +229,9 @@ pub const wait = struct {
 pub const ui_tree = struct {
     pub const name = "ui_tree";
     pub const description = "Accessibility tree of the foreground window, one line per element id; since=last: changes only.";
-    pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true };
+    pub const background_description = "Accessibility tree of the target window (window, else the last one named or launched), one line per element id; since=last: changes only.";
+    pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true, .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         window: ?[]const u8 = null,
@@ -232,6 +241,7 @@ pub const ui_tree = struct {
         /// US-031: also the screenshot with each actionable element's id
         /// drawn on it (explained in the instructions).
         marks: bool = false,
+        pub const intrusive = .{ .marks = .{ .true = "marks dessinerait les ids sur une capture de l'écran de l'utilisateur, pas de ta fenêtre cible. Aucune action exécutée. Utilise ui_tree sans marks." } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = switch (optionalHandle(ctx, args.window)) {
@@ -245,7 +255,8 @@ pub const ui_tree = struct {
 pub const ui_find = struct {
     pub const name = "ui_find";
     pub const description = "Find elements: name words, role:<role>, state:<state>; at most 20 lines.";
-    pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         query: []const u8,
@@ -266,7 +277,8 @@ pub const ui_find = struct {
 pub const ui_act = struct {
     pub const name = "ui_act";
     pub const description = "Act on an element id from ui_tree or ui_find.";
-    pub const annotations = .{ .always_load = true };
+    pub const annotations = .{ .always_load = true, .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         id: []const u8,
@@ -276,6 +288,13 @@ pub const ui_act = struct {
         observe: ?Observe = null,
         settle_timeout_ms: ?u32 = null,
         pub const field_info = .{ .settle_timeout_ms = settle_info };
+        /// What the background mode refuses (US-041), from the measures of
+        /// US-040 (decision 0013).
+        pub const intrusive = .{
+            .action = .{ .focus = "ui_act focus prendrait le focus clavier et le premier plan de l'utilisateur. Aucune action exécutée. Essaie invoke, select ou set_value, qui agissent sans le focus." },
+            .fallback = .{ .click = "ui_act fallback click prendrait la souris de l'utilisateur. Aucune action exécutée. Essaie l'action sans fallback, ou une autre action de l'élément." },
+            .observe = observe_intrusive,
+        };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const r = a11y.act(ctx, args.id, args.action, args.value, args.fallback != null);
@@ -293,7 +312,8 @@ fn optionalHandle(ctx: anytype, text: ?[]const u8) union(enum) { ok: ?u64, err: 
 pub const window_list = struct {
     pub const name = "window_list";
     pub const description = "Visible top-level windows: handle, title, process, rectangle.";
-    pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         include_hidden: bool = false,
@@ -307,6 +327,7 @@ pub const window_list = struct {
 pub const window_focus = struct {
     pub const name = "window_focus";
     pub const description = "Bring a window to the foreground, restoring it.";
+    pub const annotations = .{ .intrusion = .foreground };
     pub const extension = true;
     pub const Args = struct {
         window: []const u8,
@@ -319,7 +340,10 @@ pub const window_focus = struct {
             return Result.err(fmt(ctx.arena, "Handle `{s}` invalide : utilise un handle de window_list (ex. 0x1a2b).", .{args.window}));
         if (policy.requireWindow(ctx, handle, .click)) |r| return r;
         const r = switch (ctx.backend.focusWindow(handle)) {
-            .ok => Result.text(fmt(ctx.arena, "0x{x} au premier plan", .{handle})),
+            .ok => blk: {
+                a11y.setTarget(ctx, handle);
+                break :blk Result.text(fmt(ctx.arena, "0x{x} au premier plan", .{handle}));
+            },
             .closed => Result.err("Fenêtre fermée : rappelle window_list"),
             .refused => Result.err(fmt(ctx.arena, "Fenêtre 0x{x} : Windows a refusé le premier plan. Clique sur la fenêtre ou réessaie.", .{handle})),
         };
@@ -330,6 +354,8 @@ pub const window_focus = struct {
 pub const window_set = struct {
     pub const name = "window_set";
     pub const description = "Move, resize, minimize, maximize or close a window; rect [x, y, w, h] in screenshot pixels of display (default: the window's).";
+    pub const annotations = .{ .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         window: []const u8,
@@ -340,11 +366,21 @@ pub const window_set = struct {
         observe: ?Observe = null,
         settle_timeout_ms: ?u32 = null,
         pub const field_info = .{ .force = .{ .description = "With state closed: end the process after 2 s" }, .settle_timeout_ms = settle_info };
+        pub const intrusive = .{ .observe = observe_intrusive };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = parseHandle(args.window) orelse
             return Result.err(fmt(ctx.arena, "Handle `{s}` invalide : utilise un handle de window_list (ex. 0x1a2b).", .{args.window}));
-        const o = windowctl.set(ctx, handle, args.rect, args.display, args.state, args.force);
+        if (ctx.backend.windowRef(handle) != null) a11y.setTarget(ctx, handle);
+        const fg_before: ?u64 = if (ctx.session.background) ctx.backend.foregroundWindow() else null;
+        var o = windowctl.set(ctx, handle, args.rect, args.display, args.state, args.force);
+        // Background mode (US-043): a state change that brought the window
+        // in front says so.
+        const open = ctx.backend.windowRef(handle) != null;
+        if (ctx.session.background and open and !o.result.is_error and a11y.cameInFront(ctx, handle, fg_before))
+            o.result = Result.text(fmt(ctx.arena, "{s}\n0x{x} a pris le premier plan", .{ o.result.blocks[0].text, handle }));
+        // A closed target is no longer one.
+        if (ctx.session.target == handle and !open) ctx.session.target = null;
         return observed(ctx, o.result, args, o.window);
     }
 };
@@ -352,6 +388,8 @@ pub const window_set = struct {
 pub const app_launch = struct {
     pub const name = "app_launch";
     pub const description = "Start a Start menu app (name or AUMID) or open a document or folder in its default app; returns the window and its tree.";
+    pub const annotations = .{ .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         name: ?[]const u8 = null,
@@ -359,6 +397,7 @@ pub const app_launch = struct {
         observe: ?Observe = null,
         settle_timeout_ms: ?u32 = null,
         pub const field_info = .{ .settle_timeout_ms = settle_info };
+        pub const intrusive = .{ .observe = observe_intrusive };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         return launch.launch(ctx, args.name, args.path, args.observe, args.settle_timeout_ms);
@@ -368,11 +407,14 @@ pub const app_launch = struct {
 pub const clipboard = struct {
     pub const name = "clipboard";
     pub const description = "Read (get) or write (set) the clipboard's text; content marked secret by its app is refused, and set keeps it out of the history and cloud.";
+    pub const annotations = .{ .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         mode: clipboard_mod.Mode,
         text: ?[]const u8 = null,
         pub const field_info = .{ .text = .{ .description = "mode set: the text, 1 MiB at most" } };
+        pub const intrusive = .{ .mode = .{ .set = "écrire le presse-papiers remplacerait celui de l'utilisateur. Aucune action exécutée. Utilise ui_act set_value." } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         return clipboard_mod.run(ctx, args.mode, args.text);
@@ -382,7 +424,8 @@ pub const clipboard = struct {
 pub const registry_read = struct {
     pub const name = "registry_read";
     pub const description = "Read a registry value (name; empty for the default) or a key's values and subkeys, 64-bit view; never writes. path: HKCU\\..., HKLM, HKCR, HKU or HKCC.";
-    pub const annotations = .{ .read_only = true, .idempotent = true };
+    pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
+    pub const background = true;
     pub const extension = true;
     pub const Args = struct {
         path: []const u8,

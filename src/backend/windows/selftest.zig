@@ -20,7 +20,7 @@ const display = @import("../../core/display.zig");
 
 const Server = mcp.Server(Windows, tools.all);
 
-const Report = struct {
+pub const Report = struct {
     log: *std.Io.Writer,
     failed: ?[]const u8 = null,
 
@@ -72,7 +72,7 @@ fn qpcUs() u64 {
 }
 
 /// Calls a tool through the dispatcher and returns its parsed result.
-const Caller = struct {
+pub const Caller = struct {
     server: *Server,
     arena: std.mem.Allocator,
     out: std.Io.Writer.Allocating,

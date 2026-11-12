@@ -86,7 +86,7 @@ pub fn set(ctx: anytype, handle: u64, rect: ?[4]i32, display_index: ?u32, state:
             const h = @min(p.frame.h, m.rect.h);
             break :blk display.Rect{ .x = m.rect.x + @divTrunc(m.rect.w - w, 2), .y = m.rect.y + @divTrunc(m.rect.h - h, 2), .w = w, .h = h };
         };
-        const r = ctx.backend.placeWindow(handle, frame);
+        const r = ctx.backend.placeWindow(handle, frame, !ctx.session.background);
         if (setError(ctx, handle, r)) |o| return o;
         placed = r.ok;
     }
@@ -98,7 +98,7 @@ pub fn set(ctx: anytype, handle: u64, rect: ?[4]i32, display_index: ?u32, state:
             .maximized => .maximized,
             .closed => unreachable,
         };
-        const r = ctx.backend.showWindow(handle, show);
+        const r = ctx.backend.showWindow(handle, show, !ctx.session.background);
         if (setError(ctx, handle, r)) |o| return o;
         final_state = show;
         placed = r.ok;
