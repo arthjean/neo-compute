@@ -128,7 +128,10 @@ fn hungRoot(arena: std.mem.Allocator, hwnd: w.HWND, desktop: bool) uitree.Snapsh
 
 const Job = union(enum) {
     snapshot: struct { arena: std.mem.Allocator, hwnd: ?u64, request: uitree.Request, out: uitree.SnapshotResult = undefined },
-    act: struct { arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8, out: uitree.ActResult = undefined },
+    live: struct { arena: std.mem.Allocator, window: u64, key: u64, read: uitree.LiveRead, out: uitree.LiveResult = undefined },
+    op: struct { arena: std.mem.Allocator, window: u64, key: u64, op: uitree.Op, out: uitree.OpResult = undefined },
+    scroll_host: struct { arena: std.mem.Allocator, window: u64, key: u64, out: ?u64 = null },
+    entries: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.EntriesResult = undefined },
     /// Rectangles of the visible password fields of the foreground window,
     /// into `Worker.secret_buf` (no arena: the dispatcher keeps using its
     /// own while the scan runs).
@@ -183,11 +186,36 @@ pub const Worker = struct {
         return self.job.snapshot.out;
     }
 
-    pub fn act(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
+    /// The element as it is now: see `Session.live`.
+    pub fn live(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64, what: uitree.LiveRead) uitree.LiveResult {
         if (self.start()) |msg| return .{ .failed = msg };
-        self.job = .{ .act = .{ .arena = arena, .window = window, .key = key, .action = action, .value = value } };
+        self.job = .{ .live = .{ .arena = arena, .window = window, .key = key, .read = what } };
         self.run();
-        return self.job.act.out;
+        return self.job.live.out;
+    }
+
+    /// One pattern call on an element.
+    pub fn op(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64, o: uitree.Op) uitree.OpResult {
+        if (self.start()) |msg| return .{ .failed = msg };
+        self.job = .{ .op = .{ .arena = arena, .window = window, .key = key, .op = o } };
+        self.run();
+        return self.job.op.out;
+    }
+
+    /// Key of the first ancestor of `key` with a Scroll pattern.
+    pub fn scrollHost(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64) ?u64 {
+        if (self.start() != null) return null;
+        self.job = .{ .scroll_host = .{ .arena = arena, .window = window, .key = key } };
+        self.run();
+        return self.job.scroll_host.out;
+    }
+
+    /// The selectable descendants of `key`.
+    pub fn entries(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64) uitree.EntriesResult {
+        if (self.start()) |msg| return .{ .failed = msg };
+        self.job = .{ .entries = .{ .arena = arena, .window = window, .key = key } };
+        self.run();
+        return self.job.entries.out;
     }
 
     /// Subscribes to the UI Automation events of `hwnd` (`uia_events.zig`)
@@ -286,7 +314,10 @@ pub const Worker = struct {
                     self.msaa_proxy = session.?.last_msaa;
                     self.msaa_ns = session.?.msaa_ns;
                 },
-                .act => |*j| j.out = session.?.act(j.arena, j.window, j.key, j.action, j.value),
+                .live => |*j| j.out = session.?.liveState(j.arena, j.window, j.key, j.read),
+                .op => |*j| j.out = session.?.runOp(j.arena, j.window, j.key, j.op),
+                .scroll_host => |*j| j.out = session.?.scrollHost(j.arena, j.window, j.key),
+                .entries => |*j| j.out = session.?.listEntries(j.arena, j.window, j.key),
                 .secrets => self.secret_len = session.?.secrets(&self.secret_buf),
                 .watch => |*j| j.out = session.?.watchWindow(j.hwnd),
             }
@@ -350,6 +381,19 @@ const Session = struct {
     /// a web document with its text nodes (US-024).
     content_cache: ?*w.IUIAutomationCacheRequest = null,
     content_view: ?*w.IUIAutomationCondition = null,
+    /// What an action reads of its element before and after (EP-013).
+    live_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// The copy of an element the last full live read left, with its
+    /// patterns cached: the action that follows the read calls its
+    /// pattern from it, one round trip instead of two.
+    read_copy: ?ReadCopy = null,
+    /// RuntimeId and Scroll pattern of an ancestor, and the walker that
+    /// climbs to it (US-052).
+    host_cache: ?*w.IUIAutomationCacheRequest = null,
+    walker: ?*w.IUIAutomationTreeWalker = null,
+    /// The selectable descendants of a container (US-053).
+    entry_condition: ?*w.IUIAutomationCondition = null,
+    entry_cache: ?*w.IUIAutomationCacheRequest = null,
     /// The main cache plus MSAA's role and state, over the on-screen
     /// control view: a Firefox window served by the MSAA proxy (US-025).
     msaa_cache: ?*w.IUIAutomationCacheRequest = null,
@@ -450,6 +494,12 @@ const Session = struct {
         if (self.probe_cache) |c| release(c);
         if (self.content_cache) |c| release(c);
         if (self.content_view) |c| release(c);
+        if (self.live_cache) |c| release(c);
+        if (self.read_copy) |c| release(c.el);
+        if (self.host_cache) |c| release(c);
+        if (self.walker) |c| release(c);
+        if (self.entry_condition) |c| release(c);
+        if (self.entry_cache) |c| release(c);
         if (self.msaa_cache) |c| release(c);
         release(self.subtree);
         release(self.control_view);
@@ -1155,33 +1205,113 @@ const Session = struct {
         }
     }
 
-    fn act(self: *Session, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
+    const Resolved = union(enum) { el: *w.IUIAutomationElement, gone, failed: []const u8 };
+
+    /// The retained element of `key`, once its window is known to answer.
+    fn resolve(self: *Session, arena: std.mem.Allocator, window: u64, key: u64) Resolved {
         const hwnd: w.HWND = @ptrFromInt(window);
         if (w.IsWindow(hwnd) == 0) return .gone;
-        // Acting with the focus side effect the background mode excludes is
-        // never a fallback.
-        if (!self.background and !auto_set_focus.load(.monotonic)) return .{ .failed = no_auto_focus_message };
         if (!responsive(hwnd)) return .{ .failed = hung_message };
         const el = self.find(window, key) orelse blk: {
             // Not in a retained snapshot (evicted): read the window again.
             if (self.snapshot(arena, window, .{}) == .err) return .gone;
             break :blk self.find(window, key) orelse return .gone;
         };
+        return .{ .el = el };
+    }
+
+    /// The element as it is now (EP-013): what an action needs before it
+    /// runs and reads back after, in one cached round trip. The value's
+    /// hash costs a second one, and is never read for a password (FR-09).
+    fn liveState(self: *Session, arena: std.mem.Allocator, window: u64, key: u64, what: uitree.LiveRead) uitree.LiveResult {
+        const el = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            .gone => return .gone,
+            .failed => |m| return .{ .failed = m },
+        };
+        const want_value = switch (what) {
+            .all => false,
+            .value => true,
+            .toggle, .expand, .selected => return liveOne(arena, el, what),
+        };
+        const cache = self.liveCache() catch return .{ .failed = fail(arena, "lecture de l'élément") };
+        var updated: ?*w.IUIAutomationElement = null;
+        check(el.vtable.BuildUpdatedCache(el, cache, &updated)) catch |e| return liveError(arena, e);
+        const now = updated orelse return .gone;
+        // Kept until the next read, for the action that follows.
+        if (self.read_copy) |c| release(c.el);
+        self.read_copy = .{ .window = window, .key = key, .el = now };
+        var r: w.RECT = undefined;
+        check(now.vtable.get_CachedBoundingRectangle(now, &r)) catch |e| return liveError(arena, e);
+        var out: uitree.Live = .{
+            .enabled = cachedBool(now, "get_CachedIsEnabled"),
+            .offscreen = cachedBool(now, "get_CachedIsOffscreen"),
+            .password = cachedBool(now, "get_CachedIsPassword"),
+            .rect = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top },
+        };
+        inline for (patterns) |p| @field(out.actions, p.field) = hasCachedPattern(now, p.id);
+        if (out.actions.toggle) if (cachedInt(now, w.UIA_ToggleToggleStatePropertyId)) |s| {
+            out.toggle = if (s == w.ToggleState_On) .on else if (s == w.ToggleState_Indeterminate) .mixed else .off;
+        };
+        if (out.actions.expand_collapse) if (cachedInt(now, w.UIA_ExpandCollapseExpandCollapseStatePropertyId)) |s| {
+            out.expand = if (s == w.ExpandCollapseState_Collapsed) .collapsed else if (s == w.ExpandCollapseState_Expanded) .expanded else if (s == w.ExpandCollapseState_PartiallyExpanded) .partial else .leaf;
+        };
+        if (out.actions.select) if (cachedVariant(now, w.UIA_SelectionItemIsSelectedPropertyId)) |v0| {
+            var v = v0;
+            defer _ = w.VariantClear(&v);
+            if (vt(&v) == w.VT_BOOL) out.selected = v.Anonymous.Anonymous.Anonymous.boolVal != 0;
+        };
+        if (out.actions.value) out.read_only = cachedFlag(now, w.UIA_ValueIsReadOnlyPropertyId);
+        if (hasCachedPattern(now, w.UIA_RangeValuePatternId)) {
+            const value = cachedDouble(now, w.UIA_RangeValueValuePropertyId);
+            const min = cachedDouble(now, w.UIA_RangeValueMinimumPropertyId);
+            const max = cachedDouble(now, w.UIA_RangeValueMaximumPropertyId);
+            if (value != null and min != null and max != null)
+                out.range = .{ .value = value.?, .min = min.?, .max = max.?, .read_only = cachedFlag(now, w.UIA_RangeValueIsReadOnlyPropertyId) };
+        }
+        if (hasCachedPattern(now, w.UIA_ScrollPatternId)) out.scroll = .{
+            .v = scrollPercent(cachedDouble(now, w.UIA_ScrollVerticalScrollPercentPropertyId)),
+            .h = scrollPercent(cachedDouble(now, w.UIA_ScrollHorizontalScrollPercentPropertyId)),
+        };
+        // A field the MSAA proxy serves may be a password it does not flag
+        // (US-025): its value is not read either.
+        if (want_value and out.actions.value and !out.password and !self.msaaWindow(window)) out.value_hash = valueHash(el);
+        return .{ .ok = out };
+    }
+
+    fn liveCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.live_cache) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        for ([_]w.UIA_PROPERTY_ID{
+            w.UIA_IsEnabledPropertyId,                   w.UIA_IsOffscreenPropertyId,                       w.UIA_IsPasswordPropertyId,              w.UIA_BoundingRectanglePropertyId,
+            w.UIA_ToggleToggleStatePropertyId,           w.UIA_ExpandCollapseExpandCollapseStatePropertyId, w.UIA_SelectionItemIsSelectedPropertyId, w.UIA_ValueIsReadOnlyPropertyId,
+            w.UIA_RangeValueValuePropertyId,             w.UIA_RangeValueMinimumPropertyId,                 w.UIA_RangeValueMaximumPropertyId,       w.UIA_RangeValueIsReadOnlyPropertyId,
+            w.UIA_ScrollVerticalScrollPercentPropertyId, w.UIA_ScrollHorizontalScrollPercentPropertyId,
+        }) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        for (patterns) |p| try check(cache.?.vtable.AddPattern(cache.?, p.id));
+        for ([_]w.UIA_PATTERN_ID{ w.UIA_RangeValuePatternId, w.UIA_ScrollPatternId }) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
+        self.live_cache = cache;
+        return cache.?;
+    }
+
+    /// One pattern call on the element (EP-013). The core checked the
+    /// preconditions on a live read just before.
+    fn runOp(self: *Session, arena: std.mem.Allocator, window: u64, key: u64, o: uitree.Op) uitree.OpResult {
+        // Acting with the focus side effect the background mode excludes is
+        // never a fallback.
+        if (!self.background and !auto_set_focus.load(.monotonic)) return .{ .failed = no_auto_focus_message };
+        const el = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            .gone => return .gone,
+            .failed => |m| return .{ .failed = m },
+        };
         // MSAA elements (US-025): Firefox refuses accValue writes.
         const msaa = self.msaaWindow(window);
-        if (msaa and action == .set_value) return .{ .failed = msaa_set_value_message };
-        var enabled: w.BOOL = 0;
-        check(el.vtable.get_CurrentIsEnabled(el, &enabled)) catch |e| return actError(arena, e);
-        if (enabled == 0) return .disabled;
-        if (action != .scroll_into_view) {
-            var off: w.BOOL = 0;
-            check(el.vtable.get_CurrentIsOffscreen(el, &off)) catch |e| return actError(arena, e);
-            if (off != 0) return .offscreen;
-        }
-        var r: w.RECT = undefined;
-        check(el.vtable.get_CurrentBoundingRectangle(el, &r)) catch |e| return actError(arena, e);
-        const rect: display.Rect = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
-        const hr = switch (action) {
+        if (msaa and o == .set_value) return .{ .failed = msaa_set_value_message };
+        const src: Source = .{ .el = el, .copy = if (self.read_copy) |c| (if (c.window == window and c.key == key) c.el else null) else null };
+        const hr = switch (o) {
             .focus => blk: {
                 _ = set_focus_calls.fetchAdd(1, .monotonic);
                 break :blk el.vtable.SetFocus(el);
@@ -1189,22 +1319,155 @@ const Session = struct {
             // Through the MSAA proxy, the element's default action is
             // accDoDefaultAction (US-025).
             .invoke => if (msaa)
-                call(el, w.IUIAutomationLegacyIAccessiblePattern, w.UIA_LegacyIAccessiblePatternId, "DoDefaultAction", .{})
+                call(src, w.IUIAutomationLegacyIAccessiblePattern, w.UIA_LegacyIAccessiblePatternId, "DoDefaultAction", .{})
             else
-                call(el, w.IUIAutomationInvokePattern, w.UIA_InvokePatternId, "Invoke", .{}),
-            .toggle => call(el, w.IUIAutomationTogglePattern, w.UIA_TogglePatternId, "Toggle", .{}),
-            .select => call(el, w.IUIAutomationSelectionItemPattern, w.UIA_SelectionItemPatternId, "Select", .{}),
-            .expand => call(el, w.IUIAutomationExpandCollapsePattern, w.UIA_ExpandCollapsePatternId, "Expand", .{}),
-            .collapse => call(el, w.IUIAutomationExpandCollapsePattern, w.UIA_ExpandCollapsePatternId, "Collapse", .{}),
-            .scroll_into_view => call(el, w.IUIAutomationScrollItemPattern, w.UIA_ScrollItemPatternId, "ScrollIntoView", .{}),
-            .set_value => setValue(arena, el, value orelse ""),
-        } orelse return .{ .unsupported = rect };
+                call(src, w.IUIAutomationInvokePattern, w.UIA_InvokePatternId, "Invoke", .{}),
+            .legacy => defaultAction(el),
+            .toggle => call(src, w.IUIAutomationTogglePattern, w.UIA_TogglePatternId, "Toggle", .{}),
+            .select => call(src, w.IUIAutomationSelectionItemPattern, w.UIA_SelectionItemPatternId, "Select", .{}),
+            .expand => call(src, w.IUIAutomationExpandCollapsePattern, w.UIA_ExpandCollapsePatternId, "Expand", .{}),
+            .collapse => call(src, w.IUIAutomationExpandCollapsePattern, w.UIA_ExpandCollapsePatternId, "Collapse", .{}),
+            .scroll_item => call(src, w.IUIAutomationScrollItemPattern, w.UIA_ScrollItemPatternId, "ScrollIntoView", .{}),
+            .set_value => |v| setValue(arena, el, v),
+            .set_range => |x| call(src, w.IUIAutomationRangeValuePattern, w.UIA_RangeValuePatternId, "SetValue", .{x}),
+            .scroll => |s| call(src, w.IUIAutomationScrollPattern, w.UIA_ScrollPatternId, "Scroll", .{ scrollAmount(s.h), scrollAmount(s.v) }),
+            .scroll_to => |p| call(src, w.IUIAutomationScrollPattern, w.UIA_ScrollPatternId, "SetScrollPercent", .{ p.h orelse w.UIA_ScrollPatternNoScroll, p.v orelse w.UIA_ScrollPatternNoScroll }),
+        } orelse return .unsupported;
         if (hr == read_only_hr) return .read_only;
         if (hr >= 0) return .ok;
         if (@as(u32, @bitCast(hr)) == w.UIA_E_TIMEOUT) return .timeout;
         if (@as(u32, @bitCast(hr)) == w.UIA_E_ELEMENTNOTAVAILABLE) return .gone;
         com.last_hr = hr;
         return .{ .failed = fail(arena, "action") };
+    }
+
+    /// Key of the first ancestor of `key` with a Scroll pattern, within
+    /// `max_scroll_levels` (US-052), kept so later calls reach it. One
+    /// cached round trip per level.
+    fn scrollHost(self: *Session, arena: std.mem.Allocator, window: u64, key: u64) ?u64 {
+        const el = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            else => return null,
+        };
+        const walker = self.controlWalker() catch return null;
+        const cache = self.hostCache() catch return null;
+        var cur: *w.IUIAutomationElement = el;
+        var owned = false;
+        defer if (owned) release(cur);
+        var level: usize = 0;
+        while (level < uitree.max_scroll_levels) : (level += 1) {
+            var parent: ?*w.IUIAutomationElement = null;
+            if (walker.vtable.GetParentElementBuildCache(walker, cur, cache, &parent) < 0) return null;
+            const p = parent orelse return null;
+            if (owned) release(cur);
+            cur = p;
+            owned = true;
+            if (!hasCachedPattern(p, w.UIA_ScrollPatternId)) continue;
+            const k = runtimeKey(p) orelse return null;
+            self.adopt(key, k, p);
+            return k;
+        }
+        return null;
+    }
+
+    fn controlWalker(self: *Session) com.Error!*w.IUIAutomationTreeWalker {
+        if (self.walker) |x| return x;
+        var walker: ?*w.IUIAutomationTreeWalker = null;
+        try check(self.automation.vtable.get_ControlViewWalker(self.automation, &walker));
+        self.walker = walker;
+        return walker.?;
+    }
+
+    fn hostCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.host_cache) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        try check(cache.?.vtable.AddProperty(cache.?, w.UIA_RuntimeIdPropertyId));
+        try check(cache.?.vtable.AddPattern(cache.?, w.UIA_ScrollPatternId));
+        self.host_cache = cache;
+        return cache.?;
+    }
+
+    /// The selectable descendants of `key` (US-053), in one cached round
+    /// trip, each kept so `select` reaches it by its key.
+    fn listEntries(self: *Session, arena: std.mem.Allocator, window: u64, key: u64) uitree.EntriesResult {
+        const el = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            .gone => return .gone,
+            .failed => |m| return .{ .failed = m },
+        };
+        const failed: uitree.EntriesResult = .{ .failed = fail(arena, "lecture des entrées") };
+        const cond = self.entryCondition() catch return failed;
+        const cache = self.entryCache() catch return failed;
+        var arr: ?*w.IUIAutomationElementArray = null;
+        check(el.vtable.FindAllBuildCache(el, w.TreeScope_Descendants, cond, cache, &arr)) catch |e|
+            return if (e == error.ElementNotAvailable) .gone else .{ .failed = fail(arena, "lecture des entrées") };
+        const array = arr orelse return .{ .ok = &.{} };
+        defer release(array);
+        var len: i32 = 0;
+        if (array.vtable.get_Length(array, &len) < 0) return failed;
+        var out: std.ArrayList(uitree.Entry) = .empty;
+        var i: i32 = 0;
+        while (i < len and out.items.len < uitree.max_entries) : (i += 1) {
+            var item: ?*w.IUIAutomationElement = null;
+            if (array.vtable.GetElement(array, i, &item) < 0) continue;
+            const e = item orelse continue;
+            defer release(e);
+            const k = runtimeKey(e) orelse continue;
+            // The proxy of an open Win32 drop-down gives its last item
+            // again and again (measured: 16 elements for 3 entries).
+            const seen = for (out.items) |o| {
+                if (o.key == k) break true;
+            } else false;
+            if (seen) continue;
+            var name: w.BSTR = null;
+            if (e.vtable.get_CachedName(e, &name) < 0) continue;
+            defer w.SysFreeString(name);
+            out.append(arena, .{ .key = k, .name = bstrText(arena, name, max_name_units) catch "" }) catch return .{ .failed = "Mémoire insuffisante : réessaie." };
+            self.adopt(key, k, e);
+        }
+        return .{ .ok = out.items };
+    }
+
+    fn entryCondition(self: *Session) com.Error!*w.IUIAutomationCondition {
+        if (self.entry_condition) |c| return c;
+        var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+        v.Anonymous.Anonymous.vt = w.VT_BOOL;
+        v.Anonymous.Anonymous.Anonymous.boolVal = -1; // VARIANT_TRUE
+        var selectable: ?*w.IUIAutomationCondition = null;
+        try check(self.automation.vtable.CreatePropertyCondition(self.automation, w.UIA_IsSelectionItemPatternAvailablePropertyId, v, &selectable));
+        defer release(selectable.?);
+        var cond: ?*w.IUIAutomationCondition = null;
+        try check(self.automation.vtable.CreateAndCondition(self.automation, self.control_view, selectable, &cond));
+        self.entry_condition = cond;
+        return cond.?;
+    }
+
+    fn entryCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.entry_cache) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        try check(cache.?.vtable.AddProperty(cache.?, w.UIA_RuntimeIdPropertyId));
+        try check(cache.?.vtable.AddProperty(cache.?, w.UIA_NamePropertyId));
+        self.entry_cache = cache;
+        return cache.?;
+    }
+
+    /// Keeps `el` under `key` in the snapshot that holds `near`, so the
+    /// next calls reach an element the control view left out.
+    fn adopt(self: *Session, near: u64, key: u64, el: *w.IUIAutomationElement) void {
+        const slot = for (&self.retained) |*r| {
+            if (r.used != 0 and r.find(near) != null) break r;
+        } else return;
+        if (slot.find(key) != null) return;
+        slot.keys.append(self.gpa, key) catch return;
+        slot.elements.append(self.gpa, el) catch {
+            _ = slot.keys.pop();
+            return;
+        };
+        _ = el.vtable.AddRef(el);
     }
 
     fn find(self: *Session, window: u64, key: u64) ?*w.IUIAutomationElement {
@@ -1238,9 +1501,19 @@ fn hasCachedPattern(el: *w.IUIAutomationElement, id: w.UIA_PATTERN_ID) bool {
 const read_only_hr: w.HRESULT = @bitCast(@as(u32, 0xA0000001));
 
 /// Calls `method` of pattern `P` on `el`; null when the pattern is missing.
-fn call(el: *w.IUIAutomationElement, comptime P: type, id: w.UIA_PATTERN_ID, comptime method: []const u8, args: anytype) ?w.HRESULT {
+const ReadCopy = struct { window: u64, key: u64, el: *w.IUIAutomationElement };
+
+/// Where a pattern comes from: the element, or the copy the last live read
+/// left of it when it has one. A pattern taken from that copy acts on the
+/// live element all the same.
+const Source = struct { el: *w.IUIAutomationElement, copy: ?*w.IUIAutomationElement };
+
+fn call(src: Source, comptime P: type, id: w.UIA_PATTERN_ID, comptime method: []const u8, args: anytype) ?w.HRESULT {
     var raw: ?*anyopaque = null;
-    if (el.vtable.GetCurrentPatternAs(el, id, &P.iid, &raw) < 0) return null;
+    if (src.copy) |c| {
+        if (c.vtable.GetCachedPatternAs(c, id, &P.iid, &raw) < 0) raw = null;
+    }
+    if (raw == null and src.el.vtable.GetCurrentPatternAs(src.el, id, &P.iid, &raw) < 0) return null;
     const p: *P = @ptrCast(@alignCast(raw orelse return null));
     defer release(p);
     return @call(.auto, @field(p.vtable, method), .{p} ++ args);
@@ -1262,9 +1535,74 @@ fn setValue(arena: std.mem.Allocator, el: *w.IUIAutomationElement, value: []cons
     return p.vtable.SetValue(p, bstr);
 }
 
-fn actError(arena: std.mem.Allocator, err: com.Error) uitree.ActResult {
+/// One state of `el`, read live in a single round trip: what an action
+/// reads back (US-055). The caller asks only for a state whose pattern the
+/// read before the action found, and the other fields keep their defaults.
+fn liveOne(arena: std.mem.Allocator, el: *w.IUIAutomationElement, what: uitree.LiveRead) uitree.LiveResult {
+    const id: w.UIA_PROPERTY_ID = switch (what) {
+        .toggle => w.UIA_ToggleToggleStatePropertyId,
+        .expand => w.UIA_ExpandCollapseExpandCollapseStatePropertyId,
+        .selected => w.UIA_SelectionItemIsSelectedPropertyId,
+        .all, .value => unreachable,
+    };
+    var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+    check(el.vtable.GetCurrentPropertyValue(el, id, &v)) catch |e| return liveError(arena, e);
+    defer _ = w.VariantClear(&v);
+    var out: uitree.Live = .{ .rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 } };
+    const kind = vt(&v);
+    const s = v.Anonymous.Anonymous.Anonymous;
+    switch (what) {
+        .toggle => if (kind == w.VT_I4) {
+            out.toggle = if (s.lVal == w.ToggleState_On) .on else if (s.lVal == w.ToggleState_Indeterminate) .mixed else .off;
+        },
+        .expand => if (kind == w.VT_I4) {
+            out.expand = if (s.lVal == w.ExpandCollapseState_Collapsed) .collapsed else if (s.lVal == w.ExpandCollapseState_Expanded) .expanded else if (s.lVal == w.ExpandCollapseState_PartiallyExpanded) .partial else .leaf;
+        },
+        .selected => if (kind == w.VT_BOOL) {
+            out.selected = s.boolVal != 0;
+        },
+        .all, .value => unreachable,
+    }
+    return .{ .ok = out };
+}
+
+fn liveError(arena: std.mem.Allocator, err: com.Error) uitree.LiveResult {
     if (err == error.ElementNotAvailable) return .gone;
-    return .{ .failed = fail(arena, "vérification des préconditions") };
+    return .{ .failed = fail(arena, "lecture de l'élément") };
+}
+
+/// LegacyIAccessible.DoDefaultAction when the element names a default
+/// action (US-051); null without the pattern or the action.
+fn defaultAction(el: *w.IUIAutomationElement) ?w.HRESULT {
+    var raw: ?*anyopaque = null;
+    if (el.vtable.GetCurrentPatternAs(el, w.UIA_LegacyIAccessiblePatternId, &w.IUIAutomationLegacyIAccessiblePattern.iid, &raw) < 0) return null;
+    const p: *w.IUIAutomationLegacyIAccessiblePattern = @ptrCast(@alignCast(raw orelse return null));
+    defer release(p);
+    var name: w.BSTR = null;
+    if (p.vtable.get_CurrentDefaultAction(p, &name) < 0) return null;
+    defer w.SysFreeString(name);
+    if (name == null or w.SysStringLen(name) == 0) return null;
+    return p.vtable.DoDefaultAction(p);
+}
+
+fn scrollAmount(a: uitree.ScrollAmount) w.ScrollAmount {
+    return switch (a) {
+        .none => w.ScrollAmount_NoAmount,
+        .small_back => w.ScrollAmount_SmallDecrement,
+        .small_forward => w.ScrollAmount_SmallIncrement,
+        .large_back => w.ScrollAmount_LargeDecrement,
+        .large_forward => w.ScrollAmount_LargeIncrement,
+    };
+}
+
+/// `textHash` of the element's current value, read live and never kept.
+fn valueHash(el: *w.IUIAutomationElement) ?u64 {
+    var v: w.VARIANT = std.mem.zeroes(w.VARIANT);
+    if (el.vtable.GetCurrentPropertyValue(el, w.UIA_ValueValuePropertyId, &v) < 0) return null;
+    defer _ = w.VariantClear(&v);
+    if (vt(&v) != w.VT_BSTR) return null;
+    const b = v.Anonymous.Anonymous.Anonymous.bstrVal orelse return uitree.textHash(&.{});
+    return uitree.textHash(b[0..w.SysStringLen(b)]);
 }
 
 fn fail(arena: std.mem.Allocator, what: []const u8) []const u8 {

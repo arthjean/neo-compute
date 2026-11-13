@@ -199,5 +199,12 @@
         // implements, and the object that registers a notification handler.
                                      "IUIAutomationStructureChangedEventHandler", "IUIAutomationPropertyChangedEventHandler",   "IUIAutomationEventHandler",                 "IUIAutomationNotificationEventHandler",
         "IUIAutomation5",
+
+        // Complete semantic actions (EP-013): slider values, and the
+        // three-state box, wait button, legacy control and readings of the
+        // test window.
+                                    "IUIAutomationRangeValuePattern",            "BS_AUTO3STATE",                              "BM_SETCHECK",                               "EnableWindow",
+        "CB_GETCURSEL",                               "LB_SETTOPINDEX",                            "WM_GETOBJECT",                               "IRawElementProviderSimple",                 "ILegacyIAccessibleProvider",
+        "UiaReturnRawElementProvider",                "UiaHostProviderFromHwnd",                   "UiaRootObjectId",                            "ROLE_SYSTEM_GRAPHIC",
     },
 }

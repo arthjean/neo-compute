@@ -363,7 +363,27 @@ fn supports(e: uitree.Element, action: uitree.Action) bool {
         .set_value => e.actions.value and !e.password,
         .focus => true,
         .scroll_into_view => e.actions.scroll,
+        // The probes measure one pattern each: the composed actions of
+        // EP-013 are proven by the selftest.
+        .check, .uncheck, .scroll => false,
     };
+}
+
+/// The one pattern call the probes measure for `action`, without the waits
+/// and the read-back `ui_act` adds around it.
+pub fn patternCall(backend: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.OpResult {
+    const op: uitree.Op = switch (action) {
+        .invoke => .invoke,
+        .toggle => .toggle,
+        .select => .select,
+        .expand => .expand,
+        .collapse => .collapse,
+        .focus => .focus,
+        .scroll_into_view => .scroll_item,
+        .set_value => .{ .set_value = value orelse "" },
+        .check, .uncheck, .scroll => return .unsupported,
+    };
+    return backend.uiOp(arena, hwnd, key, op);
 }
 
 pub fn find(els: []const uitree.Element, pick: Pick, action: uitree.Action) ?uitree.Element {
@@ -458,16 +478,15 @@ fn effectOf(p: *Probe, hwnd: u64, step: Step, before: uitree.Element, hash_befor
         .scroll_into_view => if (e) |x| !x.states.offscreen else null,
         // An Invoke shows only through what it changes around it.
         .invoke => if (treeHash(after) != hash_before) true else null,
+        .check, .uncheck, .scroll => null,
     };
 }
 
-fn actText(r: uitree.ActResult) []const u8 {
+fn actText(r: uitree.OpResult) []const u8 {
     return switch (r) {
         .ok => "",
         .timeout => "UIA timeout",
         .gone => "element gone",
-        .disabled => "element disabled",
-        .offscreen => "element off screen",
         .read_only => "read-only",
         .unsupported => "pattern missing",
         .failed => "UIA call failed",
@@ -477,7 +496,7 @@ fn actText(r: uitree.ActResult) []const u8 {
 pub fn undo(p: *Probe, hwnd: u64, u: Undo) void {
     const els = p.snapshot(hwnd) orelse return;
     const e = find(els, u.pick, u.action) orelse return;
-    _ = p.backend.uiAct(p.scratch.allocator(), hwnd, e.key, u.action, u.value);
+    _ = patternCall(p.backend, p.scratch.allocator(), hwnd, e.key, u.action, u.value);
     w.Sleep(200);
 }
 
@@ -507,7 +526,7 @@ fn runStep(p: *Probe, target: []const u8, hwnd: u64, step: Step, rep: usize, tw:
         if (e.role == el.role and e.states.selected and e.key != el.key) selected_before = e.key;
     };
     var m = p.begin(@as(w.HWND, @ptrFromInt(hwnd))) orelse return;
-    const r = p.backend.uiAct(p.scratch.allocator(), hwnd, el.key, step.action, step.value);
+    const r = patternCall(p.backend, p.scratch.allocator(), hwnd, el.key, step.action, step.value);
     // The effect may land after the call returns: read it for up to 500 ms.
     var effect: ?bool = null;
     while (true) {
@@ -525,7 +544,7 @@ fn runStep(p: *Probe, target: []const u8, hwnd: u64, step: Step, rep: usize, tw:
         w.Sleep(150);
     };
     if (selected_before) |key| {
-        _ = p.backend.uiAct(p.scratch.allocator(), hwnd, key, .select, null);
+        _ = patternCall(p.backend, p.scratch.allocator(), hwnd, key, .select, null);
         w.Sleep(200);
     }
 }
@@ -540,7 +559,7 @@ fn menuCheck(p: *Probe, target: []const u8, hwnd: u64, menu: Menu, tw: ?*TestWin
         return;
     };
     var m = p.begin(@as(w.HWND, @ptrFromInt(hwnd))) orelse return;
-    const r = p.backend.uiAct(p.scratch.allocator(), hwnd, el.key, .expand, null);
+    const r = patternCall(p.backend, p.scratch.allocator(), hwnd, el.key, .expand, null);
     m.watchUntil(2000);
     const after = p.snapshot(hwnd);
     const open_state = if (after) |a| (if (byKey(a, el.key)) |x| x.states.expanded else false) else false;
@@ -552,7 +571,7 @@ fn menuCheck(p: *Probe, target: []const u8, hwnd: u64, menu: Menu, tw: ?*TestWin
     p.end(&m, target, "A16 menu by Expand", 0, still_open and in_snapshot, detail, 2000);
     // Closed again, unmeasured.
     if (p.snapshot(hwnd)) |a| if (find(a, menu.expand, .collapse)) |x| {
-        _ = p.backend.uiAct(p.scratch.allocator(), hwnd, x.key, .collapse, null);
+        _ = patternCall(p.backend, p.scratch.allocator(), hwnd, x.key, .collapse, null);
     };
     w.Sleep(300);
     // A Win32 menu loop that is still running ends on WM_CANCELMODE.
@@ -927,7 +946,7 @@ fn closeLaunched(p: *Probe, win: display.WindowInfo) void {
                     continue;
                 }
                 if (in_tab and e.depth > depth and e.role == .button and e.actions.invoke) {
-                    _ = p.backend.uiAct(p.scratch.allocator(), win.handle, e.key, .invoke, null);
+                    _ = patternCall(p.backend, p.scratch.allocator(), win.handle, e.key, .invoke, null);
                     w.Sleep(400);
                     break;
                 }

@@ -52,9 +52,9 @@ test "a password value never appears, in ui_tree, ui_find or ui_act" {
     try testing.expect(std.mem.indexOf(u8, found, "hunter2") == null);
     const set = try h.call("ui_act", "{\"id\":\"e6\",\"action\":\"set_value\",\"value\":\"s3cret!\",\"observe\":\"none\"}");
     try testing.expect(!t.isError(set));
-    try testing.expectEqualStrings("ok : set_value e6", t.text(set));
-    try testing.expectEqual(@as(usize, 7), h.backend.ui_last_act.?.value_len);
-    try testing.expectEqual(@as(u64, 106), h.backend.ui_last_act.?.key);
+    try testing.expectEqualStrings("set_value e6 : délivré, effet non vérifiable", t.text(set));
+    try testing.expectEqual(@as(usize, 7), h.backend.ui_last_op.?.value_len);
+    try testing.expectEqual(@as(u64, 106), h.backend.ui_last_op.?.key);
 }
 
 test "a timed-out provider yields a partial tree flagged first; no foreground window yields the desktop tree" {
@@ -212,14 +212,17 @@ test "ui_act checks preconditions, reports stale ids and falls back to a click" 
     defer h.deinit();
     _ = try h.call("ui_tree", "{}");
     const ok = try h.call("ui_act", "{\"id\":\"e7\",\"action\":\"invoke\",\"observe\":\"none\"}");
-    try testing.expectEqualStrings("ok : invoke e7", t.text(ok));
-    try testing.expectEqual(uitree.Action.invoke, h.backend.ui_last_act.?.action);
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", t.text(ok));
+    try testing.expectEqual(std.meta.Tag(uitree.Op).invoke, h.backend.ui_last_op.?.op);
 
     const unknown = try h.call("ui_act", "{\"id\":\"e1k\",\"action\":\"invoke\"}");
     try testing.expect(t.isError(unknown));
     try testing.expectEqualStrings("Élément e1k introuvable : rappelle ui_tree", t.text(unknown));
+    // A disabled element is waited for (US-054), here 100 ms.
+    h.server.session.enable_wait_ms = 100;
     const disabled = try h.call("ui_act", "{\"id\":\"e9\",\"action\":\"invoke\"}");
-    try t.expectContains(t.text(disabled), "Précondition non remplie : e9 est désactivé");
+    try testing.expect(t.isError(disabled));
+    try testing.expectEqualStrings("Précondition non remplie : e9 est resté désactivé 100 ms. Aucune action exécutée.", t.text(disabled));
     const unsupported = try h.call("ui_act", "{\"id\":\"e8\",\"action\":\"invoke\"}");
     try testing.expect(t.isError(unsupported));
     try t.expectContains(t.text(unsupported), "e8 ne supporte pas invoke (pattern Invoke absent)");
@@ -234,11 +237,12 @@ test "ui_act checks preconditions, reports stale ids and falls back to a click" 
     try testing.expectEqual(@as(usize, 3), h.backend.mouse_len);
     try testing.expectEqual([2]i32{ 750, 855 }, h.backend.mouse[0].move);
 
-    // Off-screen: refused except for scroll_into_view.
+    // Off-screen: brought into view first (US-054), then acted on.
     _ = try h.call("ui_find", "{\"query\":\"hors champ\"}");
-    const off = try h.call("ui_act", "{\"id\":\"eb\",\"action\":\"select\"}");
-    try t.expectContains(t.text(off), "eb est hors écran");
-    try testing.expect(!t.isError(try h.call("ui_act", "{\"id\":\"eb\",\"action\":\"scroll_into_view\",\"observe\":\"none\"}")));
+    const off = try h.call("ui_act", "{\"id\":\"eb\",\"action\":\"select\",\"observe\":\"none\"}");
+    try testing.expectEqualStrings("select eb : vérifié (sélectionné) ; amené en vue", t.text(off));
+    // An element with ScrollItem is always sent it: its place in the view is not readable.
+    try testing.expectEqualStrings("scroll_into_view eb : délivré, effet non vérifiable", t.text(try h.call("ui_act", "{\"id\":\"eb\",\"action\":\"scroll_into_view\",\"observe\":\"none\"}")));
 
     // The element disappears between ui_tree and ui_act.
     h.backend.ui_elements = fake.ui_fixture[0..5];
@@ -265,7 +269,7 @@ test "action tools return the observation after the screen settles" {
 
     // ui_act observes the element's window.
     const acted = t.text(try h.call("ui_act", "{\"id\":\"e7\",\"action\":\"invoke\"}"));
-    try testing.expect(std.mem.startsWith(u8, acted, "ok : invoke e7 ; settled in "));
+    try testing.expect(std.mem.startsWith(u8, acted, "invoke e7 : délivré, effet non vérifiable ; settled in "));
 
     // Continuous animation: the wait expires without an error.
     h.backend.animating = true;
@@ -502,14 +506,14 @@ test "after a right click the delta lists the context menu, and ui_act invokes o
     try t.expectContains(clicked, "+ display=1 scale=1.5 window=0x9100\n+ e3 menu \"Contexte\"");
     try t.expectContains(clicked, "+ e5 menuitem \"Coller\"");
     const acted = t.text(try h.call("ui_act", "{\"id\":\"e5\",\"action\":\"invoke\",\"observe\":\"none\"}"));
-    try testing.expectEqualStrings("ok : invoke e5", acted);
-    try testing.expectEqual(@as(u64, 702), h.backend.ui_last_act.?.key);
+    try testing.expectEqualStrings("invoke e5 : délivré, effet non vérifiable", acted);
+    try testing.expectEqual(@as(u64, 702), h.backend.ui_last_op.?.key);
     // The item belongs to the menu, its observation reads Notepad's tree.
     const owner = h.server.session.ui.ids.owner(5).?;
     try testing.expectEqual(@as(u64, 0x9100), owner.window);
     try testing.expectEqual(@as(u64, 0x1a2b), owner.tree);
     const observed = t.text(try h.call("ui_act", "{\"id\":\"e4\",\"action\":\"invoke\"}"));
-    try t.expectContains(observed, "ok : invoke e4 ; settled in ");
+    try t.expectContains(observed, "invoke e4 : délivré, effet non vérifiable ; settled in ");
     try t.expectContains(observed, "window=0x1a2b");
 }
 
@@ -525,7 +529,7 @@ test "a menu closed between ui_tree and ui_act: no action, the element is gone" 
     const r = try h.call("ui_act", "{\"id\":\"e4\",\"action\":\"invoke\"}");
     try testing.expect(t.isError(r));
     try testing.expectEqualStrings("Élément e4 introuvable : rappelle ui_tree", t.text(r));
-    try testing.expect(h.backend.ui_last_act == null);
+    try testing.expect(h.backend.ui_last_op == null);
 }
 
 test "ui_find searches every root and opens each one's header" {
@@ -722,7 +726,7 @@ test "ui_find wait_ms searches again once the window paints, within 100 ms of th
     const args = try std.fmt.allocPrint(h.arena.allocator(), "{{\"id\":\"{s}\",\"action\":\"invoke\",\"observe\":\"none\"}}", .{text[line_start..at]});
     const act = try h.call("ui_act", args);
     try testing.expect(!t.isError(act));
-    try testing.expectEqual(@as(u64, 120), h.backend.ui_last_act.?.key);
+    try testing.expectEqual(@as(u64, 120), h.backend.ui_last_op.?.key);
 }
 
 test "ui_find wait_ms without change searches once a second; at the deadline it fails with the PRD message" {

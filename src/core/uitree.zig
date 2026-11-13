@@ -197,23 +197,129 @@ pub const Snapshot = struct {
 
 pub const SnapshotResult = union(enum) { ok: Snapshot, err: []const u8 };
 
-pub const Action = enum { invoke, toggle, select, expand, collapse, set_value, focus, scroll_into_view };
+/// What `ui_act` does to an element. `check`, `uncheck` and `scroll` came
+/// with EP-013 (decision 0013).
+pub const Action = enum { invoke, toggle, check, uncheck, select, expand, collapse, set_value, scroll, scroll_into_view, focus };
 
-/// Outcome of an element action, from the live element (preconditions are
-/// checked before the pattern is called).
-pub const ActResult = union(enum) {
+pub const Toggle = enum { off, on, mixed };
+pub const Expand = enum { collapsed, expanded, partial, leaf };
+
+/// One element as it is now, read in one round trip before an action (its
+/// preconditions) and after it (its effect).
+pub const Live = struct {
+    enabled: bool = true,
+    offscreen: bool = false,
+    password: bool = false,
+    /// Physical desktop pixels.
+    rect: Rect,
+    actions: Actions = .{},
+    /// The Value pattern refuses writes.
+    read_only: bool = false,
+    toggle: ?Toggle = null,
+    expand: ?Expand = null,
+    selected: ?bool = null,
+    range: ?Range = null,
+    /// The element's own Scroll pattern; null without the pattern.
+    scroll: ?Scroll = null,
+    /// `textHash` of the Value pattern's text, when the read asked for it.
+    /// Never read for a password field (FR-09).
+    value_hash: ?u64 = null,
+};
+
+pub const LiveResult = union(enum) { ok: Live, gone, failed: []const u8 };
+
+/// What a live read is for. `all`: what an action needs before it runs.
+/// `value`: the same plus the value's hash. The others: the one state an
+/// action reads back, the only field the result then fills, which costs
+/// a backend a single property.
+pub const LiveRead = enum { all, value, toggle, expand, selected };
+
+/// Hash of a value as UTF-16, the form a backend reads it in: a value is
+/// compared with the one written without either being kept (FR-09).
+pub fn textHash(units: []const u16) u64 {
+    return std.hash.Wyhash.hash(0x76616c, std.mem.sliceAsBytes(units));
+}
+
+/// `textHash` of UTF-8 `text`; null when it is not valid UTF-8.
+pub fn textHashUtf8(arena: std.mem.Allocator, text: []const u8) ?u64 {
+    const units = std.unicode.utf8ToUtf16LeAlloc(arena, text) catch return null;
+    defer @memset(units, 0);
+    return textHash(units);
+}
+
+pub const ScrollAmount = enum { none, small_back, small_forward, large_back, large_forward };
+pub const ScrollStep = struct { h: ScrollAmount = .none, v: ScrollAmount = .none };
+
+/// One pattern call on an element. The core picks it from the action and
+/// the element's live state; the backend runs it and nothing else.
+pub const Op = union(enum) {
+    invoke,
+    /// LegacyIAccessible.DoDefaultAction, when the default action is named.
+    legacy,
+    toggle,
+    select,
+    expand,
+    collapse,
+    focus,
+    /// ScrollItem.ScrollIntoView.
+    scroll_item,
+    set_value: []const u8,
+    /// RangeValue.SetValue.
+    set_range: f64,
+    /// Scroll.Scroll, one increment per axis.
+    scroll: ScrollStep,
+    /// Scroll.SetScrollPercent; a null axis stays where it is.
+    scroll_to: struct { h: ?f64 = null, v: ?f64 = null },
+};
+
+pub const OpResult = union(enum) {
     ok,
     /// Sent, but the provider did not answer within the UIA timeout.
     timeout,
     /// The element no longer exists.
     gone,
-    disabled,
-    offscreen,
+    /// The pattern is missing.
+    unsupported,
     read_only,
-    /// The pattern is missing; carries the element's physical rectangle for
-    /// the click fallback.
-    unsupported: Rect,
     failed: []const u8,
+};
+
+/// A selectable descendant of a container (US-053).
+pub const Entry = struct { key: u64, name: []const u8 };
+pub const EntriesResult = union(enum) { ok: []const Entry, gone, failed: []const u8 };
+/// Entries read from one container at most.
+pub const max_entries = 500;
+
+/// Levels above an element searched for a scrollable container (US-052).
+pub const max_scroll_levels = 8;
+
+/// The `value` of `ui_act scroll` (US-052).
+pub const ScrollSpec = union(enum) {
+    step: struct { dir: Dir, count: u8 },
+    page: enum { up, down },
+    edge: enum { top, bottom },
+    percent: f64,
+
+    pub const Dir = enum { up, down, left, right };
+    pub const forms = "up, down, left ou right suivi d'un nombre de crans de 1 à 100 (défaut 1), page_up, page_down, top, bottom, ou <n>% de 0 à 100";
+
+    pub fn parse(text: []const u8) ?ScrollSpec {
+        const t = std.mem.trim(u8, text, " ");
+        if (t.len == 0) return null;
+        if (t[t.len - 1] == '%') {
+            const p = std.fmt.parseFloat(f64, std.mem.trim(u8, t[0 .. t.len - 1], " ")) catch return null;
+            return if (std.math.isFinite(p) and p >= 0 and p <= 100) .{ .percent = p } else null;
+        }
+        if (std.mem.eql(u8, t, "page_up")) return .{ .page = .up };
+        if (std.mem.eql(u8, t, "page_down")) return .{ .page = .down };
+        if (std.mem.eql(u8, t, "top")) return .{ .edge = .top };
+        if (std.mem.eql(u8, t, "bottom")) return .{ .edge = .bottom };
+        var it = std.mem.tokenizeScalar(u8, t, ' ');
+        const dir = std.meta.stringToEnum(Dir, it.next() orelse return null) orelse return null;
+        const count: u8 = if (it.next()) |n| std.fmt.parseInt(u8, n, 10) catch return null else 1;
+        if (it.next() != null or count < 1 or count > 100) return null;
+        return .{ .step = .{ .dir = dir, .count = count } };
+    }
 };
 
 pub const Limits = struct {
@@ -385,7 +491,7 @@ pub fn parseId(text: []const u8) ?u32 {
 pub const password_mask = "•••";
 
 /// A number with at most two decimals, trailing zeros dropped.
-fn writeNumber(w: *std.Io.Writer, x: f64) !void {
+pub fn writeNumber(w: *std.Io.Writer, x: f64) !void {
     if (!std.math.isFinite(x) or @abs(x) > 1e15) return w.writeByte('?');
     const r = @round(x * 100) / 100;
     if (r == @round(r)) return w.print("{d}", .{@as(i64, @intFromFloat(r))});
@@ -465,9 +571,8 @@ pub fn writeLineMax(w: *std.Io.Writer, indent: u16, id: u32, e: Element, m: Mapp
         try w.writeByte('}');
     }
     if (e.scroll) |sc| if (sc.any()) {
-        try w.writeAll(" scroll=");
-        if (sc.v) |v| try w.print("{d}%", .{percent(v)});
-        if (sc.h) |h| try w.print("{s}h{d}%", .{ if (sc.v != null) "," else "", percent(h) });
+        try w.writeByte(' ');
+        try writeScroll(w, sc);
     };
     if (page) |pg| switch (pg) {
         .at => |p| {
@@ -479,6 +584,14 @@ pub fn writeLineMax(w: *std.Io.Writer, indent: u16, id: u32, e: Element, m: Mapp
     };
     const r = m.rectToScreenshot(e.rect);
     try w.print(" @{d},{d},{d},{d}\n", .{ r.x, r.y, r.w, r.h });
+}
+
+/// `scroll=<v>%,h<h>%`: the axes that scroll; nothing when none does.
+pub fn writeScroll(w: *std.Io.Writer, sc: Scroll) !void {
+    if (!sc.any()) return;
+    try w.writeAll("scroll=");
+    if (sc.v) |v| try w.print("{d}%", .{percent(v)});
+    if (sc.h) |h| try w.print("{s}h{d}%", .{ if (sc.v != null) "," else "", percent(h) });
 }
 
 /// `display=<n> scale=<s> window=0x<handle>`. The root element's line that
@@ -618,8 +731,8 @@ pub fn diff(arena: std.mem.Allocator, old: []const Shown, new: []const Shown) !D
     for (old, 0..) |s, i| index.putAssumeCapacity(s.id, @intCast(i));
     const seen = try arena.alloc(bool, old.len);
     @memset(seen, false);
-    const Entry = @typeInfo(@FieldType(Delta, "entries")).pointer.child;
-    var entries: std.ArrayList(Entry) = .empty;
+    const DeltaEntry = @typeInfo(@FieldType(Delta, "entries")).pointer.child;
+    var entries: std.ArrayList(DeltaEntry) = .empty;
     for (new, 0..) |s, i| {
         const j = index.get(s.id) orelse {
             try entries.append(arena, .{ .index = @intCast(i), .kind = .added });

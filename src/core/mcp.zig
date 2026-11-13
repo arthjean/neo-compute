@@ -57,7 +57,7 @@ pub const vision_instructions =
 /// foreground.
 const background_head =
     "neo-compute works on this Windows desktop behind the user: they keep the mouse, the keyboard and the foreground window while you act on a window they are not looking at. " ++
-    "No physical input tool exists in this mode: no click, no typing, no key, no window_focus. Act through ui_act on element ids (invoke, toggle, select, expand, collapse, set_value, scroll_into_view). " ++
+    "No physical input tool exists in this mode: no click, no typing, no key, no window_focus. Act through ui_act on element ids (invoke, toggle, check, uncheck, select, expand, collapse, set_value, scroll, scroll_into_view). " ++
     "Name your target window: pass window (a handle from window_list) or start the application with app_launch. " ++
     "ui_tree and ui_find without window read the last window you named or launched, never the user's foreground window. " ++
     "A refusal starting with \"Mode arrière-plan\" means the call would have disturbed the user: nothing was done, follow the alternative it names. " ++

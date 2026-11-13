@@ -53,6 +53,10 @@ pub const ui_fixture = [_]uitree.Element{
     .{ .key = 111, .depth = 2, .role = .listitem, .name = "Hors champ", .states = .{ .offscreen = true }, .actions = .{ .select = true, .scroll = true }, .rect = .{ .x = 100, .y = 5000, .w = 200, .h = 20 } },
 };
 
+/// An element a pattern call changed, and the hash of the value written to
+/// it.
+pub const Changed = struct { el: uitree.Element, value_hash: ?u64 = null };
+
 pub const KeyCall = struct { combo: keys.Combo, action: input.KeyAction };
 
 /// A root served with the foreground tree: its window and its elements
@@ -207,8 +211,48 @@ pub const Fake = struct {
     /// Extra roots requested by the last snapshot.
     ui_requested: usize = 0,
     ui_snapshots: u32 = 0,
-    /// Last element action received.
-    ui_last_act: ?struct { key: u64, action: uitree.Action, value_len: usize } = null,
+    /// Last pattern call received, and every one since the test began.
+    ui_last_op: ?struct { key: u64, op: std.meta.Tag(uitree.Op), value_len: usize } = null,
+    ui_ops: [64]struct { key: u64, op: std.meta.Tag(uitree.Op) } = undefined,
+    ui_op_len: usize = 0,
+    /// Elements as the pattern calls left them (EP-013): read by `uiLive`
+    /// and served by the next snapshot.
+    ui_changed: [32]Changed = undefined,
+    ui_changed_len: usize = 0,
+    /// The states a Toggle call goes through, in order.
+    ui_toggle_cycle: []const uitree.Toggle = &.{ .off, .on },
+    /// Pattern calls succeed and change nothing: an application that
+    /// ignores them.
+    ui_stuck: bool = false,
+    /// The application rewrites the value it is given.
+    ui_reformat: bool = false,
+    /// Elements with an MSAA default action.
+    ui_legacy: []const u64 = &.{},
+    /// At this live read, the element read becomes enabled.
+    ui_enable_at_read: ?u32 = null,
+    ui_live_reads: u32 = 0,
+    /// At this live read the request is cancelled, or the user presses the
+    /// pause shortcut.
+    ui_cancel_at_read: ?u32 = null,
+    ui_pause_at_read: ?u32 = null,
+    /// At this read of a container's entries the user presses the pause
+    /// shortcut.
+    ui_pause_at_entries: ?u32 = null,
+    ui_entry_reads: u32 = 0,
+    /// Live reads that asked for the element's value.
+    ui_value_reads: u32 = 0,
+    /// Percent one scroll notch moves a container; a page moves five.
+    ui_scroll_step: f32 = 10,
+    /// An element out of view until its scrollable ancestor reaches `at`
+    /// percent.
+    ui_reveal: ?struct { key: u64, at: f32 } = null,
+    /// A container lists its entries only while expanded.
+    ui_entries_when_open: bool = false,
+    /// A container's entries cannot be read while it is expanded.
+    ui_entries_fail_open: bool = false,
+    /// A collapse drops the selection made while the container was open,
+    /// as a Win32 drop-down list does.
+    ui_collapse_cancels: bool = false,
 
     /// Top-level windows, top of the z-order first; tests replace them.
     windows: []const display.WindowInfo = &windows_fixture,
@@ -651,7 +695,7 @@ pub const Fake = struct {
         if (window) |h| if (std.mem.indexOfScalar(u64, self.gone_buf[0..self.gone_len], h) != null) return .{ .err = "Fenêtre fermée : rappelle window_list" };
         self.ui_snapshots += 1;
         self.ui_requested = request.extra_roots.len;
-        var snap: uitree.Snapshot = .{ .window = self.ui_window, .elements = self.ui_elements, .partial = self.ui_partial, .desktop = self.ui_desktop, .web_pending = self.ui_web_pending, .firefox_no_tree = self.ui_firefox_no_tree };
+        var snap: uitree.Snapshot = .{ .window = self.ui_window, .elements = self.withChanges(arena, self.ui_elements), .partial = self.ui_partial, .desktop = self.ui_desktop, .web_pending = self.ui_web_pending, .firefox_no_tree = self.ui_firefox_no_tree };
         // Chromium's web tree is not built yet: its text is not read.
         if (request.text and !self.ui_web_pending) {
             if (self.ui_web) |web| {
@@ -683,26 +727,202 @@ pub const Fake = struct {
         self.auto_focus = enabled;
     }
 
-    pub fn uiAct(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
-        _ = arena;
+    /// The element `key` as the actions left it.
+    fn liveElement(self: *Fake, key: u64) ?uitree.Element {
+        // An element the window no longer serves is gone, changed or not.
+        const e = self.findElement(key) orelse return null;
+        for (self.ui_changed[0..self.ui_changed_len]) |c| if (c.el.key == key) return c.el;
+        return e;
+    }
+
+    /// The element `key` in the set the actions changed, copied there on
+    /// its first change.
+    fn mutable(self: *Fake, key: u64) ?*Changed {
+        const e = self.findElement(key) orelse return null;
+        for (self.ui_changed[0..self.ui_changed_len]) |*c| if (c.el.key == key) return c;
+        if (self.ui_changed_len == self.ui_changed.len) return null;
+        self.ui_changed[self.ui_changed_len] = .{ .el = e };
+        self.ui_changed_len += 1;
+        return &self.ui_changed[self.ui_changed_len - 1];
+    }
+
+    /// `elements` with what the actions changed; the same slice when
+    /// nothing did.
+    fn withChanges(self: *Fake, arena: std.mem.Allocator, elements: []const uitree.Element) []const uitree.Element {
+        if (self.ui_changed_len == 0 and self.ui_reveal == null) return elements;
+        const out = arena.dupe(uitree.Element, elements) catch return elements;
+        for (out) |*e| {
+            if (self.liveElement(e.key)) |c| e.* = c;
+            if (self.unrevealed(e.key)) e.states.offscreen = true;
+        }
+        return out;
+    }
+
+    /// Index of `key` in the tree the window serves.
+    fn elementIndex(self: *Fake, key: u64) ?usize {
+        for (self.ui_elements, 0..) |e, i| if (e.key == key) return i;
+        return null;
+    }
+
+    /// Key of the nearest ancestor of `key` with a Scroll pattern, within
+    /// `max_scroll_levels`.
+    fn scrollHostOf(self: *Fake, key: u64) ?u64 {
+        var i = self.elementIndex(key) orelse return null;
+        var depth = self.ui_elements[i].depth;
+        var levels: usize = 0;
+        while (i > 0 and levels < uitree.max_scroll_levels) {
+            i -= 1;
+            const e = self.ui_elements[i];
+            if (e.depth >= depth) continue;
+            depth = e.depth;
+            levels += 1;
+            if ((self.liveElement(e.key) orelse e).scroll != null) return e.key;
+        }
+        return null;
+    }
+
+    /// Whether `ui_reveal` still keeps `key` out of view.
+    fn unrevealed(self: *Fake, key: u64) bool {
+        const r = self.ui_reveal orelse return false;
+        if (r.key != key) return false;
+        const host = self.liveElement(self.scrollHostOf(key) orelse return true) orelse return true;
+        const v = (host.scroll orelse return true).v orelse return true;
+        return v < r.at;
+    }
+
+    pub fn uiLive(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, read: uitree.LiveRead) uitree.LiveResult {
         _ = window;
-        const e = self.findElement(key) orelse return .gone;
-        if (e.states.disabled) return .disabled;
-        if (e.states.offscreen and action != .scroll_into_view) return .offscreen;
-        const supported = switch (action) {
+        const want_value = read == .value;
+        self.ui_live_reads += 1;
+        if (want_value) self.ui_value_reads += 1;
+        if (self.ui_cancel_at_read) |n| if (self.ui_live_reads == n) if (self.control) |c| c.cancel.store(true, .release);
+        if (self.ui_pause_at_read) |n| if (self.ui_live_reads == n) if (self.control) |c| {
+            _ = c.toggle();
+        };
+        if (self.ui_enable_at_read) |n| if (self.ui_live_reads >= n) if (self.mutable(key)) |c| {
+            c.el.states.disabled = false;
+        };
+        const e = self.liveElement(key) orelse return .gone;
+        var l: uitree.Live = .{ .enabled = !e.states.disabled, .offscreen = e.states.offscreen or self.unrevealed(key), .password = e.password, .rect = e.rect, .actions = e.actions, .range = e.range, .scroll = e.scroll };
+        if (e.actions.toggle) l.toggle = if (e.states.checked) .on else if (e.states.mixed) .mixed else .off;
+        if (e.actions.expand_collapse) l.expand = if (e.states.expanded) .expanded else if (e.states.collapsed) .collapsed else .leaf;
+        if (e.actions.select) l.selected = e.states.selected;
+        if (want_value and e.actions.value and !e.password) {
+            const set = for (self.ui_changed[0..self.ui_changed_len]) |c| {
+                if (c.el.key == key) break c.value_hash;
+            } else null;
+            l.value_hash = set orelse uitree.textHashUtf8(arena, e.value orelse "");
+        }
+        return .{ .ok = l };
+    }
+
+    pub fn uiOp(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, o: uitree.Op) uitree.OpResult {
+        _ = window;
+        const e = self.liveElement(key) orelse return .gone;
+        const supported = switch (o) {
             .invoke => e.actions.invoke,
+            .legacy => std.mem.indexOfScalar(u64, self.ui_legacy, key) != null,
             .toggle => e.actions.toggle,
             .select => e.actions.select,
             .expand, .collapse => e.actions.expand_collapse,
-            .set_value => e.actions.value,
             .focus => true,
-            .scroll_into_view => e.actions.scroll,
+            .scroll_item => e.actions.scroll,
+            .set_value => e.actions.value,
+            .set_range => e.range != null,
+            .scroll, .scroll_to => e.scroll != null,
         };
-        if (!supported) return .{ .unsupported = e.rect };
-        self.ui_last_act = .{ .key = key, .action = action, .value_len = if (value) |v| v.len else 0 };
+        if (!supported) return .unsupported;
+        self.ui_last_op = .{ .key = key, .op = o, .value_len = if (o == .set_value) o.set_value.len else 0 };
+        if (self.ui_op_len < self.ui_ops.len) {
+            self.ui_ops[self.ui_op_len] = .{ .key = key, .op = o };
+            self.ui_op_len += 1;
+        }
         if (self.gesture_on_act and self.gesture != null) self.gesture = true;
         if (self.foreground_after_act) |f| self.foregroundEvent(f);
+        if (self.ui_stuck) return .ok;
+        const c = self.mutable(key) orelse return .ok;
+        const s = &c.el.states;
+        switch (o) {
+            .invoke, .legacy, .focus => {},
+            .toggle => {
+                const now: uitree.Toggle = if (s.checked) .on else if (s.mixed) .mixed else .off;
+                const cycle = self.ui_toggle_cycle;
+                const at = std.mem.indexOfScalar(uitree.Toggle, cycle, now) orelse cycle.len - 1;
+                const next = cycle[(at + 1) % cycle.len];
+                s.checked = next == .on;
+                s.mixed = next == .mixed;
+            },
+            .select => s.selected = true,
+            .expand, .collapse => {
+                s.expanded = o == .expand;
+                s.collapsed = o == .collapse;
+                if (o == .collapse and self.ui_collapse_cancels) {
+                    for (self.ui_changed[0..self.ui_changed_len]) |*other| other.el.states.selected = false;
+                }
+            },
+            .scroll_item => s.offscreen = false,
+            .set_value => |v| c.value_hash = if (self.ui_reformat) uitree.textHash(&.{ 'x', 'y' }) else uitree.textHashUtf8(arena, v),
+            .set_range => |x| c.el.range.?.value = if (self.ui_reformat) @round(x / 10) * 10 else x,
+            .scroll => |step| {
+                var sc = c.el.scroll.?;
+                sc.v = scrolledBy(sc.v, step.v, self.ui_scroll_step);
+                sc.h = scrolledBy(sc.h, step.h, self.ui_scroll_step);
+                c.el.scroll = sc;
+            },
+            .scroll_to => |to| {
+                var sc = c.el.scroll.?;
+                if (to.v) |v| if (sc.v != null) {
+                    sc.v = @floatCast(v);
+                };
+                if (to.h) |h| if (sc.h != null) {
+                    sc.h = @floatCast(h);
+                };
+                c.el.scroll = sc;
+            },
+        }
         return .ok;
+    }
+
+    /// One scroll increment on an axis: a notch moves `step` percent, a
+    /// page five times as much. An axis that does not scroll stays null.
+    fn scrolledBy(at: ?f32, amount: uitree.ScrollAmount, step: f32) ?f32 {
+        const p = at orelse return null;
+        const delta: f32 = switch (amount) {
+            .none => 0,
+            .small_back => -step,
+            .small_forward => step,
+            .large_back => -5 * step,
+            .large_forward => 5 * step,
+        };
+        return std.math.clamp(p + delta, 0, 100);
+    }
+
+    pub fn uiScrollHost(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64) ?u64 {
+        _ = arena;
+        _ = window;
+        return self.scrollHostOf(key);
+    }
+
+    /// The selectable descendants of `key`. With `ui_entries_when_open`, a
+    /// container shows them only while expanded; with `ui_entries_fail_open`
+    /// its tree cannot be read while it is, as a Win32 drop-down.
+    pub fn uiEntries(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64) uitree.EntriesResult {
+        _ = window;
+        const i = self.elementIndex(key) orelse return .gone;
+        self.ui_entry_reads += 1;
+        if (self.ui_pause_at_entries) |n| if (self.ui_entry_reads == n) if (self.control) |c| {
+            _ = c.toggle();
+        };
+        const open = (self.liveElement(key) orelse return .gone).states.expanded;
+        if (open and self.ui_entries_fail_open) return .{ .failed = "UI Automation a échoué (lecture des entrées) : réessaie." };
+        if (!open and self.ui_entries_when_open) return .{ .ok = &.{} };
+        var out: std.ArrayList(uitree.Entry) = .empty;
+        const depth = self.ui_elements[i].depth;
+        for (self.ui_elements[i + 1 ..]) |e| {
+            if (e.depth <= depth) break;
+            if (e.actions.select) out.append(arena, .{ .key = e.key, .name = e.name }) catch return .{ .failed = "Mémoire insuffisante : réessaie." };
+        }
+        return .{ .ok = out.items };
     }
 
     fn findElement(self: *Fake, key: u64) ?uitree.Element {

@@ -54,7 +54,7 @@ const Touched = struct {
     launches: u32,
 
     fn of(b: *const Fake) Touched {
-        return .{ .mouse = b.mouse_len, .keys = b.key_len, .typed = b.typed_len, .acts = b.ui_last_act != null, .clip_writes = b.clip_writes, .activations = b.activations, .set_calls = b.set_calls, .launches = b.launch_calls };
+        return .{ .mouse = b.mouse_len, .keys = b.key_len, .typed = b.typed_len, .acts = b.ui_last_op != null, .clip_writes = b.clip_writes, .activations = b.activations, .set_calls = b.set_calls, .launches = b.launch_calls };
     }
 };
 
@@ -316,7 +316,7 @@ test "a paused server refuses a background action, and wait still runs" {
     const res = try h.call("ui_act", "{\"id\":\"e7\",\"action\":\"invoke\"}");
     try testing.expect(isError(res));
     try expectContains(text(res), "En pause par l'utilisateur");
-    try testing.expect(h.backend.ui_last_act == null);
+    try testing.expect(h.backend.ui_last_op == null);
     try testing.expect(!isError(try h.call("wait", "{\"duration\":0}")));
 }
 
@@ -615,7 +615,7 @@ test "a still target settles after 50 ms without an event, without a capture or 
     const snapshots = h.backend.ui_snapshots;
     const res = try h.call("ui_act", "{\"id\":\"e7\",\"action\":\"invoke\"}");
     try testing.expect(!isError(res));
-    try testing.expect(std.mem.startsWith(u8, text(res), "ok : invoke e7 ; settled in "));
+    try testing.expect(std.mem.startsWith(u8, text(res), "invoke e7 : délivré, effet non vérifiable ; settled in "));
     const ms = try settledMs(text(res));
     try testing.expect(ms >= 50 and ms < 150);
     try testing.expect(std.mem.indexOf(u8, text(res), a11y.reread_note) == null);
@@ -649,7 +649,7 @@ test "a target that never rests times out and the observation is still returned"
     h.backend.events_churn = true;
     const res = try h.call("ui_act", "{\"id\":\"e7\",\"action\":\"invoke\",\"settle_timeout_ms\":200}");
     try testing.expect(!isError(res));
-    try testing.expect(std.mem.startsWith(u8, text(res), "ok : invoke e7 ; settle timeout\n"));
+    try testing.expect(std.mem.startsWith(u8, text(res), "invoke e7 : délivré, effet non vérifiable ; settle timeout\n"));
     try expectContains(text(res), "window=0x1a2b");
     // The floor read the tree several times and never twice the same.
     try testing.expect(h.backend.ui_snapshots >= 4);
@@ -922,7 +922,7 @@ test "an intact foreground adds no line to the result and is audited as intact, 
     defer h.deinit();
     const checks = h.backend.foreground_checks;
     const res = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(res));
     // Read once before the tool and once after it.
     try testing.expectEqual(checks + 2, h.backend.foreground_checks);
     try testing.expectEqual(@as(u32, 0), h.backend.restores);
@@ -946,7 +946,7 @@ test "a dialog of the target that takes the foreground is sent back behind the u
     const before = Touched.of(&h.backend);
     const res = try h.call("ui_act", invoke_quiet);
     try testing.expect(!isError(res));
-    try testing.expectEqualStrings("ok : invoke e7\nPremier plan pris par notepad.exe, rendu à WindowsTerminal.exe", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable\nPremier plan pris par notepad.exe, rendu à WindowsTerminal.exe", text(res));
     try testing.expectEqual(@as(?u64, user_window), h.backend.restored_to);
 
     try testing.expectEqual(@as(?u64, user_window), h.backend.foreground_window);
@@ -970,7 +970,7 @@ test "the guard gives the foreground back before settling begins, and its line f
     h.backend.foreground_after_act = dialog_window;
     const reads = h.backend.event_reads;
     const res = try h.call("ui_act", "{\"id\":\"e7\",\"action\":\"invoke\"}");
-    try testing.expect(std.mem.startsWith(u8, text(res), "ok : invoke e7 ; settled in "));
+    try testing.expect(std.mem.startsWith(u8, text(res), "invoke e7 : délivré, effet non vérifiable ; settled in "));
     try testing.expect(std.mem.endsWith(u8, text(res), "\nPremier plan pris par notepad.exe, rendu à WindowsTerminal.exe"));
     // On the foreground event, while the tool still ran: settling had not
     // read one change event yet, and it did read some afterwards.
@@ -991,7 +991,7 @@ test "a foreground event that never arrives leaves the restoration to the look a
     h.backend.foreground_after_act = dialog_window;
     h.backend.foreground_events = false;
     const res = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7\nPremier plan pris par notepad.exe, rendu à WindowsTerminal.exe", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable\nPremier plan pris par notepad.exe, rendu à WindowsTerminal.exe", text(res));
     try testing.expect(!h.server.last_guard.early);
     try testing.expectEqual(@as(?u64, user_window), h.backend.foreground_window);
     var buf: [4096]u8 = undefined;
@@ -1009,7 +1009,7 @@ test "a target that takes the foreground again each time is left in front after 
     h.backend.foreground_after_act = dialog_window;
     h.backend.steals_again = true;
     const res = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7\nPremier plan pris par notepad.exe : repris après 3 restaurations, laissé devant", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable\nPremier plan pris par notepad.exe : repris après 3 restaurations, laissé devant", text(res));
     try testing.expectEqual(@as(u32, 3), h.backend.restores);
     try testing.expectEqual(@as(?u64, dialog_window), h.backend.foreground_window);
     var buf: [4096]u8 = undefined;
@@ -1025,20 +1025,20 @@ test "a dialog that comes once the action has returned is sent back, and the nex
     try guarding(&h, &log);
     defer h.deinit();
     const first = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(first));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(first));
     try testing.expectEqual(@as(?u32, mcp.guard.linger_ms), h.backend.lingered_ms);
     // The action is over; its dialog comes in front now.
     h.backend.foregroundEvent(dialog_window);
     try testing.expectEqual(@as(?u64, user_window), h.backend.foreground_window);
     const next = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7\nPremier plan pris par notepad.exe après l'action précédente, rendu à WindowsTerminal.exe", text(next));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable\nPremier plan pris par notepad.exe après l'action précédente, rendu à WindowsTerminal.exe", text(next));
     var buf: [4096]u8 = undefined;
     const line = try lastAuditLine(&tmp, &buf);
     try expectContains(line, "\"guard\":\"intact\"");
     try expectContains(line, "\"guard_late\":\"restored\"");
     // Said once.
     const third = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(third));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(third));
 }
 
 test "after the action the user's own switch to the target is left alone, and nothing is said" {
@@ -1057,7 +1057,7 @@ test "after the action the user's own switch to the target is left alone, and no
     h.backend.gesture = false;
     h.backend.foreground_window = user_window;
     const next = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(next));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(next));
     var buf: [4096]u8 = undefined;
     try testing.expect(std.mem.indexOf(u8, try lastAuditLine(&tmp, &buf), "guard_late") == null);
 }
@@ -1098,7 +1098,7 @@ test "a restoration Windows refuses is said and audited as refused" {
     h.backend.restore_refused = true;
     const res = try h.call("ui_act", invoke_quiet);
     try testing.expect(!isError(res));
-    try testing.expectEqualStrings("ok : invoke e7\nPremier plan pris par notepad.exe : Windows a refusé la restauration", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable\nPremier plan pris par notepad.exe : Windows a refusé la restauration", text(res));
     var buf: [4096]u8 = undefined;
     try expectContains(try lastAuditLine(&tmp, &buf), "\"guard\":\"refused\"");
 }
@@ -1115,7 +1115,7 @@ test "a foreground the user changed during the action is left alone" {
     h.backend.foreground_after_act = dialog_window;
     h.backend.gesture_on_act = true;
     const res = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7\nPremier plan changé pendant l'action (entrée de l'utilisateur) : non restauré", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable\nPremier plan changé pendant l'action (entrée de l'utilisateur) : non restauré", text(res));
     try testing.expectEqual(@as(u32, 0), h.backend.restores);
     try testing.expectEqual(@as(?u64, dialog_window), h.backend.foreground_window);
     var buf: [4096]u8 = undefined;
@@ -1134,19 +1134,19 @@ test "a foreground taken by another application, or one the hooks cannot judge, 
     // A third application comes in front on its own.
     h.backend.foreground_after_act = 0x5e6f;
     const other = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(other));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(other));
     try expectContains(try lastAuditLine(&tmp, &buf), "\"guard\":\"third_party\"");
     // The user was already in a window of the target's process.
     h.backend.foreground_window = 0x1a2b;
     h.backend.foreground_after_act = dialog_window;
     const same = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(same));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(same));
     try expectContains(try lastAuditLine(&tmp, &buf), "\"guard\":\"same_app\"");
     // Without the hooks, the user's own switch cannot be told apart.
     h.backend.foreground_window = user_window;
     h.backend.gesture = null;
     const blind = try h.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(blind));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(blind));
     try expectContains(try lastAuditLine(&tmp, &buf), "\"guard\":\"unknown\"");
     try testing.expectEqual(@as(u32, 0), h.backend.restores);
 }
@@ -1180,9 +1180,9 @@ test "only an action the background mode ran is guarded; the other modes never r
     _ = try a.call("ui_tree", "{}");
     checks = a.backend.foreground_checks;
     const res = try a.call("ui_act", invoke_quiet);
-    try testing.expectEqualStrings("ok : invoke e7", text(res));
+    try testing.expectEqualStrings("invoke e7 : délivré, effet non vérifiable", text(res));
     try testing.expectEqual(checks, a.backend.foreground_checks);
     const line = try lastAuditLine(&tmp, &buf);
     try expectContains(line, "\"mode\":\"a11y\"");
-    try expectContains(line, "\"result\":\"ok\"}");
+    try expectContains(line, "\"result\":\"ok\",\"verdict\":\"unverifiable\"}");
 }

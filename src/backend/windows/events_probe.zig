@@ -224,7 +224,7 @@ const Run = struct {
             const uia_from = uia_events.log_len.load(.acquire);
             const c0 = cycles(r.process);
             const t0 = qpc();
-            const result = p.backend.uiAct(p.scratch.allocator(), hwnd, el.key, step.action, step.value);
+            const result = bg.patternCall(p.backend, p.scratch.allocator(), hwnd, el.key, step.action, step.value);
             w.Sleep(observe_ms);
             const spent = cycles(r.process) -| c0;
             done += 1;

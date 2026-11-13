@@ -614,14 +614,31 @@ fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap, found_aft
 
 // ---------------------------------------------------------------- ui_act
 
+/// Interval between two reads of a disabled element (US-054); the wait
+/// lasts `Session.enable_wait_ms` at most.
+const enable_poll_ms = 100;
+/// Interval between two reads of an action's effect (US-055); they last
+/// `Session.verify_ms` at most.
+const verify_poll_ms = 50;
+/// Bounds of the scroll toward an element without ScrollItem (US-052).
+const into_view_steps = 50;
+const into_view_ms = 2000;
+/// Toggle calls `check` and `uncheck` make at most: a three-state box
+/// reaches any state in two (US-051).
+const max_toggles = 2;
+const not_replayable = "L'action est partie : ne la rejoue pas sans relire l'arbre.";
+const uia_timeout_note = "l'application n'a pas répondu dans le délai UIA";
+const reformatted = "délivré, valeur reformatée par l'application";
+
 fn patternName(action: uitree.Action) []const u8 {
     return switch (action) {
         .invoke => "Invoke",
-        .toggle => "Toggle",
+        .toggle, .check, .uncheck => "Toggle",
         .select => "SelectionItem",
         .expand, .collapse => "ExpandCollapse",
         .set_value => "Value",
         .focus => "Focus",
+        .scroll => "Scroll",
         .scroll_into_view => "ScrollItem",
     };
 }
@@ -633,39 +650,337 @@ pub fn windowOf(ctx: anytype, id_text: []const u8) ?u64 {
     return if (ctx.session.ui.ids.owner(id)) |o| o.tree else null;
 }
 
-/// `ui_act`: runs `action` on element `id_text` through its pattern, after
-/// the backend checked it exists, is enabled, on screen and supports it.
-/// The value of `set_value` never appears in the result (FR-09).
+/// The element an action works on: its root window, which the backend
+/// reaches it through, the window whose tree listed it, and its id.
+const Elem = struct { window: u64, key: u64, tree: u64, name: []const u8 };
+
+/// What the first line of the result says of the action (US-055).
+pub const Verdict = enum {
+    /// The state read back shows the effect.
+    verified,
+    /// Delivered; nothing readable tells whether it took effect.
+    unverifiable,
+    /// The state read back denies the effect.
+    contradicted,
+    /// The requested state was already there: no pattern was called.
+    noop,
+};
+
+const Outcome = struct {
+    verdict: Verdict = .unverifiable,
+    /// The state read back, or what a call with nothing to do found.
+    state: []const u8 = "",
+    /// What an unverifiable action says.
+    delivered: []const u8 = "délivré, effet non vérifiable",
+    notes: [4][]const u8 = undefined,
+    n: u8 = 0,
+
+    fn note(self: *Outcome, text: []const u8) void {
+        if (self.n == self.notes.len) return;
+        self.notes[self.n] = text;
+        self.n += 1;
+    }
+
+    fn set(self: *Outcome, verdict: Verdict, state: []const u8) void {
+        self.verdict = verdict;
+        self.state = state;
+    }
+
+    /// `<action> <id> : <verdict>`, then what the wait, the scroll and the
+    /// pattern chain did. A contradicted action is an error that ends with
+    /// the warning not to replay it.
+    fn result(self: *const Outcome, ctx: anytype, t: Elem, action: uitree.Action) Result {
+        var o = self.*;
+        // A read-back that a cancellation or a pause cut short denies
+        // nothing: the action left and its effect was not read.
+        if (o.verdict == .contradicted and ctx.cancelled()) o = .{ .notes = self.notes, .n = self.n };
+        ctx.audit_detail.verdict = @tagName(o.verdict);
+        var out: std.Io.Writer.Allocating = .init(ctx.arena);
+        o.write(&out.writer, t, action) catch return Result.err(oom);
+        return if (o.verdict == .contradicted) Result.err(out.written()) else Result.text(out.written());
+    }
+
+    fn write(self: *const Outcome, w: *std.Io.Writer, t: Elem, action: uitree.Action) !void {
+        try w.print("{t} {s} : ", .{ action, t.name });
+        switch (self.verdict) {
+            .verified => try w.print("vérifié ({s})", .{self.state}),
+            .unverifiable => try w.writeAll(self.delivered),
+            .contradicted => try w.print("contredit, état lu {s}", .{self.state}),
+            .noop => try w.writeAll(self.state),
+        }
+        for (self.notes[0..self.n]) |n| try w.print(" ; {s}", .{n});
+        if (self.verdict == .contradicted) try w.writeAll(". " ++ not_replayable);
+    }
+};
+
+fn liveOf(ctx: anytype, window: u64, key: u64, read: uitree.LiveRead) uitree.LiveResult {
+    ctx.timings.start(ctx.io, .accessibility);
+    defer ctx.timings.stop(ctx.io, .accessibility);
+    return ctx.backend.uiLive(ctx.arena, window, key, read);
+}
+
+fn opOn(ctx: anytype, window: u64, key: u64, o: uitree.Op) uitree.OpResult {
+    ctx.timings.start(ctx.io, .accessibility);
+    defer ctx.timings.stop(ctx.io, .accessibility);
+    return ctx.backend.uiOp(ctx.arena, window, key, o);
+}
+
+fn goneResult(ctx: anytype, t: Elem) Result {
+    return Result.err(fmt(ctx.arena, "Élément {s} introuvable : rappelle ui_tree", .{t.name}));
+}
+
+/// The id of element `key`, which `t`'s tree listed or holds.
+fn idText(ctx: anytype, t: Elem, key: u64) []const u8 {
+    const id = ctx.session.ui.ids.assignIn(ctx.session.gpa, key, t.window, t.tree) catch return "?";
+    var out: std.Io.Writer.Allocating = .init(ctx.arena);
+    uitree.writeId(&out.writer, id) catch return "?";
+    return out.written();
+}
+
+fn numberText(arena: std.mem.Allocator, x: f64) []const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    uitree.writeNumber(&out.writer, x) catch return "?";
+    return out.written();
+}
+
+fn toggleText(s: uitree.Toggle) []const u8 {
+    return switch (s) {
+        .on => "coché",
+        .off => "décoché",
+        .mixed => "indéterminé",
+    };
+}
+
+fn expandText(s: uitree.Expand) []const u8 {
+    return switch (s) {
+        .collapsed => "replié",
+        .expanded => "déplié",
+        .partial => "partiellement déplié",
+        .leaf => "sans enfant",
+    };
+}
+
+/// `scroll=<v>%,h<h>%`, as the tree writes it.
+fn scrollText(arena: std.mem.Allocator, sc: uitree.Scroll) []const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    uitree.writeScroll(&out.writer, sc) catch return "?";
+    return if (out.written().len == 0) "aucun défilement" else out.written();
+}
+
+/// `ui_act`: runs `action` on element `id_text` through its patterns.
+/// A disabled element is waited for and one out of view is scrolled into
+/// view first (US-054); a pattern the element lacks falls back on the next
+/// of its chain (US-051); the element's state is read back and the first
+/// line of the result says whether the action took effect (US-055). The
+/// action is never replayed. The value of `set_value` never appears in the
+/// result (FR-09).
 pub fn act(ctx: anytype, id_text: []const u8, action: uitree.Action, value: ?[]const u8, fallback_click: bool) Result {
     const id = uitree.parseId(id_text) orelse
         return Result.err(fmt(ctx.arena, "Identifiant `{s}` invalide : utilise un id de ui_tree ou ui_find (ex. e1k). Aucune action exécutée.", .{id_text}));
     const name = std.mem.trim(u8, id_text, " ");
-    const gone = fmt(ctx.arena, "Élément {s} introuvable : rappelle ui_tree", .{name});
-    const owner = ctx.session.ui.ids.owner(id) orelse return Result.err(gone);
+    const owner = ctx.session.ui.ids.owner(id) orelse return Result.err(fmt(ctx.arena, "Élément {s} introuvable : rappelle ui_tree", .{name}));
     if (action == .set_value and value == null)
-        return Result.err("set_value demande le champ `value` : le texte à écrire. Aucune action exécutée.");
+        return Result.err("set_value demande le champ `value` : le texte à écrire, ou un nombre pour un curseur. Aucune action exécutée.");
+    var spec: uitree.ScrollSpec = undefined;
+    if (action == .scroll) spec = uitree.ScrollSpec.parse(value orelse "") orelse
+        return Result.err(fmt(ctx.arena, "value `{s}` invalide pour scroll : formes acceptées {s}. Aucune action exécutée.", .{ value orelse "", uitree.ScrollSpec.forms }));
     // Writing a value is typing; every other pattern is a click (US-017).
     if (policy.requireWindow(ctx, owner.window, if (action == .set_value) .full else .click)) |r| return r;
-    ctx.timings.start(ctx.io, .accessibility);
-    const r = ctx.backend.uiAct(ctx.arena, owner.window, owner.key, action, value);
-    ctx.timings.stop(ctx.io, .accessibility);
-    return switch (r) {
-        .ok => Result.text(fmt(ctx.arena, "ok : {t} {s}", .{ action, name })),
-        .timeout => Result.text(fmt(ctx.arena, "{t} envoyé à {s}, mais l'application n'a pas répondu dans le délai UIA : vérifie son état.", .{ action, name })),
-        .gone => Result.err(gone),
-        .disabled => Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est désactivé. Aucune action exécutée.", .{name})),
-        .offscreen => Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est hors écran. Fais d'abord scroll_into_view. Aucune action exécutée.", .{name})),
-        .read_only => Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est en lecture seule. Aucune action exécutée.", .{name})),
-        .unsupported => |rect| if (fallback_click)
-            clickCenter(ctx, rect, action, name)
-        else if (ctx.session.background)
-            // The mode refuses fallback click: the message never names it
-            // (PRD, Edge Cases 5).
-            Result.err(fmt(ctx.arena, "Précondition non remplie : {s} ne supporte pas {t} (pattern {s} absent). En arrière-plan, {s} n'est possible : essaie une autre action, ou demande à Arthur de relancer en mode a11y. Aucune action exécutée.", .{ name, action, patternName(action), if (action == .set_value) "aucune saisie clavier" else "aucun clic" }))
-        else
-            Result.err(fmt(ctx.arena, "Précondition non remplie : {s} ne supporte pas {t} (pattern {s} absent). Essaie une autre action ou fallback: \"click\". Aucune action exécutée.", .{ name, action, patternName(action) })),
-        .failed => |msg| Result.err(msg),
+    const t: Elem = .{ .window = owner.window, .key = owner.key, .tree = owner.tree, .name = name };
+    ctx.session.verify_ns = 0;
+    var out: Outcome = .{};
+    const live = switch (ready(ctx, t, action, &out)) {
+        .ok => |l| l,
+        .stop => |r| return r,
     };
+    const early: ?Result = switch (action) {
+        .invoke => doInvoke(ctx, t, live, &out, fallback_click),
+        .toggle => doToggle(ctx, t, live, &out, fallback_click),
+        .check => doCheck(ctx, t, live, &out, .on),
+        .uncheck => doCheck(ctx, t, live, &out, .off),
+        .select => if (value) |v| selectByName(ctx, t, live, &out, v) else doSelect(ctx, t, live, &out, fallback_click),
+        .expand, .collapse => doExpand(ctx, t, live, &out, action, fallback_click),
+        .set_value => doSetValue(ctx, t, live, &out, value.?, fallback_click),
+        .scroll => doScroll(ctx, t, live, &out, spec),
+        .scroll_into_view => doIntoView(ctx, t, live, &out),
+        .focus => sent(ctx, t, live, &out, .focus, opOn(ctx, t.window, t.key, .focus), fallback_click),
+    };
+    return early orelse out.result(ctx, t, action);
+}
+
+const Ready = union(enum) { ok: uitree.Live, stop: Result };
+
+/// The preconditions of an action (US-054). An element out of view is
+/// scrolled into view once; a disabled one is read again every 100 ms for
+/// 2 s at most. The scrolling actions take the element as it is.
+fn ready(ctx: anytype, t: Elem, action: uitree.Action, out: *Outcome) Ready {
+    const ms = std.time.ns_per_ms;
+    var live = switch (liveOf(ctx, t.window, t.key, .all)) {
+        .ok => |l| l,
+        .gone => return .{ .stop = goneResult(ctx, t) },
+        .failed => |m| return .{ .stop = Result.err(m) },
+    };
+    if (action == .scroll or action == .scroll_into_view) return .{ .ok = live };
+    var scrolled = false;
+    var since: ?i96 = null;
+    var polls: u32 = 0;
+    while (true) {
+        if (live.offscreen) {
+            if (scrolled) return .{ .stop = Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est resté hors écran après scroll_into_view. Aucune action exécutée.", .{t.name})) };
+            switch (intoView(ctx, t, live)) {
+                .item, .container, .in_view => {},
+                .gone => return .{ .stop = goneResult(ctx, t) },
+                .cancelled => return .{ .stop = Result.err("ui_act annulé. Aucune action exécutée.") },
+                .failed => |f| return .{ .stop = Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est hors écran et n'a pas pu être amené en vue ({s}). Aucune action exécutée.", .{ t.name, f.why })) },
+            }
+            scrolled = true;
+            out.note("amené en vue");
+            // A provider may report the new position a moment later.
+            const back = readBack(ctx, t, .all, OnScreen{}) orelse return .{ .stop = goneResult(ctx, t) };
+            live = back.live;
+            continue;
+        }
+        if (live.enabled) break;
+        const now = timing.now(ctx.io);
+        if (since == null) since = now;
+        const waited: u64 = @intCast(@divTrunc(@max(now - since.?, 0), ms));
+        if (waited >= ctx.session.enable_wait_ms)
+            return .{ .stop = Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est resté désactivé {d} ms. Aucune action exécutée.", .{ t.name, ctx.session.enable_wait_ms })) };
+        polls += 1;
+        if (!sleepUntil(ctx, since.? + @as(i96, polls) * enable_poll_ms * ms)) return .{ .stop = Result.err(fmt(ctx.arena, "ui_act annulé pendant l'attente de {s}. Aucune action exécutée.", .{t.name})) };
+        live = switch (liveOf(ctx, t.window, t.key, .all)) {
+            .ok => |l| l,
+            .gone => return .{ .stop = goneResult(ctx, t) },
+            .failed => |m| return .{ .stop = Result.err(m) },
+        };
+    }
+    if (since) |s| out.note(fmt(ctx.arena, "activé après {d} ms", .{@as(u64, @intCast(@divTrunc(@max(timing.now(ctx.io) - s, 0), ms)))}));
+    return .{ .ok = live };
+}
+
+const ReadBack = struct { live: uitree.Live, met: bool };
+
+/// Reads `read` of `t` again until `want.met`, every 50 ms for 400 ms at most
+/// (US-055). The first read comes at once: an effect readable by then costs
+/// one round trip. Null when the element can no longer be read.
+fn readBack(ctx: anytype, t: Elem, read: uitree.LiveRead, want: anytype) ?ReadBack {
+    const ms = std.time.ns_per_ms;
+    const start = timing.now(ctx.io);
+    defer ctx.session.verify_ns += @intCast(@max(timing.now(ctx.io) - start, 0));
+    var last: ?uitree.Live = null;
+    var polls: u32 = 0;
+    while (true) {
+        switch (liveOf(ctx, t.window, t.key, read)) {
+            .ok => |l| {
+                if (want.met(l)) return .{ .live = l, .met = true };
+                last = l;
+            },
+            else => break,
+        }
+        if (timing.now(ctx.io) - start >= @as(i96, ctx.session.verify_ms) * ms) break;
+        polls += 1;
+        if (!sleepUntil(ctx, start + @as(i96, polls) * verify_poll_ms * ms)) break;
+    }
+    return if (last) |l| .{ .live = l, .met = false } else null;
+}
+
+/// Waits until the clock reads `at`. `ctx.sleep` runs in 10 ms slices that
+/// Windows rounds up to its 15.6 ms tick, so a 100 ms period asked of it
+/// lasts about 156 ms: the polls aim at a time, never at a duration.
+fn sleepUntil(ctx: anytype, at: i96) bool {
+    while (true) {
+        const left = at - timing.now(ctx.io);
+        if (left <= 0) return !ctx.cancelled();
+        if (!ctx.sleep(@intCast(@min(left, 10 * std.time.ns_per_ms)))) return false;
+    }
+}
+
+const OnScreen = struct {
+    fn met(_: OnScreen, l: uitree.Live) bool {
+        return !l.offscreen;
+    }
+};
+
+const ToggleLeft = struct {
+    from: uitree.Toggle,
+    fn met(self: ToggleLeft, l: uitree.Live) bool {
+        return if (l.toggle) |s| s != self.from else false;
+    }
+};
+
+const ExpandIs = struct {
+    open: bool,
+    fn met(self: ExpandIs, l: uitree.Live) bool {
+        const s = l.expand orelse return false;
+        return if (self.open) s == .expanded or s == .partial else s == .collapsed;
+    }
+};
+
+const Selected = struct {
+    fn met(_: Selected, l: uitree.Live) bool {
+        return l.selected orelse false;
+    }
+};
+
+const ValueIs = struct {
+    hash: u64,
+    fn met(self: ValueIs, l: uitree.Live) bool {
+        return if (l.value_hash) |h| h == self.hash else false;
+    }
+};
+
+const RangeIs = struct {
+    value: f64,
+    fn met(self: RangeIs, l: uitree.Live) bool {
+        const r = l.range orelse return false;
+        return @abs(r.value - self.value) <= 1e-6 * @max(1, @abs(self.value));
+    }
+};
+
+const ScrollLeft = struct {
+    vertical: bool,
+    from: ?f32,
+    fn met(self: ScrollLeft, l: uitree.Live) bool {
+        const sc = l.scroll orelse return false;
+        const now = if (self.vertical) sc.v else sc.h;
+        if (now == null or self.from == null) return (now == null) != (self.from == null);
+        return @abs(now.? - self.from.?) > 0.01;
+    }
+};
+
+/// What a pattern call that did not go through means for the result: null
+/// when the action left, with a note when the provider did not answer in
+/// time.
+fn sent(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, action: uitree.Action, r: uitree.OpResult, fallback_click: bool) ?Result {
+    switch (r) {
+        .ok => return null,
+        .timeout => {
+            out.note(uia_timeout_note);
+            return null;
+        },
+        .gone => return goneResult(ctx, t),
+        .read_only => return Result.err(fmt(ctx.arena, "Précondition non remplie : {s} est en lecture seule. Aucune action exécutée.", .{t.name})),
+        .unsupported => return unsupported(ctx, t, live, action, fallback_click),
+        .failed => |msg| return Result.err(msg),
+    }
+}
+
+/// The element lacks the pattern of `action` and every fallback of its
+/// chain: the click fallback when asked for, else the refusal.
+fn unsupported(ctx: anytype, t: Elem, live: uitree.Live, action: uitree.Action, fallback_click: bool) Result {
+    const pattern = patternName(action);
+    if (fallback_click) {
+        const r = clickCenter(ctx, live.rect, action, t.name);
+        if (!r.is_error) ctx.audit_detail.verdict = @tagName(Verdict.unverifiable);
+        return r;
+    }
+    const folded = action == .expand or action == .collapse;
+    // The background mode refuses fallback click: the message never names
+    // it (PRD, Edge Cases 5).
+    const advice: []const u8 = if (ctx.session.background)
+        (if (folded) "Son état déplié ou replié est inconnu : essaie invoke." else if (action == .set_value) "En arrière-plan, aucune saisie clavier n'est possible : essaie une autre action, ou demande à Arthur de relancer en mode a11y." else "En arrière-plan, aucun clic n'est possible : essaie une autre action, ou demande à Arthur de relancer en mode a11y.")
+    else if (folded) "Son état déplié ou replié est inconnu : essaie invoke, ou fallback: \"click\"." else "Essaie une autre action ou fallback: \"click\".";
+    return Result.err(fmt(ctx.arena, "Précondition non remplie : {s} ne supporte pas {t} (pattern {s} absent). {s} Aucune action exécutée.", .{ t.name, action, pattern, advice }));
 }
 
 fn clickCenter(ctx: anytype, rect: display.Rect, action: uitree.Action, name: []const u8) Result {
@@ -676,6 +991,423 @@ fn clickCenter(ctx: anytype, rect: display.Rect, action: uitree.Action, name: []
     ctx.backend.sendMouse(&.{ .{ .move = p }, .{ .down = .left }, .{ .up = .left } }) catch
         return Result.err("Injection refusée par Windows (bureau sécurisé, verrouillage ou session inactive) : réessaie quand le bureau est accessible.");
     return Result.text(fmt(ctx.arena, "Pattern {s} absent sur {s} : clic gauche injecté au centre de l'élément (fallback).", .{ patternName(action), name }));
+}
+
+/// Invoke, else the element's MSAA default action (US-051): the effect of
+/// either is not readable, the observation's delta is the proof.
+fn doInvoke(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, fallback_click: bool) ?Result {
+    if (live.actions.invoke) return sent(ctx, t, live, out, .invoke, opOn(ctx, t.window, t.key, .invoke), fallback_click);
+    if (sent(ctx, t, live, out, .invoke, opOn(ctx, t.window, t.key, .legacy), fallback_click)) |r| return r;
+    out.note("par LegacyIAccessible.DoDefaultAction");
+    return null;
+}
+
+/// Toggle, else Invoke (US-051). With Toggle the state must leave the one
+/// read before.
+fn doToggle(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, fallback_click: bool) ?Result {
+    if (!live.actions.toggle) {
+        if (!live.actions.invoke) return unsupported(ctx, t, live, .toggle, fallback_click);
+        if (sent(ctx, t, live, out, .toggle, opOn(ctx, t.window, t.key, .invoke), fallback_click)) |r| return r;
+        out.note("par Invoke");
+        return null;
+    }
+    if (sent(ctx, t, live, out, .toggle, opOn(ctx, t.window, t.key, .toggle), fallback_click)) |r| return r;
+    const from = live.toggle orelse return null;
+    const back = readBack(ctx, t, .toggle, ToggleLeft{ .from = from }) orelse return null;
+    const now = back.live.toggle orelse return null;
+    out.set(if (back.met) .verified else .contradicted, toggleText(now));
+    return null;
+}
+
+/// `check` and `uncheck` (US-051): the state is read first and nothing is
+/// called when it is already there. A three-state box takes two Toggle
+/// calls at most; the second leaves only once the first was seen to change
+/// the state, so no call is ever a replay.
+fn doCheck(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, want: uitree.Toggle) ?Result {
+    const action: uitree.Action = if (want == .on) .check else .uncheck;
+    var state = (if (live.actions.toggle) live.toggle else null) orelse
+        return Result.err(fmt(ctx.arena, "Précondition non remplie : {s} ne supporte pas {t} (pattern Toggle absent) : son état est inconnu. Essaie invoke. Aucune action exécutée.", .{ t.name, action }));
+    if (state == want) {
+        out.set(.noop, if (want == .on) "déjà coché" else "déjà décoché");
+        return null;
+    }
+    var calls: u8 = 0;
+    while (calls < max_toggles) {
+        const r = opOn(ctx, t.window, t.key, .toggle);
+        if (calls == 0) {
+            if (sent(ctx, t, live, out, action, r, false)) |early| return early;
+        } else if (r != .ok and r != .timeout) {
+            out.set(.contradicted, toggleText(state));
+            return null;
+        }
+        calls += 1;
+        const back = readBack(ctx, t, .toggle, ToggleLeft{ .from = state }) orelse return null;
+        const now = back.live.toggle orelse return null;
+        if (!back.met) {
+            out.set(.contradicted, toggleText(now));
+            return null;
+        }
+        state = now;
+        if (state == want) {
+            out.set(.verified, toggleText(state));
+            if (calls > 1) out.note(fmt(ctx.arena, "{d} bascules", .{calls}));
+            return null;
+        }
+    }
+    out.set(.contradicted, fmt(ctx.arena, "{s} après {d} bascules, sans atteindre « {s} »", .{ toggleText(state), calls, toggleText(want) }));
+    return null;
+}
+
+/// Expand and collapse have no Invoke fallback (US-051): without the
+/// pattern the state is unknown, and an Invoke could close what was open.
+fn doExpand(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, action: uitree.Action, fallback_click: bool) ?Result {
+    if (!live.actions.expand_collapse) return unsupported(ctx, t, live, action, fallback_click);
+    const o: uitree.Op = if (action == .expand) .expand else .collapse;
+    if (sent(ctx, t, live, out, action, opOn(ctx, t.window, t.key, o), fallback_click)) |r| return r;
+    const back = readBack(ctx, t, .expand, ExpandIs{ .open = action == .expand }) orelse return null;
+    const now = back.live.expand orelse return null;
+    if (now == .leaf) return null;
+    out.set(if (back.met) .verified else .contradicted, expandText(now));
+    return null;
+}
+
+fn doSelect(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, fallback_click: bool) ?Result {
+    if (!live.actions.select) return unsupported(ctx, t, live, .select, fallback_click);
+    if (sent(ctx, t, live, out, .select, opOn(ctx, t.window, t.key, .select), fallback_click)) |r| return r;
+    const back = readBack(ctx, t, .selected, Selected{}) orelse return null;
+    if (back.live.selected == null) return null;
+    out.set(if (back.met) .verified else .contradicted, if (back.met) "sélectionné" else "non sélectionné");
+    return null;
+}
+
+fn entriesOf(ctx: anytype, t: Elem) uitree.EntriesResult {
+    ctx.timings.start(ctx.io, .accessibility);
+    defer ctx.timings.stop(ctx.io, .accessibility);
+    return ctx.backend.uiEntries(ctx.arena, t.window, t.key);
+}
+
+/// Names shown when no entry matches (US-053).
+const max_entry_names = 10;
+
+/// `select` with a name on a container (US-053): the selectable descendant
+/// whose name is `wanted`, whatever the case and the accents. A collapsed
+/// container is expanded for the search and collapsed again whatever comes
+/// of it. No entry, or several of that name: nothing is selected.
+fn selectByName(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, wanted: []const u8) ?Result {
+    const a = ctx.arena;
+    const ms = std.time.ns_per_ms;
+    var opened = false;
+    if (live.expand == .collapsed) switch (opOn(ctx, t.window, t.key, .expand)) {
+        .ok, .timeout => opened = true,
+        .gone => return goneResult(ctx, t),
+        // The entries of a container that does not open may still be read.
+        .unsupported, .read_only, .failed => {},
+    };
+    // An opened list fills in a moment later with some providers; one whose
+    // tree cannot be read while open (a Win32 drop-down, decision 0013) is
+    // closed and read as it was.
+    var entries: []const uitree.Entry = &.{};
+    const start = timing.now(ctx.io);
+    while (true) {
+        switch (entriesOf(ctx, t)) {
+            .ok => |es| entries = es,
+            .gone => return goneResult(ctx, t),
+            .failed => |msg| if (!opened) return Result.err(msg),
+        }
+        if (entries.len > 0 or !opened) break;
+        if (timing.now(ctx.io) - start < @as(i96, ctx.session.verify_ms) * ms and ctx.sleep(verify_poll_ms * ms)) continue;
+        _ = opOn(ctx, t.window, t.key, .collapse);
+        // Cancelled or paused while the list filled in: nothing is selected.
+        if (ctx.cancelled()) return Result.err("ui_act annulé. Aucune sélection faite, conteneur replié comme avant.");
+        opened = false;
+        out.note("entrées lues conteneur replié");
+    }
+    const want = uitree.fold(a, std.mem.trim(u8, wanted, " ")) catch return Result.err(oom);
+    var found: ?uitree.Entry = null;
+    var matches: usize = 0;
+    var same: std.Io.Writer.Allocating = .init(a);
+    for (entries) |e| {
+        const folded = uitree.fold(a, std.mem.trim(u8, e.name, " ")) catch return Result.err(oom);
+        if (!std.mem.eql(u8, folded, want)) continue;
+        matches += 1;
+        found = e;
+        same.writer.print("{s}{s}", .{ if (matches > 1) ", " else "", idText(ctx, t, e.key) }) catch return Result.err(oom);
+    }
+    const restored: []const u8 = if (opened) "Aucune sélection faite, conteneur replié comme avant." else "Aucune action exécutée.";
+    if (matches != 1) {
+        if (opened) _ = opOn(ctx, t.window, t.key, .collapse);
+        if (matches > 1) return Result.err(fmt(a, "{d} entrées nommées « {s} » dans {s} : {s}. Choisis-en une par son id avec select sans value. {s}", .{ matches, wanted, t.name, same.written(), restored }));
+        if (entries.len == 0) return Result.err(fmt(a, "{s} n'a aucune entrée sélectionnable : select avec value vise une liste, une liste déroulante, des onglets ou un arbre. {s}", .{ t.name, restored }));
+        var names: std.Io.Writer.Allocating = .init(a);
+        for (entries[0..@min(entries.len, max_entry_names)], 0..) |e, i| names.writer.print("{s}« {s} »", .{ if (i > 0) ", " else "", e.name }) catch return Result.err(oom);
+        if (entries.len > max_entry_names) names.writer.print(", … {d} autres", .{entries.len - max_entry_names}) catch {};
+        return Result.err(fmt(a, "Aucune entrée « {s} » dans {s}. Entrées : {s}. {s}", .{ wanted, t.name, names.written(), restored }));
+    }
+    const entry: Elem = .{ .window = t.window, .key = found.?.key, .tree = t.tree, .name = idText(ctx, t, found.?.key) };
+    // Brought into view first: some providers select only what they show.
+    switch (liveOf(ctx, entry.window, entry.key, .all)) {
+        .ok => |l| if (l.offscreen) {
+            _ = intoView(ctx, entry, l);
+        },
+        else => {},
+    }
+    const r = opOn(ctx, entry.window, entry.key, .select);
+    var back: ?ReadBack = if (r == .ok or r == .timeout) readBack(ctx, entry, .selected, Selected{}) else null;
+    if (opened) {
+        _ = opOn(ctx, t.window, t.key, .collapse);
+        if (back != null and back.?.met) back = keptAfterCollapse(ctx, t, entry, out) orelse back;
+    }
+    switch (r) {
+        .ok => {},
+        .timeout => out.note(uia_timeout_note),
+        .gone => return goneResult(ctx, entry),
+        .unsupported, .read_only => return Result.err(fmt(a, "Précondition non remplie : l'entrée {s} ne supporte pas select (pattern SelectionItem absent). {s}", .{ entry.name, restored })),
+        .failed => |msg| return Result.err(msg),
+    }
+    out.note(fmt(a, "entrée {s}", .{entry.name}));
+    const b = back orelse return null;
+    if (b.live.selected == null) return null;
+    out.set(if (b.met) .verified else .contradicted, if (b.met) "sélectionné" else "non sélectionné");
+    return null;
+}
+
+/// A Win32 drop-down list takes a collapse for a cancel and puts its former
+/// entry back (measured, decision 0013). Once the container reads collapsed,
+/// an entry that lost its selection is selected again, container closed.
+/// Null when the entry can no longer be read.
+fn keptAfterCollapse(ctx: anytype, t: Elem, entry: Elem, out: *Outcome) ?ReadBack {
+    _ = readBack(ctx, t, .expand, ExpandIs{ .open = false });
+    const now = switch (liveOf(ctx, entry.window, entry.key, .all)) {
+        .ok => |l| l,
+        else => return null,
+    };
+    if (now.selected != false) return .{ .live = now, .met = true };
+    switch (opOn(ctx, entry.window, entry.key, .select)) {
+        .ok, .timeout => {},
+        else => return .{ .live = now, .met = false },
+    }
+    out.note("sélection refaite conteneur replié");
+    return readBack(ctx, entry, .selected, Selected{});
+}
+
+/// A number as the model writes it: a decimal point or comma.
+fn parseNumber(arena: std.mem.Allocator, text: []const u8) ?f64 {
+    const t = arena.dupe(u8, std.mem.trim(u8, text, " ")) catch return null;
+    std.mem.replaceScalar(u8, t, ',', '.');
+    const x = std.fmt.parseFloat(f64, t) catch return null;
+    return if (std.math.isFinite(x)) x else null;
+}
+
+/// Value, else RangeValue for a slider (US-053). The value read back is
+/// compared by its hash and never written anywhere (FR-09); a password
+/// field is not read back at all.
+fn doSetValue(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, value: []const u8, fallback_click: bool) ?Result {
+    const a = ctx.arena;
+    if (live.range) |range| if (!live.actions.value or live.read_only) {
+        const lo = numberText(a, range.min);
+        const hi = numberText(a, range.max);
+        const x = parseNumber(a, value) orelse
+            return Result.err(fmt(a, "{s} attend un nombre entre {s} et {s}. Aucune action exécutée.", .{ t.name, lo, hi }));
+        if (x < range.min or x > range.max)
+            return Result.err(fmt(a, "Valeur {s} hors plage {s}..{s}. Aucune action exécutée.", .{ numberText(a, x), lo, hi }));
+        if (range.read_only) return Result.err(fmt(a, "Précondition non remplie : {s} est en lecture seule. Aucune action exécutée.", .{t.name}));
+        if (sent(ctx, t, live, out, .set_value, opOn(ctx, t.window, t.key, .{ .set_range = x }), fallback_click)) |r| return r;
+        const back = readBack(ctx, t, .all, RangeIs{ .value = x }) orelse return null;
+        if (back.live.range == null) return null;
+        if (back.met) out.set(.verified, "valeur relue identique") else out.delivered = reformatted;
+        return null;
+    };
+    if (!live.actions.value) return unsupported(ctx, t, live, .set_value, fallback_click);
+    if (sent(ctx, t, live, out, .set_value, opOn(ctx, t.window, t.key, .{ .set_value = value }), fallback_click)) |r| return r;
+    if (live.password) return null;
+    const hash = uitree.textHashUtf8(a, value) orelse return null;
+    const back = readBack(ctx, t, .value, ValueIs{ .hash = hash }) orelse return null;
+    if (back.live.value_hash == null) return null;
+    if (back.met) out.set(.verified, "valeur relue identique") else out.delivered = reformatted;
+    return null;
+}
+
+fn scrollHost(ctx: anytype, t: Elem) ?u64 {
+    ctx.timings.start(ctx.io, .accessibility);
+    defer ctx.timings.stop(ctx.io, .accessibility);
+    return ctx.backend.uiScrollHost(ctx.arena, t.window, t.key);
+}
+
+/// `scroll` (US-052): the element's own Scroll pattern, else the one of its
+/// first ancestor that has it. Notches and pages are Scroll calls, an edge
+/// or a percentage is SetScrollPercent. A container already where it is
+/// asked to go is not an error.
+fn doScroll(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, spec: uitree.ScrollSpec) ?Result {
+    const a = ctx.arena;
+    const nowhere = "{s} n'est dans aucun conteneur défilable. Aucune action exécutée.";
+    var host = t;
+    var hl = live;
+    if (live.scroll == null) {
+        host.key = scrollHost(ctx, t) orelse return Result.err(fmt(a, nowhere, .{t.name}));
+        host.name = idText(ctx, t, host.key);
+        hl = switch (liveOf(ctx, host.window, host.key, .all)) {
+            .ok => |l| l,
+            .gone => return goneResult(ctx, host),
+            .failed => |m| return Result.err(m),
+        };
+        out.note(fmt(a, "conteneur {s}", .{host.name}));
+    }
+    const sc = hl.scroll orelse return Result.err(fmt(a, nowhere, .{t.name}));
+    const vertical = switch (spec) {
+        .step => |s| s.dir == .up or s.dir == .down,
+        else => true,
+    };
+    const forward = switch (spec) {
+        .step => |s| s.dir == .down or s.dir == .right,
+        .page => |p| p == .down,
+        .edge => |e| e == .bottom,
+        .percent => true,
+    };
+    const pos: ?f32 = if (vertical) sc.v else sc.h;
+    // An axis that does not scroll shows all of its content: both ends are
+    // in view.
+    const at_end = if (pos) |p| (if (forward) p >= 100 else p <= 0) else true;
+    switch (spec) {
+        .percent => |p| if (pos == null or @abs(pos.? - p) < 0.5) {
+            out.set(.noop, if (pos == null) "pas de défilement vertical, tout est déjà en vue" else fmt(a, "déjà à {s}%", .{numberText(a, p)}));
+            return null;
+        },
+        else => if (at_end) {
+            out.set(.noop, if (vertical) (if (forward) "déjà en bas" else "déjà en haut") else if (forward) "déjà à droite" else "déjà à gauche");
+            return null;
+        },
+    }
+    const first: uitree.Op, const repeat: u8 = switch (spec) {
+        .step => |s| .{ stepOp(vertical, forward, false), s.count },
+        .page => .{ stepOp(vertical, forward, true), 1 },
+        .edge => |e| .{ .{ .scroll_to = .{ .v = if (e == .top) 0 else 100 } }, 1 },
+        .percent => |p| .{ .{ .scroll_to = .{ .v = p } }, 1 },
+    };
+    var done: u8 = 0;
+    while (done < repeat) : (done += 1) {
+        const r = opOn(ctx, host.window, host.key, first);
+        if (done == 0) {
+            if (sent(ctx, host, hl, out, .scroll, r, false)) |early| return early;
+        } else if (r != .ok and r != .timeout) break;
+        if (ctx.cancelled()) break;
+    }
+    const back = readBack(ctx, host, .all, ScrollLeft{ .vertical = vertical, .from = pos }) orelse return null;
+    const now = back.live.scroll orelse return null;
+    out.set(if (back.met) .verified else .contradicted, scrollText(a, now));
+    return null;
+}
+
+fn stepOp(vertical: bool, forward: bool, large: bool) uitree.Op {
+    const amount: uitree.ScrollAmount = if (large) (if (forward) .large_forward else .large_back) else if (forward) .small_forward else .small_back;
+    return .{ .scroll = if (vertical) .{ .v = amount } else .{ .h = amount } };
+}
+
+const IntoView = union(enum) {
+    /// ScrollItem.ScrollIntoView was called.
+    item,
+    /// The scrollable ancestor of this key was scrolled until the element
+    /// showed.
+    container: u64,
+    /// Already in view and without ScrollItem: nothing to do.
+    in_view,
+    gone,
+    cancelled,
+    /// `moved`: the container scrolled before the attempt gave up.
+    failed: struct { why: []const u8, moved: bool = false },
+};
+
+/// The increment that brings `el` closer to the view of `host`: a page when
+/// it is further than one, a notch otherwise. Null when `el` has no
+/// rectangle or already lies within `host`.
+fn toward(el: display.Rect, host: display.Rect) ?uitree.ScrollStep {
+    if (el.w <= 0 or el.h <= 0) return null;
+    var s: uitree.ScrollStep = .{};
+    if (el.y + el.h > host.y + host.h) {
+        s.v = if (el.y - (host.y + host.h) > host.h) .large_forward else .small_forward;
+    } else if (el.y < host.y) {
+        s.v = if (host.y - (el.y + el.h) > host.h) .large_back else .small_back;
+    }
+    if (el.x + el.w > host.x + host.w) {
+        s.h = if (el.x - (host.x + host.w) > host.w) .large_forward else .small_forward;
+    } else if (el.x < host.x) {
+        s.h = if (host.x - (el.x + el.w) > host.w) .large_back else .small_back;
+    }
+    return if (s.v == .none and s.h == .none) null else s;
+}
+
+fn sameScroll(x: ?uitree.Scroll, y: ?uitree.Scroll) bool {
+    const p = x orelse return y == null;
+    const q = y orelse return false;
+    return p.v == q.v and p.h == q.h;
+}
+
+/// Brings `t` into view (US-052): ScrollItem when the element has it, else
+/// its scrollable ancestor moved by increments toward it, 50 increments or
+/// 2 s at most, until the element is no longer off-screen.
+fn intoView(ctx: anytype, t: Elem, first: uitree.Live) IntoView {
+    if (first.actions.scroll) return switch (opOn(ctx, t.window, t.key, .scroll_item)) {
+        .ok, .timeout => .item,
+        .gone => .gone,
+        .failed => |m| .{ .failed = .{ .why = m } },
+        .unsupported, .read_only => .{ .failed = .{ .why = "pattern ScrollItem absent" } },
+    };
+    if (!first.offscreen) return .in_view;
+    const ms = std.time.ns_per_ms;
+    const host_key = scrollHost(ctx, t) orelse return .{ .failed = .{ .why = "pattern ScrollItem absent et aucun conteneur défilable" } };
+    var host = switch (liveOf(ctx, t.window, host_key, .all)) {
+        .ok => |l| l,
+        else => return .{ .failed = .{ .why = "conteneur défilable illisible" } },
+    };
+    const start = timing.now(ctx.io);
+    var live = first;
+    var steps: u32 = 0;
+    while (live.offscreen) {
+        const moved = steps > 0;
+        if (steps == into_view_steps or timing.now(ctx.io) - start >= into_view_ms * ms)
+            return .{ .failed = .{ .why = fmt(ctx.arena, "toujours hors écran après {d} incréments", .{steps}), .moved = moved } };
+        const step = toward(live.rect, host.rect) orelse return .{ .failed = .{ .why = "sa position par rapport au conteneur est inconnue", .moved = moved } };
+        switch (opOn(ctx, t.window, host_key, .{ .scroll = step })) {
+            .ok, .timeout => {},
+            .gone => return .gone,
+            .failed => |m| return .{ .failed = .{ .why = m, .moved = moved } },
+            .unsupported, .read_only => return .{ .failed = .{ .why = "le conteneur ne défile pas", .moved = moved } },
+        }
+        steps += 1;
+        if (ctx.cancelled()) return .cancelled;
+        live = switch (liveOf(ctx, t.window, t.key, .all)) {
+            .ok => |l| l,
+            else => return .gone,
+        };
+        if (!live.offscreen) break;
+        var after = switch (liveOf(ctx, t.window, host_key, .all)) {
+            .ok => |l| l,
+            else => return .{ .failed = .{ .why = "conteneur défilable illisible", .moved = true } },
+        };
+        if (sameScroll(host.scroll, after.scroll)) {
+            // At its limit, or a provider that reports a moment later.
+            if (!ctx.sleep(verify_poll_ms * ms)) return .cancelled;
+            after = switch (liveOf(ctx, t.window, host_key, .all)) {
+                .ok => |l| l,
+                else => return .{ .failed = .{ .why = "conteneur défilable illisible", .moved = true } },
+            };
+            if (sameScroll(host.scroll, after.scroll)) return .{ .failed = .{ .why = "le conteneur est au bout de sa course", .moved = steps > 1 } };
+        }
+        host = after;
+    }
+    return .{ .container = host_key };
+}
+
+/// `scroll_into_view`: delivered, its effect shows in the observation.
+fn doIntoView(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome) ?Result {
+    switch (intoView(ctx, t, live)) {
+        .item => {},
+        .container => |key| out.note(fmt(ctx.arena, "par défilement de {s}", .{idText(ctx, t, key)})),
+        .in_view => out.set(.noop, "déjà en vue"),
+        .gone => return goneResult(ctx, t),
+        .cancelled => return Result.err("ui_act annulé."),
+        .failed => |f| return Result.err(fmt(ctx.arena, "{s} n'a pas pu être amené en vue : {s}. {s}", .{ t.name, f.why, if (f.moved) "Le conteneur a défilé : relis l'arbre." else "Aucune action exécutée." })),
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------- settle and observe

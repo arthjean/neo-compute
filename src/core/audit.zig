@@ -30,6 +30,10 @@ pub const Detail = struct {
     /// registry_read: the key and the value name (US-036).
     registry_path: ?[]const u8 = null,
     registry_name: ?[]const u8 = null,
+    /// ui_act: what reading the element back said of the action (US-055):
+    /// verified, unverifiable, contradicted or noop. Absent when no action
+    /// left (a refusal).
+    verdict: ?[]const u8 = null,
 
     pub fn setTerminatedExe(self: *Detail, exe: []const u8) void {
         self.terminated_exe_len = @intCast(@min(exe.len, self.terminated_exe_buf.len));
@@ -131,7 +135,8 @@ pub const Audit = struct {
 };
 
 /// One line: `{"ts":"2026-11-04T09:12:03.456Z","tool":"left_click","app":"notepad.exe","pid":4242,"policy":"full","mode":"a11y","ms":12.3,"result":"ok"}`.
-/// A background action adds `"guard":"intact"` after its result.
+/// A background action adds `"guard":"intact"` after its result, a ui_act
+/// its `"verdict"`.
 pub fn format(w: *Io.Writer, e: Entry, now_ns: i96) !void {
     const ms_total: u64 = @intCast(@divTrunc(@max(now_ns, 0), std.time.ns_per_ms));
     const secs: std.time.epoch.EpochSeconds = .{ .secs = ms_total / 1000 };
@@ -150,6 +155,7 @@ pub fn format(w: *Io.Writer, e: Entry, now_ns: i96) !void {
     try w.print(",\"mode\":\"{s}\",\"ms\":{d:.1},\"result\":\"{s}\"", .{ e.mode, @as(f64, @floatFromInt(e.duration_ns)) / std.time.ns_per_ms, e.result });
     if (e.guard) |g| try w.print(",\"guard\":\"{t}\"", .{g});
     if (e.guard_late) |g| try w.print(",\"guard_late\":\"{t}\"", .{g});
+    if (e.detail.verdict) |v| try w.print(",\"verdict\":\"{s}\"", .{v});
     if (e.text_len) |n| try w.print(",\"text_len\":{d}", .{n});
     if (e.detail.state) |s| {
         try w.writeAll(",\"state\":");

@@ -37,6 +37,7 @@ const display = @import("../../core/display.zig");
 
 pub const Server = mcp.Server(Windows, tools.all);
 const cohabitation = @import("selftest_cohabitation.zig");
+const actions = @import("selftest_actions.zig");
 const uia_events = @import("uia_events.zig");
 const core_a11y = @import("../../core/a11y.zig");
 
@@ -215,7 +216,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     };
     defer decoy.stop(io);
 
-    var tw: TestWindow = .{ .background = true, .rect = .{ .left = area.x + 120, .top = area.y + 120, .right = area.x + 600, .bottom = area.y + 440 } };
+    var tw: TestWindow = .{ .background = true, .actions = true, .rect = .{ .left = area.x + 120, .top = area.y + 120, .right = area.x + 600, .bottom = area.y + 440 } };
     tw.start() catch {
         report.fail("bg-setup", "cannot create the test window", .{});
         return report.failed;
@@ -310,6 +311,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     b.control("bg-collapse", "combobox", "collapse", null, effects.comboClosed);
     // A drop-down the collapse left open would hide the tree from the rest.
     if (tw.comboDropped()) tw.closeCombo();
+
+    // EP-013: final state of a box, default action, semantic scrolling,
+    // slider values, selection by name, waited preconditions, verdict.
+    if (try actions.run(&b, arena)) return lost(&report);
 
     // bg-must-fail-without-effect: the verdict fails an action that changed
     // nothing in the session and did not reach the target either.
@@ -407,8 +412,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
         const steps = [_]Step{
             .{ .needle = "button \"" ++ test_window.button_label ++ "\"", .action = "invoke", .value = null, .effect = effects.command },
             .{ .needle = test_window.checkbox_label, .action = "toggle", .value = null, .effect = effects.toggled },
-            // Scrolled back up before the selections: an item out of view
-            // is refused until it is scrolled into view.
+            // Scrolled back up before the selections, so that each one is
+            // a single pattern call.
             .{ .needle = item_far, .action = "scroll_into_view", .value = null, .effect = effects.scrolledDown },
             .{ .needle = item_first, .action = "scroll_into_view", .value = null, .effect = effects.scrolledUp },
             .{ .needle = item_third, .action = "select", .value = null, .effect = effects.selectedThird },

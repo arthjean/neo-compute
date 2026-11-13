@@ -281,7 +281,7 @@ pub const ui_find = struct {
 
 pub const ui_act = struct {
     pub const name = "ui_act";
-    pub const description = "Act on an element id from ui_tree or ui_find.";
+    pub const description = "Act on an element id from ui_tree or ui_find; the first line says whether the effect was read back.";
     pub const annotations = .{ .always_load = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -292,7 +292,10 @@ pub const ui_act = struct {
         fallback: ?enum { click } = null,
         observe: ?Observe = null,
         settle_timeout_ms: ?u32 = null,
-        pub const field_info = .{ .settle_timeout_ms = settle_info };
+        pub const field_info = .{
+            .value = .{ .description = "set_value: text, or a slider's number. select: an entry's name in this list, combo box, tabs or tree. scroll: up, down, left or right and notches (down 3), page_up, page_down, top, bottom, 50%" },
+            .settle_timeout_ms = settle_info,
+        };
         /// What the background mode refuses (US-041), from the measures of
         /// US-040 (decision 0013).
         pub const intrusive = .{

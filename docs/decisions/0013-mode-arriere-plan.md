@@ -230,3 +230,79 @@ Cinq points laissés à Arthur à la revue de EP-012, vérifiés à la source (`
 - Sous le leurre à cadre, Chrome n'expose toujours aucun document web après 8 s. La cause reste à établir par US-058 : occlusion réelle cette fois, ou accessibilité web qui ne s'active qu'à une requête UIA visant un nœud web.
 - Mesures d'agent-desktop à reprendre dans US-058 (`probes/windows/FINDINGS.md`, A1-5 et A1-6, sur Obsidian) : au premier contact l'arbre a 13 nœuds contre 172 une fois construit, sans drapeau ; recouverte par d'autres fenêtres, l'application reste à son compte du premier contact, et minimiser ces fenêtres la débloque. US-058 doit donc séparer « arbre pas encore construit » de « arbre figé par recouvrement ».
 - PRD amendé : A19 et le risque 2 séparent Chromium d'Electron (VS Code désactive `CalculateNativeWinOcclusion`) ; US-058 mesure si une action UIA force la mise à jour de l'arbre et la plus petite bande visible suffisante ; US-059 calcule l'occlusion avec les règles de Chromium. `app_launch` n'ajoute aucun drapeau par défaut.
+
+## Mesures de EP-013
+
+Mesures du 2026-11-13 sur la machine de référence (Windows 11, build 26300), par `neo-compute selftest --background` et `zig build bench`. Les extensions de contrat appliquées sont celles du point 4 des décisions de contrat : actions `check`, `uncheck` et `scroll`, `value` étendu (nombre sur un élément à plage, nom avec `select` sur un conteneur, forme de défilement). Aucune autre modification de contrat.
+
+### Forme du résultat (US-055)
+
+- Première ligne : « `<action> <id>` : vérifié (`<état lu>`) », « `<action> <id>` : délivré, effet non vérifiable » ou « `<action> <id>` : contredit, état lu `<état>`. L'action est partie : ne la rejoue pas sans relire l'arbre. » (`isError`). Une action sans objet répond « déjà coché », « déjà en bas », « déjà en vue », sans erreur. Ce qui s'est passé en plus suit après « ; » : « par LegacyIAccessible.DoDefaultAction », « par Invoke », « 2 bascules », « conteneur `<id>` », « entrée `<id>` », « activé après N ms », « amené en vue ».
+- L'ancien « ok : `<action> <id>` » disparaît. Un refus garde « Aucune action exécutée. ».
+- L'audit reçoit `"verdict"` : `verified`, `unverifiable`, `contradicted` ou `noop`. Un refus n'en porte pas.
+- La valeur de `set_value` est comparée par empreinte (`uitree.textHash`), jamais écrite ; un champ mot de passe n'est pas relu (FR-09).
+
+### Coût (FR-22)
+
+| Mesure | Résultat | Budget |
+|---|---|---|
+| `bg-act` (`toggle` sans observation), p95 de l'étape accessibilité | 2 513 µs | 2 545 µs de référence, 110 % au plus |
+| `bg-settle`, p95 de l'étape `settle` | 65 478 µs | 64 061 µs de référence, 110 % au plus |
+| Relecture du verdict, `bg-verdict` (40 bascules, fenêtre du même processus, Debug) | p95 1 587 µs, médiane 1 008 µs | < 10 ms p95 |
+| Attente d'un bouton activé après 500 ms, `bg-wait-enabled` | action partie après 512 ms | relecture toutes les 100 ms |
+
+- Un aller-retour UI Automation vers une fenêtre d'un autre processus coûte environ 0,3 ms ; le nombre de propriétés lues dans un aller-retour ne compte pas (cache de 14 propriétés réduit à 8 : même temps). Le chemin d'une action est donc compté en allers-retours : une lecture en cache avant l'action, l'appel du pattern pris sur la copie que cette lecture a laissée (`read_copy`, sans `GetCurrentPattern`), une propriété relue après. Trois allers-retours contre quatre avant EP-013 (`IsEnabled`, `IsOffscreen`, `GetCurrentPattern`, l'appel).
+- Première version (lecture complète avant et après, `GetCurrentPattern` entre les deux) : `bg-act` à 2 842 µs dans la passe complète, hors budget. La baseline n'a pas été réécrite.
+- `ctx.sleep` dort par tranches de 10 ms que Windows arrondit à son battement de 15,6 ms : une période de 100 ms demandée ainsi dure environ 156 ms. Les relectures de EP-013 visent une heure d'horloge (`sleepUntil`). Les autres attentes du serveur gardent `ctx.sleep` (hors périmètre de l'epic).
+
+### Constats sur les contrôles Win32
+
+- **Action par défaut et InvokePattern.** Tout contrôle Win32 standard qui a une action par défaut MSAA a aussi `InvokePattern` : bouton (« Appuyer »), case à cocher et case à trois états (« Cocher »), bouton radio, entrée de liste (« Double clic »). C'est vrai par les proxys natifs de UI Automation et par son pont MSAA sur un objet oleacc (`CreateStdAccessibleProxy`, classe « Button »). Le repli `DoDefaultAction` de US-051 ne sert donc qu'aux fournisseurs qui déclarent `LegacyIAccessible` sans `Invoke` (Chromium sur un élément cliquable, par exemple). `bg-legacy` le prouve sur un contrôle de la fenêtre de test qui a son propre fournisseur (`legacy_control.zig`).
+- **Entrée de liste.** `Invoke` sur une entrée de `LISTBOX` d'une fenêtre non active échoue (`0x80131509`, opération invalide). `ui_act` renvoie l'erreur ; le repli de US-051 ne joue que sans `InvokePattern`.
+- **Liste déroulante Win32.** L'arbre de la fenêtre se lit liste ouverte (les entrées sont trouvées), mais `FindAll` rend alors 16 fois la dernière des 3 entrées, sous le même RuntimeId : les entrées sont dédoublonnées par RuntimeId. `Collapse` vaut annulation : l'entrée sélectionnée liste ouverte est abandonnée. La séquence du PRD (déplier, sélectionner, replier) est suivie, puis l'entrée est relue une fois le conteneur replié et sélectionnée de nouveau si elle a été abandonnée (« sélection refaite conteneur replié »). Session inchangée pendant toute la séquence (`bg-select-name`).
+- **Curseur.** Le `TRACKBAR` expose `RangeValue` en écriture, sans `Value` : `set_value` passe par `RangeValuePattern.SetValue`, la position relue par `TBM_GETPOS` est exacte.
+- **Liste.** La `LISTBOX` expose `ScrollPattern` : les crans, les pages, `top`, `bottom` et le pourcentage passent, et la position lue est « scroll=N %,h0 % » (l'axe horizontal existe, à 0).
+- **Fenêtre de test.** Les contrôles de EP-013 (case à trois états, bouton activé plus tard, contrôle hérité) ne sont créés que pour le selftest (`TestWindow.actions`). Présents dans la fenêtre du bench, ils coûtent à eux seuls 25 % à `bg-act` (3 188 µs) et 12 % à `bg-settle` : le bench mesure la fenêtre sur laquelle sa référence a été prise.
+
+### Points soumis à Arthur (2026-11-13)
+
+1. **Sélection par nom sans déplier : mesurée, sans effet sur Win32.** Idée : lire d'abord les entrées conteneur replié et ne déplier que si le nom n'y est pas, pour ne pas montrer la liste. Arthur a donné son accord sous réserve de la mesure (2026-11-13 : « Ok vas-y »). Mesure du 2026-11-13 : liste déroulante Win32 repliée, `FindAll` ne rend aucune entrée, ni en vue de contrôle ni en vue brute ; la liste s'ouvre donc quand même, et la sélection est refaite après le repli comme avant. Le changement a été retiré : le critère de US-053 et le code restent ceux de la séquence du PRD. Les deux pistes qui restaient (messages natifs Win32, options d'un `<select>` replié dans Chrome) sont mesurées dans « Exploration du 2026-11-13 » ci-dessous.
+2. **Repli quand `Invoke` échoue : laissé en l'état.** `DoDefaultAction` n'est pas tenté quand `Invoke` existe mais échoue (entrée de liste Win32) : le PRD ne le demande que sans `InvokePattern`, rien ne mesure qu'il réussirait, et `select` couvre l'entrée de liste. Accord d'Arthur sur cette recommandation (2026-11-13 : « Ok vas-y »).
+
+### Exploration du 2026-11-13 : choisir une entrée sans ouvrir la liste
+
+Sondes hors dépôt (fenêtre Win32 d'un autre processus qui journalise les avis reçus par son propriétaire ; page `<select>` dans Chrome, profil à part, dont le titre reflète la valeur et le nombre d'événements `change`). Aucun code du produit n'a changé.
+
+**Win32 (`ComboBox`, `ListBox`).**
+
+| Voie | Liste ouverte | Sélection | Avis reçu par l'application |
+|---|---|---|---|
+| `ui_act select` avec un nom (UI Automation : déplier, `Select`, replier) | oui | changée | `CBN_DROPDOWN`, `CBN_SELENDCANCEL`, `CBN_CLOSEUP` ; jamais `CBN_SELCHANGE` |
+| `ui_act set_value` sur la liste déroulante (`ValuePattern.SetValue`) | non | changée (par le texte) | aucun |
+| `ui_act select` sur une entrée de `LISTBOX` | sans objet | changée | aucun (`LBN_SELCHANGE` absent) |
+| Messages natifs : `CB_GETLBTEXT` pour lire, `CB_SETCURSEL`, puis `WM_COMMAND` `CBN_SELCHANGE` au parent | non | changée | `CBN_SELCHANGE` |
+
+- Les messages natifs lisent les 3 entrées d'un autre processus en 0,3 ms et changent la sélection en 0,3 à 0,6 ms, premier plan et focus inchangés, sur `CBS_DROPDOWNLIST` comme sur `CBS_DROPDOWN`. `CB_SETCURSEL` seul ne prévient personne : l'avis au parent est à envoyer à part.
+- Par UI Automation, la sélection d'une liste Win32 change sans que l'application en soit prévenue : une application qui réagit au changement (champs dépendants, bouton activé) ne réagit pas, alors que `ui_act` répond « vérifié (sélectionné) ». `Toggle` sur une case prévient bien (`BN_CLICKED`).
+- Limites de la voie native : classes `ComboBox` et `ListBox` à chaînes seulement (pas les listes dessinées par le propriétaire sans `CBS_HASSTRINGS`, pas `ComboBoxEx32`), et refus par UIPI vers une fenêtre élevée, comme UI Automation.
+
+**Chrome (`<select>`).**
+
+- Menu fermé : aucun descendant, ni en vue de contrôle ni en vue brute. Les options n'existent qu'une fois le menu ouvert. `ValuePattern.SetValue` est accepté (non lecture seule) et ne change rien.
+- Chrome au premier plan : `ui_act select` avec un nom réussit (valeur changée, la page reçoit `change` et `input`), un nom inconnu est refusé avec les entrées.
+- Chrome visible mais non actif, session d'arrière-plan : `Expand` part et le menu ne s'ouvre pas (« contredit, état lu replié ») ; `select` avec un nom échoue sans rien changer, premier plan inchangé. Avec un client qui laisse UI Automation donner le focus, le menu s'ouvre et la sélection réussit, mais Chrome prend le premier plan.
+- Conclusion : aucune voie sans interférence pour un `<select>` de Chrome non actif. À reprendre dans US-058 et US-059 avec les autres limites de Chromium en arrière-plan.
+
+**Décidé.** La voie native pour `select` sur `ComboBox` et `ListBox` Win32 est retenue : un second mécanisme à côté de UI Automation, limité aux messages de sélection de ces deux classes (FR-46). Réponse d'Arthur (2026-11-13) à « Veux-tu que je l'écrive dans le PRD ? » : « Oui vas-y ». PRD 1.3 : EP-017, US-064, A22, risque 14, questions Q18 et Q19. Le code attend l'implémentation de US-064 ; EP-013 reste tel que livré.
+
+## Revue de EP-013 (2026-11-13)
+
+Trois corrections, sans changement de contrat :
+
+- **Case qui n'atteint pas l'état demandé en 2 bascules.** Le résultat suit la forme de US-055 comme les autres : « `check <id>` : contredit, état lu `<état>` après 2 bascules, sans atteindre « coché ». L'action est partie : ne la rejoue pas sans relire l'arbre. »
+- **Pause ou annulation pendant la relecture.** Une relecture coupée avant ses 400 ms ne contredit rien : l'audit enregistre `unverifiable`, plus `contradicted`.
+- **Pause ou annulation pendant qu'une liste dépliée se remplit** (`select` avec un nom). Le conteneur est replié et aucun `Select` ne part ; avant, l'entrée était encore sélectionnée après la pause.
+
+Inventaire de la recherche revu : les 11 actions sans interférence d'agent-desktop ont leur équivalent dans `ui_act` (click : `invoke` et son repli `DoDefaultAction` ; set-value et clear : `set_value`, valeur vide comprise ; toggle, check, uncheck, expand, collapse, select, scroll ; scroll-to : `scroll_into_view`).
+
+Mesures de la revue : `bg-act` 2 355 µs (référence 2 545 µs), `bg-settle` 65 217 µs (référence 64 061 µs), `bg-verdict` 1 290 µs au p95.

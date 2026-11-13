@@ -311,6 +311,7 @@ test {
     _ = @import("core/tools_test.zig");
     _ = @import("core/uitree.zig");
     _ = @import("core/a11y_test.zig");
+    _ = @import("core/act_test.zig");
     _ = @import("core/policy.zig");
     _ = @import("core/control.zig");
     _ = @import("core/guard.zig");

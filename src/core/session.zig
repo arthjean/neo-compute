@@ -56,6 +56,12 @@ pub const Session = struct {
     close_wait_ms: u32 = 2000,
     /// Period of the settling floor; tests shorten it.
     reread_ms: u32 = reread_floor_ms,
+    /// How long ui_act waits for a disabled element (US-054) and reads an
+    /// action's effect back (US-055); tests shorten them.
+    enable_wait_ms: u32 = 2000,
+    verify_ms: u32 = 400,
+    /// Time the last ui_act spent reading its effect back (US-055).
+    verify_ns: u64 = 0,
 
     pub fn init(gpa: std.mem.Allocator, long_side: u32) Session {
         return .{ .gpa = gpa, .long_side = long_side };

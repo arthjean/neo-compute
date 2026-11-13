@@ -99,7 +99,7 @@ test "a terminal at click takes clicks but no keyboard, set_value, right or midd
     const set = try h.call("ui_act", "{\"id\":\"e5\",\"action\":\"set_value\",\"value\":\"x\",\"observe\":\"none\"}");
     try testing.expect(isError(set));
     try expectContains(text(set), "Politique : WindowsTerminal.exe est en mode click");
-    try testing.expect(h.backend.ui_last_act == null);
+    try testing.expect(h.backend.ui_last_op == null);
     try testing.expect(!isError(try h.call("ui_act", "{\"id\":\"e5\",\"action\":\"focus\",\"observe\":\"none\"}")));
 }
 

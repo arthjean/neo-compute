@@ -521,8 +521,25 @@ pub const Windows = struct {
         return window.extraRoots(arena, hwnd);
     }
 
-    pub fn uiAct(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, action: uitree.Action, value: ?[]const u8) uitree.ActResult {
-        return self.ui.act(arena, hwnd, key, action, value);
+    /// One element as it is now: the preconditions of an action and what it
+    /// reads back (EP-013).
+    pub fn uiLive(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, read: uitree.LiveRead) uitree.LiveResult {
+        return self.ui.live(arena, hwnd, key, read);
+    }
+
+    /// One pattern call on an element.
+    pub fn uiOp(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, op: uitree.Op) uitree.OpResult {
+        return self.ui.op(arena, hwnd, key, op);
+    }
+
+    /// Key of the first ancestor of `key` with a Scroll pattern (US-052).
+    pub fn uiScrollHost(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64) ?u64 {
+        return self.ui.scrollHost(arena, hwnd, key);
+    }
+
+    /// The selectable descendants of `key` (US-053).
+    pub fn uiEntries(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64) uitree.EntriesResult {
+        return self.ui.entries(arena, hwnd, key);
     }
 
     /// Whether a control pattern call first gives the focus to its target

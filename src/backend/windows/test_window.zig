@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const w = @import("win32");
+const legacy_control = @import("legacy_control.zig");
 
 pub const button_label = "neo-compute selftest";
 pub const title = "neo-compute selftest window";
@@ -29,6 +30,7 @@ const msg_late_button = w.WM_APP + 6;
 const msg_remove_late = w.WM_APP + 7;
 const msg_churn = w.WM_APP + 8;
 const msg_silent = w.WM_APP + 9;
+const msg_enable_later = w.WM_APP + 10;
 
 /// Text of the plain edit field, and the part `select` selects (US-022).
 pub const note_text = "neo-compute selection";
@@ -43,6 +45,9 @@ const menu_first_id = 100;
 const animation_timer = 1;
 const late_timer = 2;
 const churn_timer = 3;
+const enable_timer = 4;
+/// TBM_GETPOS (WM_USER): the metadata does not name it.
+const tbm_getpos = w.WM_USER;
 const bar_first_id = 200;
 
 /// Controls of a `background` window (EP-011).
@@ -58,6 +63,13 @@ pub const list_prefix = "neo-compute item ";
 pub const late_label = "neo-compute late button";
 /// The label `churn` rewrites, followed by a counter.
 pub const churn_prefix = "neo-compute churn ";
+/// A three-state box (EP-013): Toggle without Invoke, and an MSAA default
+/// action.
+pub const tristate_label = "neo-compute tristate";
+/// A button created disabled, enabled by `enableLater` (US-054).
+pub const wait_label = "neo-compute wait button";
+/// The control without InvokePattern (US-051).
+pub const legacy_label = legacy_control.label;
 
 var last_click: std.atomic.Value(u32) = .init(0xFFFF_FFFF);
 var clicks: std.atomic.Value(u32) = .init(0);
@@ -89,6 +101,10 @@ fn stepChurnLabel() void {
 }
 /// The `background` window's check box: its BN_CLICKED is not a button command.
 var checkbox_hwnd: w.HWND = null;
+var tristate_hwnd: w.HWND = null;
+var wait_hwnd: w.HWND = null;
+/// BN_CLICKED notifications of the wait button.
+var wait_commands: std.atomic.Value(u32) = .init(0);
 /// Menu bar commands received.
 var bar_commands: std.atomic.Value(u32) = .init(0);
 var frame_parity: bool = false;
@@ -111,10 +127,18 @@ pub const TestWindow = struct {
     /// The target of the background probe and selftest (EP-011): not
     /// topmost, shown without activation, with the extra controls.
     background: bool = false,
+    /// Adds the controls of the complete semantic actions (EP-013) to a
+    /// `background` window: three-state box, wait button, legacy control.
+    /// Only the selftest asks for them: the bench and the probes measure
+    /// the window their references were taken on.
+    actions: bool = false,
     checkbox: std.atomic.Value(usize) = .init(0),
     field: std.atomic.Value(usize) = .init(0),
     combo: std.atomic.Value(usize) = .init(0),
     list: std.atomic.Value(usize) = .init(0),
+    slider: std.atomic.Value(usize) = .init(0),
+    tristate: std.atomic.Value(usize) = .init(0),
+    wait_button: std.atomic.Value(usize) = .init(0),
     thread: ?std.Thread = null,
 
     pub fn start(self: *TestWindow) !void {
@@ -173,6 +197,50 @@ pub const TestWindow = struct {
     /// First visible entry of the list box.
     pub fn listTop(self: *const TestWindow) isize {
         return ask(&self.list, w.LB_GETTOPINDEX);
+    }
+
+    /// Scrolls the list box back to its first entry.
+    pub fn listToTop(self: *const TestWindow) void {
+        _ = ask(&self.list, w.LB_SETTOPINDEX);
+    }
+
+    /// Selected entry of the drop-down list.
+    pub fn comboSelection(self: *const TestWindow) isize {
+        return ask(&self.combo, w.CB_GETCURSEL);
+    }
+
+    /// Position of the slider.
+    pub fn sliderPos(self: *const TestWindow) isize {
+        return ask(&self.slider, tbm_getpos);
+    }
+
+    /// State of the three-state box: 0 unchecked, 1 checked, 2 mixed.
+    pub fn tristateState(self: *const TestWindow) isize {
+        return ask(&self.tristate, w.BM_GETCHECK);
+    }
+
+    pub fn setTristate(self: *const TestWindow, state: usize) void {
+        _ = w.SendMessageW(@ptrFromInt(self.tristate.load(.acquire)), w.BM_SETCHECK, state, 0);
+    }
+
+    /// Default actions the legacy control ran.
+    pub fn legacyClicks(_: *const TestWindow) u32 {
+        return legacy_control.actions.load(.acquire);
+    }
+
+    /// Disables the wait button now and enables it in `ms`, on the
+    /// window's thread (US-054: `ui_act` waits for it).
+    pub fn enableLater(self: *TestWindow, ms: u32) void {
+        _ = w.PostMessageW(self.window(), msg_enable_later, ms, 0);
+    }
+
+    pub fn waitEnabled(self: *const TestWindow) bool {
+        return w.IsWindowEnabled(@ptrFromInt(self.wait_button.load(.acquire))) != 0;
+    }
+
+    /// BN_CLICKED notifications from the wait button.
+    pub fn waitCommands(_: *const TestWindow) u32 {
+        return wait_commands.load(.acquire);
     }
 
     /// Text of the plain field (UTF-16 units).
@@ -338,11 +406,17 @@ pub const TestWindow = struct {
                 return 0;
             },
             w.WM_COMMAND => {
-                // A menu bar command carries no control; the check box's
-                // click is not a button command.
+                // A menu bar command carries no control; a click of the
+                // check boxes is not a button command, and the wait button
+                // has its own count.
+                const from: usize = @bitCast(lparam);
                 if (lparam == 0) {
                     _ = bar_commands.fetchAdd(1, .acq_rel);
-                } else if ((wparam >> 16) & 0xFFFF == w.BN_CLICKED and @as(usize, @bitCast(lparam)) != @intFromPtr(checkbox_hwnd)) {
+                } else if ((wparam >> 16) & 0xFFFF != w.BN_CLICKED) {
+                    // A list or combo notification.
+                } else if (from == @intFromPtr(wait_hwnd)) {
+                    _ = wait_commands.fetchAdd(1, .acq_rel);
+                } else if (from != @intFromPtr(checkbox_hwnd) and from != @intFromPtr(tristate_hwnd)) {
                     _ = commands.fetchAdd(1, .acq_rel);
                 }
                 return 0;
@@ -370,6 +444,11 @@ pub const TestWindow = struct {
                 stepChurnLabel();
                 return 0;
             },
+            msg_enable_later => {
+                _ = w.EnableWindow(wait_hwnd, 0);
+                _ = w.SetTimer(hwnd, enable_timer, @truncate(wparam), null);
+                return 0;
+            },
             msg_remove_late => {
                 if (late_button != null) _ = w.DestroyWindow(late_button);
                 late_button = null;
@@ -379,6 +458,11 @@ pub const TestWindow = struct {
                 if (wparam == late_timer) {
                     _ = w.KillTimer(hwnd, late_timer);
                     late_button = w.CreateWindowExW(0, std.unicode.utf8ToUtf16LeStringLiteral("BUTTON"), std.unicode.utf8ToUtf16LeStringLiteral(late_label), w.WS_CHILD | w.WS_VISIBLE, 20, 130, 200, 40, hwnd, null, w.GetModuleHandleW(null), null);
+                    return 0;
+                }
+                if (wparam == enable_timer) {
+                    _ = w.KillTimer(hwnd, enable_timer);
+                    _ = w.EnableWindow(wait_hwnd, 1);
                     return 0;
                 }
                 if (wparam == churn_timer) {
@@ -445,8 +529,10 @@ pub const TestWindow = struct {
         }
     }
 
-    /// Menu bar, check box, plain field, drop-down list and list box of a
-    /// `background` window, each read back by the tests from Win32.
+    /// Menu bar, check box, plain field, drop-down list, list box,
+    /// three-state box, wait button and legacy control of a `background`
+    /// window, each read
+    /// back by the tests from Win32.
     fn addBackgroundControls(self: *TestWindow, hwnd: w.HWND, instance: anytype) bool {
         const bar = w.CreateMenu();
         const popup = w.CreatePopupMenu();
@@ -459,6 +545,12 @@ pub const TestWindow = struct {
         const combo = w.CreateWindowExW(0, utf16("COMBOBOX"), null, w.WS_CHILD | w.WS_VISIBLE | w.WS_VSCROLL | @as(u32, @intCast(w.CBS_DROPDOWNLIST)), 20, 236, 220, 160, hwnd, null, instance, null);
         churn_label = w.CreateWindowExW(0, utf16("STATIC"), utf16(churn_prefix ++ "0"), w.WS_CHILD | w.WS_VISIBLE, 260, 190, 180, 20, hwnd, null, instance, null);
         if (list == null or checkbox == null or field == null or combo == null or churn_label == null) return false;
+        if (self.actions) {
+            tristate_hwnd = w.CreateWindowExW(0, utf16("BUTTON"), utf16(tristate_label), w.WS_CHILD | w.WS_VISIBLE | @as(u32, @intCast(w.BS_AUTO3STATE)), 260, 216, 200, 22, hwnd, null, instance, null);
+            wait_hwnd = w.CreateWindowExW(0, utf16("BUTTON"), utf16(wait_label), w.WS_CHILD | w.WS_VISIBLE | w.WS_DISABLED, 260, 244, 200, 26, hwnd, null, instance, null);
+            const legacy = legacy_control.create(hwnd, instance, 260, 274, 200, 22);
+            if (tristate_hwnd == null or wait_hwnd == null or legacy == null) return false;
+        }
         for (0..list_count) |i| {
             var buf: [40]u8 = undefined;
             var wbuf: [40:0]u16 = undefined;
@@ -474,6 +566,8 @@ pub const TestWindow = struct {
         self.checkbox.store(@intFromPtr(checkbox), .release);
         self.field.store(@intFromPtr(field), .release);
         self.combo.store(@intFromPtr(combo), .release);
+        self.tristate.store(@intFromPtr(tristate_hwnd), .release);
+        self.wait_button.store(@intFromPtr(wait_hwnd), .release);
         return true;
     }
 
@@ -534,6 +628,7 @@ pub const TestWindow = struct {
         self.button.store(@intFromPtr(button), .release);
         self.password.store(@intFromPtr(password), .release);
         self.note.store(@intFromPtr(note), .release);
+        self.slider.store(@intFromPtr(slider), .release);
         self.thread_id.store(w.GetCurrentThreadId(), .release);
         self.ready.store(true, .release);
         var msg: w.MSG = undefined;
