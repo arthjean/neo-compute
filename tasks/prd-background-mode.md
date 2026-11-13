@@ -10,6 +10,7 @@
 | 1.2 | 2026-11-13 | Arthur Jean | Garde de premier plan prolongée 2 s après l'action, champ d'audit `guard_late` (US-050) ; abonnement UIA appris pour les applications qui changent sans événement (US-048) ; mesures d'agent-desktop à reprendre dans US-058 |
 | 1.3 | 2026-11-13 | Arthur Jean | Après l'exploration du 2026-11-13 (décision 0013) : EP-017 et US-064, sélection des listes Win32 par leurs messages natifs (A22, FR-46, risque 14, cas 25 et 26) ; note pour US-058 sur le `<select>` de Chrome ; questions Q18 et Q19 |
 | 1.4 | 2026-11-13 | Arthur Jean | Après la revue de EP-014 (décision 0013, « Revue de EP-014 ») : ligne « Fenêtre minimisée » gardée pour toute fenêtre Chromium (US-059) ; Q18 tranchée, la liste déroulante de la tâche Chrome de US-062 devient une liste Win32 ; EP-018 et US-065, gel appris des applications Chromium (A23, FR-47, risque 15, cas 27) |
+| 1.5 | 2026-11-13 | Arthur Jean | Après la revue de EP-015 (décision 0013, « Décisions d'Arthur après la revue de EP-015 ») : capture de fenêtre refusée quand le masque des mots de passe n'est pas garanti (balayage en échec, fenêtre élevée), conseil du refus « arbre web non construit » réécrit, `observe: screenshot` admis en mode arrière-plan avec l'image de la fenêtre cible (US-061, FR-42) |
 
 ## Problem Statement
 
@@ -581,6 +582,9 @@ Capturer une fenêtre recouverte pour un contrôle visuel, sans capturer l'écra
 - [ ] La capture d'une fenêtre de 2560x1440 tient < 60 ms p95 (scénario de bench `bg-capture`, `--write-baseline` pour lui seul).
 - [ ] Le selftest ajoute `bg-capture` (motif connu de la fenêtre de test recouverte, premier plan inchangé) et `bg-capture-password`.
 - [ ] Sans `window`, en modes `a11y` et `vision`, `screenshot` et `zoom` renvoient la même sortie qu'avant cette story.
+- [ ] Amendement 1.5 : étant donné un balayage qui ne garantit pas tous les champs mot de passe de la fenêtre (échec de UI Automation, plus de champs que le balayage n'en rend), alors la capture est refusée : « Capture indisponible : les champs mot de passe de <exe> n'ont pas pu être lus, l'image ne peut pas être masquée. Réessaie, ou utilise ui_tree. » Étant donné une fenêtre d'un processus élevé : « Capture indisponible : <exe> s'exécute avec des droits élevés, ses champs mot de passe ne peuvent pas être lus pour être masqués. Relance l'application sans élévation, ou agis toi-même. » Le screenshot d'écran garde la règle de la décision 0007.
+- [ ] Amendement 1.5 : étant donné un arbre web Chromium non construit, alors la capture est refusée : « Capture indisponible : l'arbre web de <exe> n'est pas construit, ses champs mot de passe ne peuvent pas être masqués. Si la fenêtre est recouverte, laisse une bande d'au moins 16 px visible avec window_set, puis réessaie ; sinon réessaie dans un instant. »
+- [ ] Amendement 1.5 : en mode arrière-plan, `observe: screenshot` sur `ui_act`, `window_set` et `app_launch` renvoie l'image de la fenêtre cible après l'action, jamais un écran ; `delta` reste le défaut. Une image refusée laisse la ligne de l'action, suivie de « Observation indisponible : <cause> ».
 
 ---
 
@@ -703,7 +707,7 @@ Savoir, sans liste de noms à tenir, quelles applications Chromium continuent de
 - FR-39: `ui_act` doit accepter les actions `check`, `uncheck` et `scroll`, une `value` numérique sur un élément à plage, et une `value` de nom avec `select` sur un conteneur.
 - FR-40: Une action à état relisible renvoie un verdict (vérifié, non vérifiable, contredit) et n'est jamais rejouée par le système.
 - FR-41: `ui_tree` doit accepter `root` et `depth`, `ui_find` doit accepter `gone` et les termes `id:` et `value:`, tous optionnels ; sans eux, la sortie est identique à celle d'avant ce PRD.
-- FR-42: `screenshot` et `zoom` doivent accepter `window` ; en mode arrière-plan, ils ne renvoient que la fenêtre cible, mots de passe masqués (FR-09).
+- FR-42: `screenshot` et `zoom` doivent accepter `window` ; en mode arrière-plan, ils ne renvoient que la fenêtre cible, mots de passe masqués (FR-09). Amendement 1.5 : une image de fenêtre ne part que si le balayage garantit le masque de tous ses champs mot de passe, et `observe: screenshot` renvoie cette même image en mode arrière-plan.
 - FR-43: Les modes `a11y` et `vision` gardent leur liste d'outils, leur kill switch, leur indicateur et leur stabilisation.
 - FR-44: L'audit de chaque action enregistre le mode, l'issue de la garde de premier plan et le verdict de livraison (étend FR-13).
 - FR-45: Le système ne doit offrir au modèle aucun moyen de quitter le mode arrière-plan ou d'autoriser une action intrusive.
