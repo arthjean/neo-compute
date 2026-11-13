@@ -8,6 +8,7 @@
 | 1.0 | 2026-11-12 | Arthur Jean | Version initiale : mode `background` sans interférence, cohabitation avec l'utilisateur, actions sémantiques complètes, perception ciblée, passe visuelle par fenêtre et mesure (EP-011 à EP-016), d'après la recherche `docs/research/2026-11-11-agent-desktop.md` |
 | 1.1 | 2026-11-13 | Arthur Jean | Amendement après la revue de EP-012 (décision 0013, « Amendement du 2026-11-13 ») : libellé du mode en anglais (US-046) ; garde de premier plan sur l'événement de premier plan, règle du geste et issues d'audit `third_party`, `same_app`, `unknown` (US-050) ; gestionnaires d'événements UIA côté client admis pour les fenêtres UWP (contrainte levée, US-048) ; A19 séparée entre Chromium et Electron, notes pour US-058 et US-059 |
 | 1.2 | 2026-11-13 | Arthur Jean | Garde de premier plan prolongée 2 s après l'action, champ d'audit `guard_late` (US-050) ; abonnement UIA appris pour les applications qui changent sans événement (US-048) ; mesures d'agent-desktop à reprendre dans US-058 |
+| 1.3 | 2026-11-13 | Arthur Jean | Après l'exploration du 2026-11-13 (décision 0013) : EP-017 et US-064, sélection des listes Win32 par leurs messages natifs (A22, FR-46, risque 14, cas 25 et 26) ; note pour US-058 sur le `<select>` de Chrome ; questions Q18 et Q19 |
 
 ## Problem Statement
 
@@ -37,7 +38,7 @@ Décisions de contrat proposées, à confirmer par Arthur dans la décision 0013
 4. `ui_act` reçoit trois actions et étend `value` ; `ui_tree`, `ui_find`, `screenshot` et `zoom` reçoivent des paramètres optionnels.
 5. Les modes `a11y` et `vision` gardent leur kill switch, leur indicateur, leur stabilisation et leur liste d'outils.
 
-Périmètre : 6 epics, 25 stories, 72 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013 et EP-014 (parité d'actions et perception, 24 points). Livraison 3 : EP-015 et EP-016 (passe visuelle et mesure, 12 points).
+Périmètre : 7 epics, 26 stories, 75 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014 et EP-017 (parité d'actions, perception et sélection native, 27 points). Livraison 3 : EP-015 et EP-016 (passe visuelle et mesure, 12 points).
 
 ## Goals
 
@@ -110,6 +111,7 @@ Key findings that informed this PRD:
 - **A19 :** l'arbre d'une fenêtre Chromium entièrement recouverte se met à jour après une action. Inconnu : Chromium documente l'arrêt du rendu, pas l'effet sur l'arbre. Mesuré par US-058. Amendement 1.1 : Chromium et Electron sont deux cas. Chrome calcule lui-même l'occlusion de ses fenêtres et suspend le rendu d'une page recouverte, ce qui fige son arbre ; il ignore les fenêtres `WS_POPUP` dans ce calcul (`ui/gfx/win/hwnd_util.cc`). VS Code désactive ce calcul (`CalculateNativeWinOcclusion`) : une fenêtre VS Code recouverte continue de rendre. US-058 mesure les deux séparément.
 - **A20 :** `PrintWindow` avec `PW_RENDERFULLCONTENT` rend une image non noire d'une fenêtre entièrement recouverte pour au moins 5 des 6 applications de référence. Cua rapporte du noir sur les fenêtres DirectComposition. Validé par US-060.
 - **A21 :** les trois actions nouvelles de `ui_act` et les paramètres `root` et `depth` de `ui_tree` gardent les définitions `alwaysLoad` sous 1 500 tokens estimés. Vérifié à la compilation par le budget existant.
+- **A22 :** les messages `CB_*` et `LB_*` lisent les entrées et changent la sélection d'une liste d'un autre processus sans l'ouvrir et sans changer le premier plan ni le focus, et un `WM_COMMAND` envoyé au parent lui fait voir le changement. Validé le 2026-11-13 sur une fenêtre de test (décision 0013, « Exploration ») ; les applications qui reflètent `WM_COMMAND` (WinForms) sont vérifiées dans US-064.
 
 ### Hard Constraints
 - Zig 0.17.0, bindings générés depuis `bindings/windows.zon`, aucune vtable écrite à la main, aucun type WinRT (absent de win32metadata).
@@ -501,6 +503,8 @@ Lire une région d'une grande application, relire un seul élément, et savoir q
 
 **Note de l'amendement 1.1 :** le leurre des sondes est désormais une fenêtre à cadre (`WS_CAPTION | WS_THICKFRAME`) : Chromium ignore une fenêtre `WS_POPUP` dans son calcul d'occlusion, donc l'absence de document web sous l'ancien leurre ne venait pas de l'occlusion. La sonde mesure en plus : si une action UIA force la mise à jour de l'arbre d'une page recouverte (l'accessibilité web s'active quand une requête UIA vise un nœud web) ; la plus petite bande visible qui suffit (16 px n'est qu'un point de départ) ; Chrome et VS Code séparément, VS Code ne calculant pas l'occlusion. Amendement 1.2 : la sonde sépare « arbre pas encore construit » (premier contact, qui se corrige en relisant) de « arbre figé par recouvrement », et vérifie que minimiser ou déplacer ce qui recouvre suffit à débloquer (mesures A1-5 et A1-6 d'agent-desktop).
 
+**Note de l'amendement 1.3 :** mesure du 2026-11-13 (décision 0013, « Exploration ») à reprendre ici : un `<select>` de Chrome n'expose aucune option menu fermé, ignore `ValuePattern.SetValue`, et ne s'ouvre que fenêtre active. Fenêtre visible mais non active, `expand` est contredit et `select` avec un nom échoue sans rien changer. La sonde mesure le même cas sur VS Code et sur une fenêtre recouverte.
+
 **Priority:** P1
 **Size:** S (2 pts)
 **Dependencies:** None
@@ -615,6 +619,40 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 - [ ] Étant donné une violation de non-interférence en mode `background`, alors le rapport la signale en tête et ouvre une story de correction.
 - [ ] Étant donné une régression de plus de 5 points sur les 20 tâches existantes en mode `a11y`, alors le rapport la signale en tête et ouvre une story de correction.
 
+### EP-017: Sélection native des listes Win32
+
+Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l'application qui la possède. Livraison 2.
+
+**Definition of Done:** `select` sur une `ComboBox` ou une `ListBox` Win32 change la sélection sans que la liste s'ouvre, et la fenêtre propriétaire reçoit `CBN_SELCHANGE` ou `LBN_SELCHANGE`. Les contrôles `bg-select-native` et `bg-select-notify` sont verts dans le selftest. Les budgets FR-22 tiennent.
+
+#### US-064: Sélection par messages natifs
+**Description:** En tant que Claude Code, je veux que choisir une entrée d'une liste Win32 prévienne l'application et n'affiche rien afin que l'application réagisse comme à un choix de l'utilisateur, sans liste ouverte sur son écran.
+
+**Contexte (mesures du 2026-11-13, décision 0013, « Exploration ») :** par UI Automation, la sélection d'une liste Win32 change sans que la fenêtre propriétaire en soit prévenue (`CBN_SELCHANGE` et `LBN_SELCHANGE` absents), et une liste déroulante doit être ouverte pour que ses entrées se lisent. Les messages de la liste elle-même lisent les entrées et posent la sélection liste fermée, en 0,3 à 0,6 ms, premier plan et focus inchangés ; l'avis au parent s'envoie à part.
+
+**Priority:** P1
+**Size:** M (3 pts)
+**Dependencies:** Blocked by US-053, US-055
+
+**Acceptance Criteria:**
+- [ ] `select` avec `value` sur un élément dont la fenêtre native a la classe réelle `ComboBox` (`RealGetWindowClass`) lit les entrées par `CB_GETCOUNT` et `CB_GETLBTEXT`, sans déplier : la fenêtre propriétaire ne reçoit aucun `CBN_DROPDOWN`.
+- [ ] La sélection est posée par `CB_SETCURSEL`, puis le parent reçoit `WM_COMMAND` avec `CBN_SELCHANGE` et l'identifiant du contrôle.
+- [ ] `select` avec `value` sur une `ListBox` à sélection simple suit la même voie (`LB_GETCOUNT`, `LB_GETTEXT`, `LB_SETCURSEL`), et le parent reçoit `LBN_SELCHANGE` quand la liste porte `LBS_NOTIFY`.
+- [ ] `select` sans `value` sur une entrée d'une `ListBox` Win32 garde l'appel `SelectionItemPattern.Select` ; le parent reçoit ensuite `LBN_SELCHANGE` quand la liste porte `LBS_NOTIFY`.
+- [ ] La correspondance du nom suit US-053 (casse et accents ignorés). Étant donné un nom introuvable ou porté par deux entrées, alors les messages de US-053 sont renvoyés, la sélection ne change pas et aucun `WM_COMMAND` n'est envoyé.
+- [ ] Le verdict relit `CB_GETCURSEL` ou `LB_GETCURSEL` : « vérifié (sélectionné) », et le résultat dit « par messages natifs ».
+- [ ] Étant donné une liste dessinée par son propriétaire sans chaînes (`CBS_OWNERDRAWFIXED` ou `CBS_OWNERDRAWVARIABLE` sans `CBS_HASSTRINGS`, et les styles `LBS_` équivalents), une `ComboBoxEx32`, une liste à sélection multiple ou une autre classe réelle, alors la voie UI Automation de US-053 est suivie, inchangée.
+- [ ] Chaque message part par `SendMessageTimeout` avec `SMTO_ABORTIFHUNG`, borné à 200 ms. Étant donné une fenêtre figée, alors le message de fenêtre figée existant est renvoyé, et une sélection posée sans avis au parent est signalée comme telle, jamais comme réussie.
+- [ ] Étant donné une fenêtre élevée, alors le refus existant (UIPI) est renvoyé avant tout message.
+- [ ] Les niveaux de politique existants s'appliquent (`click`), sur l'application de la fenêtre native.
+- [ ] Aucun outil, paramètre ni valeur d'énumération n'est ajouté : `tools/list` est identique.
+- [ ] FR-33 reste vrai : 0 appel à `SendInput` et à `SetFocus` ; premier plan, focus clavier, curseur et presse-papiers inchangés.
+- [ ] Le comportement vaut dans les trois modes.
+- [ ] La sélection native prend < 5 ms p95 hors stabilisation sur la fenêtre de test (mesuré le 2026-11-13 : 0,6 ms).
+- [ ] Une sonde vérifie la voie sur une liste déroulante WinForms, qui reçoit `WM_COMMAND` par réflexion : `SelectedIndexChanged` est levé. Sans .NET disponible, ce point est `skipped`.
+- [ ] Le selftest ajoute `bg-select-native` (liste déroulante de la fenêtre de test : sélection changée, `CBN_SELCHANGE` reçu, aucun `CBN_DROPDOWN`, session inchangée) et `bg-select-notify` (`LBN_SELCHANGE` reçu pour une entrée de la `LISTBOX`).
+- [ ] Les tests du cœur couvrent sur le backend factice : voie native prise, repli sur UI Automation, nom introuvable, doublon, fenêtre figée.
+
 ## Functional Requirements
 
 - FR-31: Le système doit offrir un mode `background` (`--mode background`) dont `tools/list` ne contient que des outils de classe d'interférence `none`.
@@ -632,6 +670,7 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 - FR-43: Les modes `a11y` et `vision` gardent leur liste d'outils, leur kill switch, leur indicateur et leur stabilisation.
 - FR-44: L'audit de chaque action enregistre le mode, l'issue de la garde de premier plan et le verdict de livraison (étend FR-13).
 - FR-45: Le système ne doit offrir au modèle aucun moyen de quitter le mode arrière-plan ou d'autoriser une action intrusive.
+- FR-46: `select` sur une liste Win32 classique (`ComboBox`, `ListBox`) doit changer la sélection sans ouvrir la liste et prévenir la fenêtre propriétaire (`CBN_SELCHANGE`, `LBN_SELCHANGE`). Les seuls messages natifs envoyés à une application sont ceux de cette sélection.
 
 ## Non-Functional Requirements
 
@@ -676,6 +715,8 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 | 22 | Fenêtre figée | La cible ne répond pas en 200 ms | Aucun aller-retour UIA | Message de fenêtre figée existant |
 | 23 | Session verrouillée | Verrouillage pendant une passe | Actions et captures refusées, reprise au retour | Message de session inactive existant |
 | 24 | Seconde instance | Un autre serveur contrôle déjà le bureau | Actions refusées (FR-14) | Message d'instance existant |
+| 25 | Liste sans chaînes | `select` avec un nom sur une liste dessinée par son propriétaire, une `ComboBoxEx32` ou une liste à sélection multiple | Voie UI Automation de US-053, aucun message natif | Résultat de US-053 |
+| 26 | Menu web fenêtre non active | `select` avec un nom sur un `<select>` de Chromium en mode arrière-plan | Aucune sélection, premier plan inchangé | « <conteneur> n'a aucune entrée sélectionnable » ; `expand` : « contredit, état lu replié » |
 
 ## Risks & Mitigations
 
@@ -693,7 +734,8 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 | 10 | La capture par fenêtre expose un mot de passe | Low | High | Balayage `IsPassword` de la fenêtre capturée avant l'encodage ; tâche canari ; refus des applications `deny` |
 | 11 | Le changement de `ui_act` (attente, verdict) fait régresser le mode `a11y` | Med | Med | Tests du cœur mis à jour ; campagne sur les 20 tâches existantes (US-063) ; seuil de 5 points |
 | 12 | La restauration du premier plan contrarie l'utilisateur qui voulait la fenêtre cible | Low | Low | Aucune restauration si un geste capable de changer la fenêtre de premier plan a été vu (clic hors de sa fenêtre, touche avec Alt ou Win) ; trois restaurations au plus par action |
-| 13 | 25 stories dépassent une livraison | High | Low | Trois livraisons ordonnées ; la livraison 1 est utilisable seule |
+| 13 | 26 stories dépassent une livraison | High | Low | Trois livraisons ordonnées ; la livraison 1 est utilisable seule |
+| 14 | Une liste de classe réelle `ComboBox` ou `ListBox` ne suit pas le protocole standard (sous-classée, données à la place du texte) : mauvaise entrée choisie ou application non prévenue | Low | Med | Styles vérifiés avant tout message ; verdict relu par `CB_GETCURSEL` ; repli sur UI Automation ; sonde WinForms dans US-064 |
 
 ## Non-Goals
 
@@ -711,6 +753,7 @@ What this version explicitly does NOT include:
 - **Changement du mode par défaut :** décidé après la campagne (Q10).
 - **Partition des fenêtres entre l'utilisateur et l'agent :** l'agent peut viser toute fenêtre que la politique permet.
 - **Lot d'actions en un appel, diff visuel entre deux captures.**
+- **Autres messages natifs :** hors la sélection de `ComboBox` et `ListBox` (US-064), aucun message de contrôle n'est envoyé à une application (pas de `BM_CLICK`, pas de messages de menu). L'extension à d'autres contrôles est la question Q19.
 
 ## Files NOT to Modify
 
@@ -739,6 +782,7 @@ Frame as questions for engineering input, not mandates:
 - **Capture :** `PrintWindow` dans un DC mémoire puis le réducteur et l'encodeur existants ? Le balayage des mots de passe (`src/backend/windows/uia.zig:882-980`) prend-il un handle quelconque ? À vérifier en US-061.
 - **Espace de coordonnées d'une capture de fenêtre :** origine de la fenêtre et échelle propre, ou espace screenshot de son écran rogné ? Recommandé : espace de l'écran rogné, pour que les rectangles de `ui_tree` restent valables sans conversion.
 - **Bindings :** `SetWinEventHook`, `UnhookWinEvent`, `PrintWindow`, `GetClipboardSequenceNumber` et `GetGUIThreadInfo` sont-ils tous générés sans `dll_aliases` nouveaux ? À vérifier au premier `zig build` de chaque story.
+- **Voie native (US-064) :** une primitive de backend optionnelle, sondée par `@hasDecl` comme les autres capacités, ou une variante de `uiOp` ? Le handle natif vient-il de `UIA_NativeWindowHandlePropertyId` sur le conteneur, déjà lu par la lecture avant action ? Pour une entrée de `ListBox` choisie par son id, l'avis seul suffit-il après `SelectionItemPattern.Select`, ou faut-il retrouver son index ? Recommandé : primitive distincte, handle lu avec l'élément, avis seul après `Select`.
 - **Migration :** aucune donnée à migrer. Le mode est à activer ; retour arrière : relancer sans `--mode background`. Les changements de `ui_act` valables dans les trois modes (US-054, US-055) n'ont pas d'interrupteur : la campagne US-063 mesure leur effet.
 
 ## Success Metrics
@@ -768,4 +812,6 @@ Frame as questions for engineering input, not mandates:
 - **Q15 :** l'isolation forte (session enfant, prise en charge sur Windows 11 Pro d'après Power Automate) fait-elle l'objet d'un PRD séparé ? Décision d'Arthur après la livraison 2.
 - **Q16 :** quel budget pour la campagne de US-063 (environ 8 tâches × 3 répétitions × 2 modes, plus 20 tâches × 3 répétitions, soit 108 exécutions) ? Décision d'Arthur avant US-063.
 - **Q17 :** `clipboard` `get` reste-t-il permis en mode arrière-plan ? Il ne gêne pas l'utilisateur mais lit ce qu'il vient de copier. Recommandé : permis, sous `system.clipboard`. Décision d'Arthur dans US-039.
+- **Q18 :** la tâche d'éval « une case et une liste déroulante d'une page Chrome » de US-062 demande ce que la mesure du 2026-11-13 dit impossible fenêtre non active (le `<select>` ne s'ouvre pas). La garde-t-on comme échec attendu et documenté, ou la liste déroulante devient-elle une liste Win32 ? Décision d'Arthur avant US-062, après US-058.
+- **Q19 :** étend-on la voie native aux onglets, listes et arbres des contrôles communs (`SysTabControl32`, `SysListView32`, `SysTreeView32`) si leur sélection par UI Automation ne prévient pas non plus l'application ? À mesurer d'abord. Décision d'Arthur après US-064.
 [/PRD]
