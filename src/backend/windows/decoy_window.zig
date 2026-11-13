@@ -122,6 +122,14 @@ fn wndProc(hwnd: w.HWND, msg: u32, wparam: w.WPARAM, lparam: w.LPARAM) callconv(
             takeForeground(hwnd);
             return 0;
         },
+        // A decoy that covers a window as large as the display is larger
+        // than the display (bench `bg-capture`): Windows clamps a framed
+        // window to the desktop's size otherwise.
+        w.WM_GETMINMAXINFO => {
+            const info: *w.MINMAXINFO = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            info.ptMaxTrackSize = .{ .x = 16384, .y = 16384 };
+            return 0;
+        },
         msg_allow => return w.AllowSetForegroundWindow(@truncate(wparam)),
         msg_animate => {
             if (wparam != 0) {

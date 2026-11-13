@@ -273,6 +273,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
     if (std.mem.eql(u8, name, "window_set")) return windowSetScenario(gpa, io, counter, &backend, iterations orelse 100);
     if (std.mem.eql(u8, name, "bg-act")) return backgroundScenario(gpa, io, counter, &backend, false, iterations orelse 200);
     if (std.mem.eql(u8, name, "bg-settle")) return backgroundScenario(gpa, io, counter, &backend, true, iterations orelse 60);
+    if (std.mem.eql(u8, name, "bg-capture")) return windowCaptureScenario(gpa, io, counter, &backend, iterations orelse 100);
     if (std.mem.eql(u8, name, "apps-catalog") or std.mem.eql(u8, name, "apps")) return catalogScenario(gpa, io, counter, &backend, name, iterations);
     if (std.mem.eql(u8, name, "app_launch")) return appLaunchScenario(gpa, io, counter, &backend, iterations orelse 5);
     for (apps) |app| if (std.mem.eql(u8, name, app.name)) return appScenario(gpa, io, counter, &backend, app, iterations orelse 50);
@@ -331,6 +332,63 @@ fn backgroundScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllo
     // A series is valid only behind the decoy: an action that took the
     // foreground would have been timed in another regime.
     if (w.GetForegroundWindow() != decoy.hwnd) return unsupported(gpa, "{s}: the foreground left the decoy during the series", .{name});
+    return outcome;
+}
+
+// ---------------------------------------------------------------- EP-015
+
+/// `screenshot` of a 2560x1440 test window entirely under the decoy, through
+/// the dispatcher of a `--mode background` server (US-061: < 60 ms p95): the
+/// 200 ms answer check, PrintWindow, the password scan of that window, the
+/// reduction and the JPEG. The decoy is larger than the display so that its
+/// visible frame covers a window of the display's size.
+fn windowCaptureScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, backend: *Windows, iterations: usize) !bench.Outcome {
+    const name = "bg-capture";
+    const size: [2]i32 = .{ 2560, 1440 };
+    const displays = backend.displays();
+    if (displays.len == 0) return unsupported(gpa, "{s}: no display enumerated", .{name});
+    const d = displays[0].rect;
+    const area: display.Rect = .{ .x = d.x - 24, .y = d.y - 60, .w = size[0] + 48, .h = size[1] + 84 };
+    var decoy = fixture.Decoy.start(io, area) catch |err| return unsupported(gpa, "{s}: the decoy window cannot take the foreground ({t})", .{ name, err });
+    defer decoy.stop(io);
+    var tw: TestWindow = .{ .background = true, .rect = .{ .left = d.x, .top = d.y, .right = d.x + size[0], .bottom = d.y + size[1] } };
+    tw.start() catch return unsupported(gpa, "{s}: test window cannot be created", .{name});
+    defer tw.stop();
+    w.Sleep(300);
+    _ = decoy.front();
+    decoy.tuck(tw.window());
+    w.Sleep(200);
+    // Judged on the frames Windows gives, not on the rectangle asked for.
+    const over = window.rect(decoy.hwnd) orelse return unsupported(gpa, "{s}: the decoy has no rectangle", .{name});
+    const under = window.rect(tw.window()) orelse return unsupported(gpa, "{s}: the test window has no rectangle", .{name});
+    if (under.w != size[0] or under.h != size[1]) return unsupported(gpa, "{s}: the test window is {d}x{d}, not {d}x{d}", .{ name, under.w, under.h, size[0], size[1] });
+    const covered = under.x >= over.x and under.y >= over.y and under.right() <= over.right() and under.bottom() <= over.bottom() and fixture.above(decoy.hwnd, tw.window());
+    if (!covered or w.GetForegroundWindow() != decoy.hwnd) return unsupported(gpa, "{s}: the target is not covered by the decoy in the foreground", .{name});
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const s = try gpa.create(ToolScenario);
+    defer gpa.destroy(s);
+    s.* = .{ .server = .init(counter.allocator(), io, backend, .{ .mode = .background }), .line = "" };
+    defer s.server.deinit();
+    defer backend.uiAutoFocus(true);
+    s.sink = .init(&s.sink_buf);
+    const first = try callTool(&s.server, arena.allocator(), "screenshot", "{{\"window\":\"0x{x}\"}}", .{@intFromPtr(tw.window())});
+    if (first.is_error) return unsupported(gpa, "{s}: {s}", .{ name, first.text });
+    s.line = try std.fmt.allocPrint(arena.allocator(), "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"screenshot\",\"arguments\":{{\"window\":\"0x{x}\"}}}}}}", .{@intFromPtr(tw.window())});
+    for (0..10) |_| {
+        var scratch: Timings = .{};
+        try s.step(&scratch);
+    }
+    const outcome = try bench.measure(gpa, io, s, iterations, counter);
+    if (w.GetForegroundWindow() != decoy.hwnd) {
+        // Named: a series lost once in ten here, to a window never seen
+        // again.
+        var cls: [128:0]u16 = undefined;
+        const fg = w.GetForegroundWindow();
+        const n: usize = @intCast(@max(0, w.GetClassNameW(fg, &cls, cls.len)));
+        return unsupported(gpa, "{s}: the foreground left the decoy during the series, for window 0x{x} of class `{f}`", .{ name, @intFromPtr(fg), std.unicode.fmtUtf16Le(cls[0..n]) });
+    }
     return outcome;
 }
 

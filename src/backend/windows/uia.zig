@@ -31,6 +31,7 @@ const com = @import("com.zig");
 const uitree = @import("../../core/uitree.zig");
 const display = @import("../../core/display.zig");
 const uia_events = @import("uia_events.zig");
+const input = @import("input.zig");
 const check = com.check;
 const release = com.release;
 
@@ -134,10 +135,10 @@ const Job = union(enum) {
     entries: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.EntriesResult = undefined },
     subtree: struct { arena: std.mem.Allocator, window: u64, key: u64, request: uitree.Request, out: uitree.SubtreeResult = undefined },
     element: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.ElementResult = undefined },
-    /// Rectangles of the visible password fields of the foreground window,
-    /// into `Worker.secret_buf` (no arena: the dispatcher keeps using its
-    /// own while the scan runs).
-    secrets,
+    /// Rectangles of the visible password fields of a window (null: the
+    /// foreground window), into `Worker.secret_buf` (no arena: the
+    /// dispatcher keeps using its own while the scan runs).
+    secrets: ?u64,
     /// Subscribes to the UI Automation events of `hwnd` in place of the
     /// window watched before; 0: none.
     watch: struct { hwnd: u64, out: bool = false },
@@ -157,6 +158,8 @@ pub const Worker = struct {
     pending: bool = false,
     secret_buf: [max_secrets]display.Rect = undefined,
     secret_len: usize = 0,
+    /// How the last scan ended; `failed` until it has run.
+    secret_status: display.SecretScan = .failed,
     /// Why the worker could not start UI Automation, if it failed.
     init_error: ?[]const u8 = null,
     /// Range and scroll round trips of the last snapshot, written by the
@@ -246,13 +249,15 @@ pub const Worker = struct {
         return self.job.watch.out;
     }
 
-    /// Starts the password scan of the foreground window without waiting
-    /// (US-019): it runs while the dispatcher captures and reduces.
-    pub fn beginSecrets(self: *Worker) void {
+    /// Starts the password scan of `hwnd` (null: the foreground window)
+    /// without waiting (US-019): it runs while the dispatcher captures and
+    /// reduces.
+    pub fn beginSecrets(self: *Worker, hwnd: ?u64) void {
         self.secret_len = 0;
+        self.secret_status = .failed;
         if (self.start() != null) return;
         self.finish();
-        self.job = .secrets;
+        self.job = .{ .secrets = hwnd };
         self.pending = true;
         _ = w.SetEvent(self.wake);
     }
@@ -261,6 +266,12 @@ pub const Worker = struct {
     pub fn secretRects(self: *Worker) []const display.Rect {
         self.finish();
         return self.secret_buf[0..self.secret_len];
+    }
+
+    /// How the scan started by `beginSecrets` ended, once it has.
+    pub fn secretStatus(self: *Worker) display.SecretScan {
+        self.finish();
+        return self.secret_status;
     }
 
     fn finish(self: *Worker) void {
@@ -342,7 +353,11 @@ pub const Worker = struct {
                     self.extras_ns = session.?.extras_ns;
                 },
                 .element => |*j| j.out = session.?.readElement(j.arena, j.window, j.key),
-                .secrets => self.secret_len = session.?.secrets(&self.secret_buf),
+                .secrets => |hwnd| {
+                    const scan = session.?.secrets(hwnd, &self.secret_buf);
+                    self.secret_len = scan.n;
+                    self.secret_status = scan.status;
+                },
                 .watch => |*j| j.out = session.?.watchWindow(j.hwnd),
             }
             _ = w.SetEvent(self.done);
@@ -1216,12 +1231,20 @@ const Session = struct {
         return cache.?;
     }
 
-    /// Rectangles of the on-screen IsPassword elements of the foreground
-    /// window, in one cached round trip under the provider timeout. A
-    /// failure masks nothing and is reported on stderr.
-    fn secrets(self: *Session, out: []display.Rect) usize {
-        const t = target(null);
-        if (t.desktop or t.hwnd == null or w.IsWindow(t.hwnd) == 0 or !responsive(t.hwnd)) return 0;
+    /// Rectangles of the on-screen IsPassword elements of `hwnd` (null:
+    /// the foreground window), in one cached round trip under the provider
+    /// timeout. A failure masks nothing and is reported on stderr; the
+    /// status says whether the rectangles are every field of the window
+    /// (a window capture is refused when they are not, US-061).
+    fn secrets(self: *Session, hwnd: ?u64, out: []display.Rect) Scan {
+        const t = target(hwnd);
+        if (t.desktop or t.hwnd == null or w.IsWindow(t.hwnd) == 0 or !responsive(t.hwnd)) return .{ .n = 0, .status = .failed };
+        // UIPI closes the tree of a process of higher integrity: what the
+        // scan finds there, if anything, is not known to be every field.
+        var pid: u32 = 0;
+        _ = w.GetWindowThreadProcessId(t.hwnd, &pid);
+        const reach: display.SecretScan = if (input.isElevatedPid(pid)) .elevated else .ok;
+        const short: display.SecretScan = if (reach == .elevated) .elevated else .failed;
         // Chromium builds its web tree only after the first UIA request
         // (webPending): until the document element shows up, a page's
         // password fields are on screen but not in the tree. The scan waits
@@ -1231,15 +1254,15 @@ const Session = struct {
         while (true) {
             const found = self.findSecrets(t.hwnd, out) catch |err| {
                 std.debug.print("neo-compute: password field scan of 0x{x} failed ({t}, hr=0x{x}): screenshot not masked\n", .{ @intFromPtr(t.hwnd), err, com.lastHr() });
-                return 0;
+                return .{ .n = 0, .status = short };
             };
-            if (!chromium or found.document) return found.n;
+            if (!chromium or found.document) return .{ .n = found.n, .status = if (found.overflow) short else reach };
             if (waited >= web_wait_ms) {
                 var r: w.RECT = undefined;
-                if (out.len == 0 or w.GetWindowRect(t.hwnd, &r) == 0) return found.n;
+                if (out.len == 0 or w.GetWindowRect(t.hwnd, &r) == 0) return .{ .n = found.n, .status = short };
                 std.debug.print("neo-compute: web tree of 0x{x} not ready after {d} ms: whole window masked\n", .{ @intFromPtr(t.hwnd), web_wait_ms });
                 out[0] = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
-                return 1;
+                return .{ .n = 1, .status = reach };
             }
             w.Sleep(web_poll_ms);
             waited += web_poll_ms;
@@ -1251,7 +1274,9 @@ const Session = struct {
     const web_wait_ms = 300;
     const web_poll_ms = 10;
 
-    const Found = struct { n: usize, document: bool };
+    /// `overflow`: more fields than `out` holds, the rest are not masked.
+    const Found = struct { n: usize, document: bool, overflow: bool = false };
+    const Scan = struct { n: usize, status: display.SecretScan };
 
     fn findSecrets(self: *Session, hwnd: w.HWND, out: []display.Rect) com.Error!Found {
         if (self.password_condition == null) {
@@ -1299,6 +1324,7 @@ const Session = struct {
         try check(array.vtable.get_Length(array, &len));
         var n: usize = 0;
         var document = false;
+        var overflow = false;
         var i: i32 = 0;
         while (i < len) : (i += 1) {
             var item: ?*w.IUIAutomationElement = null;
@@ -1310,13 +1336,17 @@ const Session = struct {
                 document = true;
                 continue;
             }
-            if (n == out.len or cachedBool(e, "get_CachedIsOffscreen")) continue;
+            if (cachedBool(e, "get_CachedIsOffscreen")) continue;
             var r: w.RECT = undefined;
             if (e.vtable.get_CachedBoundingRectangle(e, &r) < 0 or r.right <= r.left or r.bottom <= r.top) continue;
+            if (n == out.len) {
+                overflow = true;
+                continue;
+            }
             out[n] = .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
             n += 1;
         }
-        return .{ .n = n, .document = document };
+        return .{ .n = n, .document = document, .overflow = overflow };
     }
 
     fn elementCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {

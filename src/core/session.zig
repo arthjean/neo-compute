@@ -33,6 +33,9 @@ pub const Session = struct {
     current: ?usize = null,
     /// Mapping of the latest screenshot of each display.
     shots: [display.max_displays]?Mapping = @splat(null),
+    /// The last window `screenshot` showed alone (US-061), and the size of
+    /// its frame then: `zoom` reads its regions in that image.
+    window_shot: ?WindowShot = null,
     reducer: image.Reducer = .{},
     encoder: jpeg.Encoder = .{},
     /// Element ids and the last tree shown per window.
@@ -73,6 +76,8 @@ pub const Session = struct {
         self.ui.deinit(self.gpa);
         self.catalog.deinit();
     }
+
+    pub const WindowShot = struct { window: u64, w: i32, h: i32 };
 
     pub const Resolved = union(enum) { ok: Mapping, err: []const u8 };
 

@@ -23,12 +23,9 @@ const Point = [2]i32;
 const Observe = a11y.Observe;
 const settle_info = .{ .maximum = a11y.max_settle_ms };
 
-/// Background mode (US-041): a screenshot shows the screen, which is the
-/// user's window and not the covered target. Window capture comes with
-/// EP-015 (US-061); until then the variant is refused.
-const observe_intrusive = .{ .screenshot = "observe screenshot montrerait l'écran de l'utilisateur, pas ta fenêtre cible. Aucune action exécutée. Utilise observe delta ou none." };
-
-/// Observation after an action (US-015), from the tool's arguments.
+/// Observation after an action (US-015), from the tool's arguments. In
+/// background mode `observe: screenshot` is the image of the target window
+/// alone (US-061, decision 0013), so no tool refuses it.
 fn observed(ctx: anytype, r: Result, args: anytype, window: ?u64) Result {
     return a11y.observeAfter(ctx, r, args.observe, args.settle_timeout_ms, window);
 }
@@ -36,26 +33,59 @@ fn observed(ctx: anytype, r: Result, args: anytype, window: ?u64) Result {
 pub const screenshot = struct {
     pub const name = "screenshot";
     pub const description = "JPEG screenshot of a display.";
+    pub const background_description = "JPEG image of the target window alone (window, else the last one named or launched), even when covered.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true, .intrusion = .none };
+    /// US-061: in background mode the image is the target window's, never
+    /// the screen.
+    pub const background = true;
     pub const Args = struct {
         display: ?u32 = null,
+        window: ?[]const u8 = null,
+        pub const field_info = .{ .window = .{ .description = "Handle: that window alone, even covered" } };
+        pub const intrusive = .{ .display = .{ .any = "screenshot display montrerait l'écran de l'utilisateur, pas ta fenêtre cible. Aucune action exécutée. Utilise screenshot sans display, ou avec window." } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return screen.screenshot(ctx, args.display);
+        const window = switch (imageWindow(ctx, args.window)) {
+            .ok => |h| h orelse return screen.screenshot(ctx, args.display),
+            .err => |r| return r,
+        };
+        if (args.display != null) return Result.err("window et display ne se combinent pas : window montre une fenêtre, display un écran.");
+        return screen.screenshotWindow(ctx, window, a11y.imageNote(ctx, window));
     }
 };
 
 pub const zoom = struct {
     pub const name = "zoom";
     pub const description = "Region of the last screenshot at full resolution.";
+    pub const background_description = "Region of the target window's screenshot at full resolution.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
+    pub const background = true;
     pub const Args = struct {
         region: [4]i32,
+        window: ?[]const u8 = null,
+        pub const field_info = .{ .window = .{ .description = "Handle: region of that window's screenshot" } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
-        return screen.zoom(ctx, args.region);
+        const window = switch (imageWindow(ctx, args.window)) {
+            .ok => |h| h orelse return screen.zoom(ctx, args.region),
+            .err => |r| return r,
+        };
+        return screen.zoomWindow(ctx, window, args.region, a11y.imageNote(ctx, window));
     }
 };
+
+/// The window `screenshot` and `zoom` show alone (US-061): the one `window`
+/// names, else in background mode the session's target. Null: the screen.
+fn imageWindow(ctx: anytype, text: ?[]const u8) union(enum) { ok: ?u64, err: Result } {
+    const named = switch (optionalHandle(ctx, text)) {
+        .ok => |h| h,
+        .err => |r| return .{ .err = r },
+    };
+    return switch (a11y.resolveWindow(ctx, named)) {
+        .ok => |h| .{ .ok = h },
+        .err => |e| .{ .err = Result.err(e) },
+    };
+}
 
 fn ClickTool(comptime tool_name: []const u8, comptime desc: []const u8, comptime always: bool, comptime button: @import("input.zig").Button, comptime count: u8) type {
     return struct {
@@ -239,7 +269,8 @@ pub const ui_tree = struct {
         /// US-024: a web page's visible text nodes, in reading order.
         text: bool = false,
         /// US-031: also the screenshot with each actionable element's id
-        /// drawn on it (explained in the instructions).
+        /// drawn on it (explained in the instructions); in background mode
+        /// the image of the window alone (US-061).
         marks: bool = false,
         /// US-056: the subtree of one element, and the levels shown.
         root: ?[]const u8 = null,
@@ -248,7 +279,6 @@ pub const ui_tree = struct {
             .root = .{ .description = "Element id: its subtree only" },
             .depth = .{ .description = "Levels shown", .minimum = 1, .maximum = 25 },
         };
-        pub const intrusive = .{ .marks = .{ .true = "marks dessinerait les ids sur une capture de l'écran de l'utilisateur, pas de ta fenêtre cible. Aucune action exécutée. Utilise ui_tree sans marks." } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = switch (optionalHandle(ctx, args.window)) {
@@ -308,7 +338,6 @@ pub const ui_act = struct {
         pub const intrusive = .{
             .action = .{ .focus = "ui_act focus prendrait le focus clavier et le premier plan de l'utilisateur. Aucune action exécutée. Essaie invoke, select ou set_value, qui agissent sans le focus." },
             .fallback = .{ .click = "ui_act fallback click prendrait la souris de l'utilisateur. Aucune action exécutée. Essaie l'action sans fallback, ou une autre action de l'élément." },
-            .observe = observe_intrusive,
         };
     };
     pub fn run(ctx: anytype, args: Args) Result {
@@ -381,7 +410,6 @@ pub const window_set = struct {
         observe: ?Observe = null,
         settle_timeout_ms: ?u32 = null,
         pub const field_info = .{ .force = .{ .description = "With state closed: end the process after 2 s" }, .settle_timeout_ms = settle_info };
-        pub const intrusive = .{ .observe = observe_intrusive };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = parseHandle(args.window) orelse
@@ -412,7 +440,6 @@ pub const app_launch = struct {
         observe: ?Observe = null,
         settle_timeout_ms: ?u32 = null,
         pub const field_info = .{ .settle_timeout_ms = settle_info };
-        pub const intrusive = .{ .observe = observe_intrusive };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         return launch.launch(ctx, args.name, args.path, args.observe, args.settle_timeout_ms);

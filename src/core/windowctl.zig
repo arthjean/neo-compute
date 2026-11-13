@@ -36,12 +36,18 @@ fn fail(msg: []const u8) Outcome {
     return .{ .result = Result.err(msg), .window = null };
 }
 
+/// What a window whose thread does not answer gets (window_set, and the
+/// capture of US-061, which sends it messages too).
+pub fn hungText(ctx: anytype, handle: u64) []const u8 {
+    return fmt(ctx.arena, "La fenêtre 0x{x} ne répond pas : réessaie, ou ferme-la avec state: closed et force: true.", .{handle});
+}
+
 fn setError(ctx: anytype, handle: u64, r: display.SetResult) ?Outcome {
     return switch (r) {
         .ok => null,
         .closed => fail(closed_message),
         .elevated => fail(actions.uipi_message),
-        .hung => fail(fmt(ctx.arena, "La fenêtre 0x{x} ne répond pas : réessaie, ou ferme-la avec state: closed et force: true.", .{handle})),
+        .hung => fail(hungText(ctx, handle)),
         .failed => fail(fmt(ctx.arena, "Windows a refusé de modifier la fenêtre 0x{x} : réessaie, ou utilise window_focus puis la souris.", .{handle})),
     };
 }

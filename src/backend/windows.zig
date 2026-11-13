@@ -82,6 +82,8 @@ pub const Windows = struct {
     indicator_seen: [display.max_displays]i64 = @splat(0),
     /// GDI capture per display (US-032), and the displays whose duplication
     /// Windows refuses for good (DXGI_ERROR_UNSUPPORTED).
+    /// PrintWindow capture of one window (US-061).
+    window_shot: capture_mod.WindowShot = .{},
     gdi: [display.max_displays]capture_mod.Gdi = @splat(.{}),
     gdi_only: [display.max_displays]bool = @splat(false),
     /// Every capture goes through GDI (`--capture gdi`, the selftest and
@@ -117,6 +119,7 @@ pub const Windows = struct {
             self.clip = null;
         }
         for (&self.gdi) |*g| g.deinit();
+        self.window_shot.deinit();
         if (self.cap) |*c| c.deinit(self.gpa);
         self.cap = null;
     }
@@ -351,6 +354,25 @@ pub const Windows = struct {
         } };
     }
 
+    /// The image of window `handle` alone, whatever covers it (US-061):
+    /// PrintWindow, never the screen. The frame is valid until the next
+    /// call. Refused without a capture for a window that does not answer in
+    /// 200 ms, and on the secure desktop like any capture.
+    pub fn captureWindow(self: *Windows, handle: u64) display.WindowCapture {
+        if (self.secure()) return .failed;
+        return switch (self.window_shot.grab(@ptrFromInt(handle))) {
+            .ok => |s| .{ .ok = .{
+                .frame = .{ .pixels = s.pixels, .width = s.width, .height = s.height, .stride = s.stride, .source = .gdi },
+                .rect = s.rect,
+            } },
+            .closed => .closed,
+            .minimized => .minimized,
+            .hung => .hung,
+            .scaled => .scaled,
+            .failed => .failed,
+        };
+    }
+
     // ------------------------------------------------------------ input
 
     pub fn sendMouse(self: *Windows, events: []const core_input.MouseEvent) core_input.InputError!void {
@@ -493,13 +515,20 @@ pub const Windows = struct {
         return window.visible(arena);
     }
 
-    /// Starts the foreground window's password field scan on the UIA worker.
-    pub fn beginSecretScan(self: *Windows) void {
-        self.ui.beginSecrets();
+    /// Starts the password field scan of window `hwnd` (null: the
+    /// foreground window) on the UIA worker.
+    pub fn beginSecretScan(self: *Windows, hwnd: ?u64) void {
+        self.ui.beginSecrets(hwnd);
     }
 
     pub fn secretRects(self: *Windows) []const display.Rect {
         return self.ui.secretRects();
+    }
+
+    /// Whether those rectangles are every password field of the window
+    /// scanned (US-061).
+    pub fn secretScan(self: *Windows) display.SecretScan {
+        return self.ui.secretStatus();
     }
 
     // ------------------------------------------------------------ accessibility
@@ -988,6 +1017,8 @@ pub const Windows = struct {
     pub const eventsProbe = @import("windows/events_probe.zig").run;
     /// `occlusion-probe`: does the tree of a covered Chromium window stay current (US-058).
     pub const occlusionProbe = @import("windows/occlusion_probe.zig").run;
+    /// `capture-probe`: does PrintWindow capture a covered window (US-060).
+    pub const captureProbe = @import("windows/capture_probe.zig").run;
     /// `clipboard-probe`: formats and owner of each new clipboard content (A11).
     pub const clipboardProbe = @import("windows/clipboard_probe.zig").run;
 

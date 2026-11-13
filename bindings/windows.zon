@@ -210,5 +210,10 @@
                                     "IUIAutomationRangeValuePattern",            "BS_AUTO3STATE",                              "BM_SETCHECK",                               "EnableWindow",
         "CB_GETCURSEL",                               "LB_SETTOPINDEX",                            "WM_GETOBJECT",                               "IRawElementProviderSimple",                 "ILegacyIAccessibleProvider",
         "UiaReturnRawElementProvider",                "UiaHostProviderFromHwnd",                   "UiaRootObjectId",                            "ROLE_SYSTEM_GRAPHIC",
+
+        // Window capture (EP-015): PrintWindow of a covered window, the DPI
+        // a window renders at, and a decoy larger than its display.
+                              "PrintWindow",
+        "PW_RENDERFULLCONTENT",                       "GetDpiForWindow",                           "WM_GETMINMAXINFO",                           "MINMAXINFO",
     },
 }

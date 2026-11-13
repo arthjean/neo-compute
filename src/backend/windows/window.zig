@@ -428,9 +428,10 @@ pub fn ownerDisabled(hwnd: w.HWND) bool {
 
 // ---------------------------------------------------------------- window_set (US-027)
 
-/// Whether the window's thread answers within 200 ms: SetWindowPos and
-/// ShowWindow send it messages and would block on a hung window.
-fn answers(hwnd: w.HWND) bool {
+/// Whether the window's thread answers within 200 ms: SetWindowPos,
+/// ShowWindow and PrintWindow send it messages and would block on a hung
+/// window.
+pub fn answers(hwnd: w.HWND) bool {
     var result: usize = 0;
     return w.SendMessageTimeoutW(hwnd, w.WM_NULL, 0, 0, w.SMTO_ABORTIFHUNG, 200, &result) != 0;
 }

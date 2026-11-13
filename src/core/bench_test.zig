@@ -158,12 +158,75 @@ test "check fails above 110 % of the reference or above the absolute budget" {
     try testing.expectEqual(@as(usize, 0), try bench.check(a, baseline, &.{skipped}, &sink.writer));
 }
 
-test "a baseline keeps the worst p95 of its runs" {
-    var a = [_]bench.Result{fakeResult("capture", .capture, 1000)};
-    bench.mergeWorstP95(&a, &.{fakeResult("capture", .capture, 1300)});
-    bench.mergeWorstP95(&a, &.{fakeResult("capture", .capture, 1100)});
-    try testing.expectEqual(@as(u64, 1_300_000), a[0].outcome.ok.stages[@backingInt(timing.Stage.capture)].?.p95_ns);
-    try testing.expectEqual(@as(u64, 1_300_000), a[0].outcome.ok.total.p95_ns);
+test "a baseline keeps the worst p95 and p50 of its runs, and the p95 of each" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const passes = [_][]const bench.Result{
+        &.{fakeResult("capture", .capture, 1000)},
+        &.{fakeResult("capture", .capture, 1300)},
+        &.{fakeResult("capture", .capture, 1100)},
+    };
+    var out: std.Io.Writer.Allocating = .init(a);
+    try bench.writeBaseline(&passes, &out.writer);
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, a, out.written(), .{});
+    const stage = struct {
+        fn of(root: std.json.Value, section: []const u8, name: []const u8) std.json.Value {
+            return root.object.get(section).?.object.get("capture").?.object.get(name).?;
+        }
+    }.of;
+    try testing.expectEqual(@as(i64, 1300), stage(v, "reference_p95_us", "capture").integer);
+    try testing.expectEqual(@as(i64, 1300), stage(v, "reference_p95_us", "total").integer);
+    // fakeResult's p50 is 90 % of its p95.
+    try testing.expectEqual(@as(i64, 1170), stage(v, "reference_p50_us", "capture").integer);
+    const each = stage(v, "passes_p95_us", "total").array.items;
+    try testing.expectEqual(@as(usize, 3), each.len);
+    try testing.expectEqual(@as(i64, 1000), each[0].integer);
+    try testing.expectEqual(@as(i64, 1100), each[2].integer);
+}
+
+test "a noisy tail is held to the limit of its own noise, the median to 110 %" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var sink: std.Io.Writer.Allocating = .init(a);
+
+    // The upper fence: Q3 + 1.5 times the interquartile range.
+    var five = [_]f64{ 2880, 2355, 2765, 2750, 2644 };
+    try testing.expectEqual(@as(f64, 2765 + 1.5 * (2765 - 2644)), bench.fence(&five).?);
+    var three = [_]f64{ 1, 2, 3 };
+    try testing.expectEqual(@as(?f64, null), bench.fence(&three));
+
+    // bg-act as measured (decision 0013): reference 2 549 us, passes that
+    // spread over 22 %. 2 846 us is above 110 % of the reference and within
+    // the noise limit (2 946.5 us); 3 000 us is above both.
+    const noisy = "{\"reference_p95_us\":{\"bg-act\":{\"total\":2549}},\"passes_p95_us\":{\"bg-act\":{\"total\":[2880,2355,2765,2750,2644]}}}";
+    var r = fakeResult("bg-act", .accessibility, 2846);
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, noisy, &.{r}, &sink.writer));
+    try testing.expect(std.mem.indexOf(u8, sink.written(), "bg-act.total p95 2846.0 us exceeds 110 % of its 2549.0 us reference, within the 2946.5 us limit of its own noise") != null);
+    r = fakeResult("bg-act", .accessibility, 3000);
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, noisy, &.{r}, &sink.writer));
+    // Without its passes, or with too few, the 110 % rule alone decides.
+    r = fakeResult("bg-act", .accessibility, 2846);
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, "{\"reference_p95_us\":{\"bg-act\":{\"total\":2549}}}", &.{r}, &sink.writer));
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, "{\"reference_p95_us\":{\"bg-act\":{\"total\":2549}},\"passes_p95_us\":{\"bg-act\":{\"total\":[2880,2355,2765]}}}", &.{r}, &sink.writer));
+
+    // The median: 110 % of its reference, whatever the tail's noise.
+    const median = "{\"reference_p50_us\":{\"bg-act\":{\"total\":1800}},\"passes_p95_us\":{\"bg-act\":{\"total\":[2880,2355,2765,2750,2644]}}}";
+    r = fakeResult("bg-act", .accessibility, 2000); // p50 1 800
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, median, &.{r}, &sink.writer));
+    r = fakeResult("bg-act", .accessibility, 2300); // p50 2 070: 115 %
+    sink.clearRetainingCapacity();
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, median, &.{r}, &sink.writer));
+    try testing.expect(std.mem.indexOf(u8, sink.written(), "bg-act.total p50 2070.0 us exceeds 110 % of its 1800.0 us median reference") != null);
+
+    // A provider stage of a provider-relative scenario follows its witness
+    // probe, never the passes of a slow day.
+    const taskbar = "{\"reference_p95_us\":{\"snapshot\":{\"accessibility\":24000}},\"passes_p95_us\":{\"snapshot\":{\"accessibility\":[42000,41000,43000,42500,41500]}}}";
+    var snap = fakeResult("snapshot", .accessibility, 40_000);
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, taskbar, &.{snap}, &sink.writer));
+    snap.outcome.ok.witness_p95_ns = 39_000_000;
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, taskbar, &.{snap}, &sink.writer));
 }
 
 test "the marks budget is 8 ms over the screenshot of the same run, else over its absolute budget" {
@@ -201,6 +264,9 @@ test "the background scenarios are budgeted: bg-act on its total, bg-settle on i
     // A series that never settled has nothing to hold against the budget.
     try testing.expectEqual(@as(usize, 1), try bench.check(a, "{}", &.{fakeResult("bg-settle", .accessibility, 30_000)}, &sink.writer));
     // Its reference still never checks the settle stage, as for the others.
+    // bg-capture: the window capture's total (US-061).
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, "{}", &.{fakeResult("bg-capture", .capture, 59_000)}, &sink.writer));
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, "{}", &.{fakeResult("bg-capture", .capture, 61_000)}, &sink.writer));
     const ref = "{\"reference_p95_us\":{\"bg-settle\":{\"settle\":1}}}";
     try testing.expectEqual(@as(usize, 0), try bench.check(a, ref, &.{fakeResult("bg-settle", .settle, 100_000)}, &sink.writer));
 }

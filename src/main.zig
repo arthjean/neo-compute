@@ -22,7 +22,7 @@ pub const Server = mcp.Server(Backend, tools.all);
 const usage =
     \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision|background]
     \\                   [--policy FILE] [--rearm-key COMBO] [--capture auto|gdi] [--no-indicator]
-    \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|bg-act|bg-settle|APP>
+    \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|bg-act|bg-settle|bg-capture|APP>
     \\                         [--iterations N] [--check BASELINE.json] [--write-baseline FILE] [--capture auto|gdi]
     \\       neo-compute selftest [--capture auto|gdi]
     \\       neo-compute selftest --background
@@ -93,6 +93,13 @@ pub fn main(init: std.process.Init) !u8 {
         var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
         defer stderr.interface.flush() catch {};
         return Backend.occlusionProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
+    }
+    // US-060: whether PrintWindow captures a covered window, on stderr.
+    if (args.len > 1 and std.mem.eql(u8, args[1], "capture-probe") and @hasDecl(Backend, "captureProbe")) {
+        var err_buf: [4096]u8 = undefined;
+        var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
+        defer stderr.interface.flush() catch {};
+        return Backend.captureProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
     }
     // Started by selftest only: a still window of another process (US-032 wait CPU).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-still") and @hasDecl(Backend, "stillWindow")) return Backend.stillWindow(args[2..]);
@@ -258,10 +265,13 @@ fn benchCommand(init: std.process.Init, args: []const [:0]const u8) !u8 {
 
     const cwd = std.Io.Dir.cwd();
     if (baseline_out) |path| {
-        // The reference is the worst p95 over several runs (see mergeWorstP95).
-        for (1..bench.baseline_runs) |_| bench.mergeWorstP95(results, try bench.run(Backend, arena, init.io, which, iterations));
+        // The references and the noise limits come from several runs (see
+        // writeBaseline).
+        var passes: [bench.baseline_runs][]const bench.Result = undefined;
+        passes[0] = results;
+        for (passes[1..]) |*p| p.* = try bench.run(Backend, arena, init.io, which, iterations);
         var buf: std.Io.Writer.Allocating = .init(arena);
-        try bench.writeBaseline(results, &buf.writer);
+        try bench.writeBaseline(&passes, &buf.writer);
         try cwd.writeFile(init.io, .{ .sub_path = path, .data = buf.written() });
     }
     if (check_path) |path| {
@@ -334,4 +344,5 @@ test {
     _ = @import("core/regread.zig");
     _ = @import("core/system_test.zig");
     _ = @import("core/background_test.zig");
+    _ = @import("core/capture_test.zig");
 }

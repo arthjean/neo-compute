@@ -378,3 +378,112 @@ Limite connue, non corrigée : `renders_covered` ne nomme que `Code.exe`. Une au
 ### Décisions d'Arthur après la revue (2026-11-13)
 
 Réponse d'Arthur aux quatre recommandations de la revue : « Ok vas-y ». Les points 1, 2 et 4 ci-dessus portent leur décision. La limite de `renders_covered` ne se règle pas en allongeant la liste : une action lue « vérifié » sur une fenêtre recouverte prouve que l'application rend recouverte, et l'avertissement cesse alors pour elle pendant la session, comme l'abonnement UI Automation s'apprend par observation (US-048). C'est une idée de conception, pas une mesure : la story US-065 (EP-018, PRD 1.4) commence par la sonde de l'hypothèse A23 (aucune action lue « vérifié » sur un Chrome recouvert, élément du document web) et s'arrête si elle est infirmée.
+
+## Sonde US-060 et mesures de EP-015
+
+Mesures du 2026-11-13 sur la machine de référence (deux écrans de 2560x1440 à 96 ppp), par `neo-compute capture-probe` (sortie complète : `0013-capture-probe-run.txt`), `neo-compute selftest --background`, le bench et les tests du cœur. L'extension de contrat appliquée est celle de FR-42 : le paramètre optionnel `window` sur `screenshot` et `zoom`. Aucune autre modification de contrat.
+
+**À lire d'abord.** A20 est validée : `PrintWindow` avec `PW_RENDERFULLCONTENT` rend l'image des six applications de référence entièrement recouvertes, sans rien changer à la session. US-061 utilise donc `PrintWindow`, et Q13 (Windows.Graphics.Capture par WinRT) ne se pose pas. Une limite s'ajoute, hors hypothèse : l'image d'un Chrome recouvert est celle d'avant qu'il soit recouvert.
+
+### Méthode
+
+Chaque application de référence (Bloc-notes, Calculatrice, Paramètres, Explorateur, Chrome, VS Code) est ouverte, placée à 1100x800, capturée une fois en vue par DXGI (la référence), puis mise entièrement sous une fenêtre leurre encadrée d'un autre processus, qui tient le premier plan et a pressé une touche elle-même. Suivent 20 captures `PrintWindow`. Chaque capture est comparée à la référence par une empreinte réduite (luminance moyenne sur une grille de 32x32, écart moyen et plus grand écart d'une case), et la session est échantillonnée avant et après (premier plan, focus clavier, curseur). Le scintillement se lit sur les rectangles modifiés de DXGI au-dessus de la cible, contre une série témoin sans capture. Avant chaque `PrintWindow`, la fenêtre doit répondre à un message en 200 ms.
+
+### Résultats
+
+| Cible | Images non noires | Médiane | p95 | Écart à la référence DXGI (plus grande case) | Premier plan, focus, curseur changés | Écran modifié au-dessus de la cible |
+|---|---|---|---|---|---|---|
+| Fenêtre de test (480x320) | 20 sur 20 | 6,4 ms | 7,5 ms | sans référence | 0, 0, 0 | 0 |
+| Bloc-notes | 20 sur 20 | 6,3 ms | 8,4 ms | 0,3 (8) | 0, 0, 0 | 0 |
+| Calculatrice | 20 sur 20 | 6,2 ms | 8,3 ms | 0,4 (11) | 0, 0, 0 | 0 |
+| Paramètres | 20 sur 20 | 6,4 ms | 7,8 ms | 0,4 (11) | 0, 0, 0 | 0 |
+| Explorateur | 20 sur 20 | 10,0 ms | 12,2 ms | 0,3 (9) | 0, 0, 0 | 0 |
+| Chrome | 20 sur 20 | 5,4 ms | 7,0 ms | 0,2 (9) | 0, 0, 0 | 0 |
+| VS Code | 20 sur 20 | 5,0 ms | 8,1 ms | 0,3 (9) | 0, 0, 0 | 0 |
+
+Durées en build Debug, pour `PrintWindow` seul, fenêtres de 1100x800.
+
+- **Aucune image noire**, y compris sur les applications composées par DirectComposition (Chrome, VS Code, les applications XAML), où Cua rapporte du noir.
+- **L'image est celle du rectangle de fenêtre, pas du cadre visible.** `PrintWindow` rend les bordures invisibles de redimensionnement. Comparée à la capture DXGI de la fenêtre en vue, l'image diffère sur 0,3 à 0,4 % des pixels une fois décalée du cadre visible (`DWMWA_EXTENDED_FRAME_BOUNDS`), contre 1,9 à 10,4 % depuis son coin. La capture est donc recadrée sur le cadre visible : un pixel de l'image, plus l'origine donnée dans le texte, est une coordonnée de `ui_tree`.
+- **Aucun scintillement.** Aucun rectangle modifié au-dessus de la cible pendant les captures, comme dans la série témoin.
+- **Une fenêtre qui ne répond pas n'est jamais capturée.** Thread arrêté 2,5 s : refus après 203 ms, sans appel à `PrintWindow`.
+- **Chrome recouvert rend une image figée.** Une case cochée par UI Automation sur un Chrome entièrement recouvert : la capture 700 ms plus tard diffère de la précédente par 0 pixel, et par 153 pixels une fois la fenêtre en vue. L'action est délivrée, Chrome a cessé de dessiner (même cause que A19, EP-014). La même mesure sur VS Code : 95 644 pixels dès la capture recouverte, l'image est à jour.
+
+### Verdict
+
+**A20 est validée** : 6 applications sur 6 (seuil : 5) donnent 20 images non noires sur 20, entièrement recouvertes, avec un p95 sous 60 ms. US-061 utilise `PrintWindow`.
+
+### Capture de la fenêtre cible (US-061)
+
+- `screenshot` et `zoom` acceptent `window` dans les trois modes. Sans `window`, en mode a11y et vision, rien ne change (mêmes pixels, même texte : tests `capture_test.zig`). `window` et `display` ensemble sont refusés.
+- En mode arrière-plan, les deux outils sont listés (11 outils au lieu de 9). Sans `window`, ils visent la fenêtre de la session. `screenshot` avec `display` est refusé par la table des variantes intrusives, avant toute capture : aucun appel ne renvoie un écran entier.
+- Le texte de l'image : `window=0x<handle> size=<l>x<h> scale=<s> origin=<x>,<y> display=<n>`. L'image est à l'échelle du screenshot de l'écran de la fenêtre, `origin` est la position de son coin dans ce screenshot.
+- Une capture de fenêtre ne change pas l'espace de coordonnées des clics : il reste celui du dernier screenshot d'écran. `zoom` avec `window` prend sa région dans l'image de la fenêtre et refuse une fenêtre redimensionnée depuis son screenshot.
+- Les champs mot de passe sont noircis par le balayage `IsPassword` existant, lancé sur la fenêtre capturée et non sur la fenêtre au premier plan. Les rectangles `deny` de la politique ne s'appliquent pas à l'image d'une fenêtre autorisée (ce qui la recouvre n'y figure pas) ; une fenêtre `deny` est refusée par le message de politique existant.
+- `ui_tree` avec `marks: true` dessine les ids sur la capture de la fenêtre cible ; sa dernière ligne est « Image : » suivie du texte de l'image.
+- Refus : fenêtre minimisée, fenêtre fermée, fenêtre qui ne répond pas en 200 ms (message existant de `window_set`), image entièrement noire (« Capture noire : <exe> ne se laisse pas capturer hors de l'écran. Utilise ui_tree. »).
+
+### Coûts
+
+| Mesure | Résultat | Budget |
+|---|---|---|
+| `screenshot` d'une fenêtre de 2560x1440 entièrement recouverte, bench `bg-capture` (ReleaseFast), total p95 | série isolée : 25,4 à 26,1 ms sur 9 séries ; dans la passe complète : 29,7 à 31,4 ms ; référence enregistrée 30,8 ms (pire de 5 passes complètes) | 60 ms |
+| dont `PrintWindow` et recadrage (étape `capture`), p95 de la référence | 22,1 ms | |
+| dont réduction et JPEG, p95 de la référence | 4,9 ms et 5,3 ms | |
+| `screenshot` de la fenêtre de test (480x320) au selftest (Debug) | 25 ms | |
+| Refus d'une fenêtre qui ne répond pas | 205 ms | 200 ms de vérification, puis le refus |
+
+Une série isolée du bench sur dix s'est déclarée invalide (« the foreground left the decoy during the series ») sans se reproduire ; la fenêtre qui a pris le premier plan n'a pas été identifiée, le message la nomme désormais.
+
+**Référence de `bg-capture`.** Une première référence prise en série isolée (27,6 ms) a fait échouer le gate : en fin de passe complète, tout le processus est environ 25 % plus lent, étape `parse` comprise (2,3 µs en série isolée, 4,2 µs dans la passe), donc sans rapport avec la capture. La référence a été reprise par `--write-baseline` sur 5 passes complètes, écrites dans un fichier à part, dont seule l'entrée `bg-capture` a été reportée dans `bench/baseline.json` ; les autres scénarios sont identiques à ceux de git.
+
+**`bg-act` frôle sa limite.** Dans la passe complète, `bg-act` a donné 2 750, 2 846 et 2 644 µs sur trois gates (limite : 2 804 µs, 110 % de 2 549 µs), et 2 880 µs au pire de 5 passes. Le gate a donc échoué une fois sur trois sur ce scénario. Comparaison avec le code de `HEAD` construit à part, 5 séries isolées alternées : 2 314 à 2 782 µs pour `HEAD`, 2 310 à 2 662 µs pour EP-015, médianes de 1 680 à 1 793 µs et de 1 724 à 1 759 µs. EP-015 ne ralentit pas `bg-act` ; sa référence n'a pas été touchée.
+
+### Selftest
+
+`bg-list` attend 11 outils. Quatre contrôles sur la fenêtre de test entièrement sous le leurre, chacun avec la session inchangée : `bg-capture` (le fond magenta et le bouton de la fenêtre là où Win32 les place, donc ses propres pixels et non ceux du leurre), `bg-capture-password` (le champ, que la capture brute montre, est noir sur ses 5 600 pixels dans `screenshot` et dans un `zoom` dessus), `bg-capture-marks` (l'id du bouton dessiné à son coin, champ noir), `bg-capture-hung` (thread arrêté 1,5 s : refus en 205 ms).
+
+### Rust Switch Gate, condition 3
+
+Aucun défaut de la couche COM Zig : la capture passe par GDI, et le balayage des mots de passe a pris un handle au premier essai. Le compteur de la décision 0001 ne change pas.
+
+### Points soumis à Arthur
+
+0. **Marge de `bg-act` au bench.** Sa dispersion d'une série à l'autre (2 310 à 2 880 µs) dépasse la marge de 110 % de sa référence (2 549 µs) : le gate échoue par moments sans changement de code. Reprendre sa référence dans le régime de la passe complète est une décision d'Arthur (`--write-baseline` à sa demande).
+1. **Image figée d'un Chromium recouvert.** Le PRD ne le prévoit pas. `screenshot` et `zoom` ajoutent pour une cible Chromium recouverte : « Fenêtre recouverte : Chromium suspend son rendu, l'image peut être figée. Déplace-la avec window_set pour qu'une bande d'au moins 16 px reste visible (window_list donne les rectangles des fenêtres au-dessus), ou sur un autre écran. » `Code.exe` ne la reçoit pas (`renders_covered`). Ligne à garder ou à retirer.
+2. **Arbre web non construit.** Quand le balayage ne voit que le cadre d'un Chromium (arbre web absent), il ne peut pas situer les champs mot de passe : il masquait toute la fenêtre à l'écran. Pour une capture de fenêtre, une image entièrement noire n'apprend rien : l'outil refuse avec « Capture indisponible : l'arbre web de <exe> n'est pas construit, ses champs mot de passe ne peuvent pas être masqués. Appelle ui_tree sur cette fenêtre (une bande d'au moins 16 px visible si elle est recouverte), puis réessaie. » Message nouveau, à valider.
+3. **Fenêtre mise à l'échelle par Windows.** Une application qui ne suit pas le DPI de son écran est étirée par Windows : son image `PrintWindow` ne correspond à aucun rectangle de `ui_tree`. Elle est refusée (« Capture indisponible : Windows met <exe> à l'échelle […] Utilise ui_tree. »). Ce chemin n'a pas pu être exercé : les deux écrans de la machine sont à 96 ppp. À mesurer sur un écran à 150 %.
+4. **`observe: screenshot` en mode arrière-plan** reste refusé sur `ui_act`, `window_set` et `app_launch` : US-061 ne le demande pas. Il pourrait désormais renvoyer la capture de la fenêtre cible. Décision de contrat.
+5. **`tools/list` des modes a11y et vision.** Les fixtures `tools_list_a11y.json` et `tools_list_vision.json` changent pour le seul paramètre `window` de `screenshot` et `zoom` (FR-42). Le fixture du toolset `toolset_20260801.json` est intact.
+
+## Revue de EP-015 (2026-11-13)
+
+Aucune correction : les critères de US-060 et US-061 tiennent sur l'état final du dépôt, sans changement de code pendant la revue.
+
+Sonde relancée en entier (`capture-probe`, après la dernière modification de `capture.zig`) : 6 applications sur 6, 20 images non noires sur 20, entièrement recouvertes, p95 de 7,0 à 13,2 ms (Explorateur), premier plan, focus et curseur inchangés, aucun rectangle modifié au-dessus de la cible ; fenêtre figée refusée en 204 ms ; Chrome recouvert toujours figé (0 pixel, puis 153 en vue), VS Code à jour. A20 validée.
+
+Mesures de la revue : au bench, `bg-capture` 30 160 µs au p95 (référence 30 826 µs, budget 60 ms), dont `capture` 21 426 µs ; `bg-act` 2 718 µs (référence 2 549 µs, limite 2 804 µs) ; au selftest, `bg-capture` 29 ms, `bg-capture-hung` 204 ms.
+
+Vérifié en plus : `PrintWindow` sur la fenêtre du bureau (`GetDesktopWindow`) échoue, donc `screenshot` avec ce handle ne renvoie pas l'écran ; un handle de fenêtre enfant d'une application `deny` est refusé par la politique (le niveau vient du processus de la fenêtre).
+
+Limites connues, non corrigées :
+
+- **Balayage des mots de passe en échec.** Quand le balayage échoue ou ne voit rien (erreur UI Automation, fenêtre d'un processus élevé que UIPI ferme au serveur), l'image part sans masque, comme le screenshot d'écran depuis US-019. Pour une capture de fenêtre, le refus est possible, comme pour l'arbre web non construit : décision de comportement, laissée à Arthur.
+- **Masquage mesuré sur la fenêtre de test.** `bg-capture-password` prouve le masque sur un champ Win32 ; aucun contrôle ne le mesure sur un champ d'une page Chrome recouverte (arbre construit : champs trouvés par le même balayage ; non construit : capture refusée).
+- **Fenêtre du shell.** `screenshot` avec le handle de `Progman` rend le fond d'écran et les icônes du bureau sur les deux écrans (5120x1440), sans aucune autre fenêtre : c'est une fenêtre, pas l'écran.
+
+### Décisions d'Arthur après la revue de EP-015 (2026-11-13)
+
+Réponse d'Arthur aux recommandations issues de la recherche (`docs/research/2026-11-13-ep-015-points-ouverts.md`) : « Ok vas-y ». PRD 1.5.
+
+1. **Masque non garanti : la capture de fenêtre est refusée.** Le balayage rend désormais son issue (`secretScan` : `ok`, `elevated`, `failed`). Une image de fenêtre ne part que sur `ok` : balayage en échec, fenêtre qui ne répond pas au balayage, plus de champs que le tampon n'en tient, ou fenêtre d'un processus élevé donnent « Capture indisponible : […] ». Le screenshot d'écran garde la règle de la décision 0007. Mesuré le même jour : `PrintWindow` avec `PW_RENDERFULLCONTENT` rend du noir pour une fenêtre qui porte `WDA_MONITOR` ou `WDA_EXCLUDEFROMCAPTURE` (elle reçoit « Capture noire ») ; sans ce drapeau, l'affinité est ignorée. Non mesuré : ce que UI Automation et `PrintWindow` rendent d'une fenêtre élevée (aucune n'était visible).
+2. **Gate de bench.** La marge fixe de 110 % sur un p95 unique ne tenait pas : le p95 de `bg-act` varie de 22 % d'une série à l'autre sans changement de code. Le gate tient maintenant la médiane (p50) à 110 % de sa référence, et laisse passer un p95 au-dessus de 110 % tant qu'il reste sous la limite de son propre bruit (Q3 + 1,5 fois l'écart interquartile des p95 des passes de la baseline, comme rustc-perf). Les étages fournisseur de `snapshot` et `ui_tree` gardent leur sonde témoin (décision 0010) et ne prennent pas cette limite. `bench/baseline.json` gagne `reference_p50_us` et `passes_p95_us`, tirés de six passes complètes (cinq à 17 h 44, plus celle de la revue) ; les références `reference_p95_us` ne sont pas touchées. Pour `bg-act` : limite du p95 2 910 µs (contre 2 804), médiane 1 980 µs.
+3. **Ligne « image figée »** : gardée. Le code de Chromium le confirme (page recouverte passée à l'état caché, aucune réponse à `WM_PRINT`).
+4. **Refus « arbre web non construit »** : gardé, conseil réécrit (bande de 16 px d'abord, puis réessayer). Le balayage est déjà la requête qui déclenche l'arbre.
+5. **Fenêtre mise à l'échelle** : refus gardé ; reste à l'exercer avec un écran à 125 % (séance à faire avec Arthur).
+6. **`observe: screenshot` en mode arrière-plan** : admis, il renvoie l'image de la fenêtre cible ; `delta` reste le défaut. Les trois variantes intrusives correspondantes sont retirées (il en reste quatre). Contrôle `bg-observe-shot` au selftest.
+7. **Fixtures `tools/list`** : entérinées.
+
+Constats sur le gate de bench, le soir du 2026-11-13, machine partagée (34 % de charge, plusieurs autres sessions) : cinq passes complètes, aucune sans échec, chacune sur un chemin différent et non modifié (`snapshot` et `ui_tree` au-dessus de leur budget de 50 ms avec une sonde témoin de 42 à 77 ms, `window_list` à 1 µs près sur `serialize`, une passe entière ralentie jusqu'à l'encodage JPEG). Comparaison alternée avec une copie de `HEAD` : `snapshot` 50 à 57 ms pour `HEAD`, 50 ms pour le code actuel ; `window_list` 422 à 495 µs pour `HEAD`, 386 à 433 µs pour le code actuel. Les échecs viennent de la machine. `bg-capture`, seul chemin mesuré que ces changements touchent, est resté entre 26,5 et 29,2 ms (budget 60 ms). Dans une des passes, `bg-act` à 2 906 µs a passé par sa limite de bruit, là où l'ancienne règle échouait. Rejoué plus tard le même soir sur la machine au calme (14 % de charge, applications d'Arthur fermées) : aucune régression. `bg-capture` 25 906 µs au p95, `screenshot` 10 132 µs, `snapshot` 43 096 µs (sonde témoin 42 894 µs), `ui_tree` 38 082 µs. Deux scénarios mesurent alors la moitié de leur référence : `bg-act` 1 273 µs au p95 et 977 µs de médiane (références 2 549 et 1 980 µs), `window_list` 258 µs (référence 601 µs). Leurs références, prises sur un bureau chargé de fenêtres, laisseraient donc passer un doublement sur un bureau au calme : le contenu du bureau pèse autant que la charge du processeur.
+
+Limite du nouveau gate, constatée : le bruit d'une séance à l'autre dépasse celui de cinq passes consécutives (les cinq passes de 17 h 44 donnaient à `bg-act` une limite de 2 805 µs, la sixième passe l'a portée à 2 910). La baseline doit donc réunir des passes de plusieurs séances.

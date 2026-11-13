@@ -87,6 +87,8 @@ pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: b
     // over the target repaints itself.
     .{ .scenario = "bg-act", .ms = 20 },
     .{ .scenario = "bg-settle", .ms = 150, .stage = .settle },
+    // US-061: screenshot of a covered 2560x1440 window, in background mode.
+    .{ .scenario = "bg-capture", .ms = 60 },
 };
 
 /// Total p95 in ms of scenario `name` in `results`, else its absolute
@@ -319,14 +321,24 @@ fn providerRelative(scenario: []const u8) bool {
     return false;
 }
 
-/// Baseline file: `{"reference_p95_us": {"<scenario>": {"<stage>": us}}}`.
+/// Baseline file: `{"reference_p95_us": {"<scenario>": {"<stage>": us}},
+/// "reference_p50_us": the same shape, "passes_p95_us": {"<scenario>":
+/// {"<stage>": [us of each baseline pass]}}}`; the last two are optional.
 /// Fails when a p95 exceeds 110 % of its reference by at least
-/// `min_regression_us` (and, for a provider stage of a provider-relative
-/// scenario, 110 % of the witness probe), or a scenario total exceeds its
-/// absolute budget. Returns the number of violations.
+/// `min_regression_us` and the limit its own noise sets (`fence` of its
+/// baseline passes; for a provider stage of a provider-relative scenario,
+/// 110 % of the witness probe instead), when a p50 exceeds 110 % of its
+/// reference, or when a scenario total exceeds its absolute budget. The
+/// p95 of a few hundred iterations is set by its slowest ten: it moved by
+/// 22 % from one series to the next where the median moved by 2 to 7 %
+/// (`bg-act`, decision 0013), so the median carries the tight rule and the
+/// tail a limit as wide as it was measured to vary. Returns the number of
+/// violations.
 pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []const Result, log: *Io.Writer) !usize {
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, baseline_json, .{});
-    const refs = if (v.object.get("reference_p95_us")) |r| r.object else std.json.ObjectMap.empty;
+    const refs = section(v, "reference_p95_us");
+    const medians = section(v, "reference_p50_us");
+    const noise = section(v, "passes_p95_us");
     var violations: usize = 0;
     for (results) |r| {
         const ok = switch (r.outcome) {
@@ -371,43 +383,136 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
                 try log.print("bench: {s} total p95 {d:.2} ms exceeds the {d} ms budget\n", .{ r.name, p95_ms, b.ms });
             }
         };
-        const scenario_refs = refs.get(r.name) orelse continue;
-        const witness: ?u64 = if (providerRelative(r.name)) ok.witness_p95_ns else null;
+        const base: Base = .{
+            .p95 = refs.get(r.name),
+            .p50 = medians.get(r.name),
+            .passes = noise.get(r.name),
+            .relative = providerRelative(r.name),
+            .witness_ns = if (providerRelative(r.name)) ok.witness_p95_ns else null,
+        };
+        if (base.p95 == null and base.p50 == null) continue;
         for (ok.stages, 0..) |maybe, i| {
             const st = maybe orelse continue;
             // Settling time depends on the application on screen: reported,
             // never checked.
             if (i == @backingInt(Stage.settle)) continue;
-            violations += try compare(log, r.name, @tagName(@as(Stage, @fromBackingInt(@intCast(i)))), st, scenario_refs, witness);
+            violations += try compare(log, r.name, @tagName(@as(Stage, @fromBackingInt(@intCast(i)))), st, base);
         }
-        violations += try compare(log, r.name, "total", ok.total, scenario_refs, witness);
+        violations += try compare(log, r.name, "total", ok.total, base);
     }
     return violations;
 }
 
-fn compare(log: *Io.Writer, scenario: []const u8, stage: []const u8, st: Stats, refs: std.json.Value, witness_ns: ?u64) !usize {
-    if (refs != .object) return 0;
-    const ref_v = refs.object.get(stage) orelse return 0;
-    const ref: f64 = switch (ref_v) {
+fn section(v: std.json.Value, name: []const u8) std.json.ObjectMap {
+    if (v != .object) return .empty;
+    const s = v.object.get(name) orelse return .empty;
+    return if (s == .object) s.object else .empty;
+}
+
+/// What a scenario is held against: its references, the p95 of each
+/// baseline pass, and for a provider-relative scenario its witness probe.
+const Base = struct {
+    p95: ?std.json.Value,
+    p50: ?std.json.Value,
+    passes: ?std.json.Value,
+    relative: bool,
+    witness_ns: ?u64,
+};
+
+fn number(v: std.json.Value) ?f64 {
+    return switch (v) {
         .float => |f| f,
         .integer => |n| @floatFromInt(n),
-        else => return 0,
+        else => null,
     };
-    const p95 = us(st.p95_ns);
-    // Below 1 us of difference the timer resolution dominates: 0.3 to 0.4 us
-    // is one tick, not a regression.
-    if (p95 <= ref * 1.10 or p95 - ref < min_regression_us) return 0;
-    if (witness_ns) |wn| if (providerStage(stage)) {
-        const witness = us(wn);
-        if (p95 <= witness * 1.10) {
-            try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference, within 110 % of the {d:.1} us witness probe (provider-relative)\n", .{ scenario, stage, p95, ref, witness });
-            return 0;
-        }
-        try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference and of the {d:.1} us witness probe\n", .{ scenario, stage, p95, ref, witness });
-        return 1;
-    };
-    try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference\n", .{ scenario, stage, p95, ref });
-    return 1;
+}
+
+fn referenceOf(refs: ?std.json.Value, stage: []const u8) ?f64 {
+    const o = refs orelse return null;
+    if (o != .object) return null;
+    return number(o.object.get(stage) orelse return null);
+}
+
+/// Fewest baseline passes a noise limit is drawn from, and the most read.
+pub const min_passes = 4;
+const max_passes = 32;
+
+/// Upper fence of `values` (Tukey: the third quartile plus 1.5 times the
+/// interquartile range), sorted in place: the limit a new measure of the
+/// same code stays under, drawn from how far its own measures spread.
+/// rustc-perf judges a change against the same kind of bound. Null below
+/// `min_passes` values.
+pub fn fence(values: []f64) ?f64 {
+    if (values.len < min_passes) return null;
+    std.mem.sort(f64, values, {}, std.sort.asc(f64));
+    const q1 = quantile(values, 0.25);
+    const q3 = quantile(values, 0.75);
+    return q3 + 1.5 * (q3 - q1);
+}
+
+fn quantile(sorted: []const f64, q: f64) f64 {
+    const pos = q * @as(f64, @floatFromInt(sorted.len - 1));
+    const lo: usize = @intFromFloat(@floor(pos));
+    const hi = @min(lo + 1, sorted.len - 1);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - @as(f64, @floatFromInt(lo)));
+}
+
+fn noiseLimit(passes: ?std.json.Value, stage: []const u8) ?f64 {
+    const o = passes orelse return null;
+    if (o != .object) return null;
+    const list = o.object.get(stage) orelse return null;
+    if (list != .array) return null;
+    var buf: [max_passes]f64 = undefined;
+    var n: usize = 0;
+    for (list.array.items) |item| {
+        if (n == buf.len) break;
+        buf[n] = number(item) orelse continue;
+        n += 1;
+    }
+    return fence(buf[0..n]);
+}
+
+fn compare(log: *Io.Writer, scenario: []const u8, stage: []const u8, st: Stats, base: Base) !usize {
+    var violations: usize = 0;
+    // A provider stage of a provider-relative scenario follows the witness
+    // probe (decision 0010), never a noise limit: the passes of a day the
+    // provider was slow would clear the regressions of the next.
+    const provider = base.relative and providerStage(stage);
+    if (referenceOf(base.p95, stage)) |ref| check: {
+        const p95 = us(st.p95_ns);
+        // Below 1 us of difference the timer resolution dominates: 0.3 to
+        // 0.4 us is one tick, not a regression.
+        if (p95 <= ref * 1.10 or p95 - ref < min_regression_us) break :check;
+        if (provider) if (base.witness_ns) |wn| {
+            const witness = us(wn);
+            if (p95 <= witness * 1.10) {
+                try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference, within 110 % of the {d:.1} us witness probe (provider-relative)\n", .{ scenario, stage, p95, ref, witness });
+                break :check;
+            }
+            try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference and of the {d:.1} us witness probe\n", .{ scenario, stage, p95, ref, witness });
+            violations += 1;
+            break :check;
+        };
+        if (!provider) if (noiseLimit(base.passes, stage)) |limit| {
+            if (p95 <= limit) {
+                try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference, within the {d:.1} us limit of its own noise\n", .{ scenario, stage, p95, ref, limit });
+                break :check;
+            }
+            try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference and the {d:.1} us limit of its own noise\n", .{ scenario, stage, p95, ref, limit });
+            violations += 1;
+            break :check;
+        };
+        try log.print("bench: {s}.{s} p95 {d:.1} us exceeds 110 % of its {d:.1} us reference\n", .{ scenario, stage, p95, ref });
+        violations += 1;
+    }
+    if (referenceOf(base.p50, stage)) |ref| check: {
+        const p50 = us(st.p50_ns);
+        if (p50 <= ref * 1.10 or p50 - ref < min_regression_us) break :check;
+        if (provider) if (base.witness_ns) |wn| if (p50 <= us(wn) * 1.10) break :check;
+        try log.print("bench: {s}.{s} p50 {d:.1} us exceeds 110 % of its {d:.1} us median reference\n", .{ scenario, stage, p50, ref });
+        violations += 1;
+    }
+    return violations;
 }
 
 /// Smallest p95 increase over a reference that counts as a regression.
@@ -416,42 +521,49 @@ pub const min_regression_us = 1.0;
 /// Number of runs a baseline is recorded over (`--write-baseline`).
 pub const baseline_runs = 5;
 
-/// Keeps, per stage, the worst p95 of `into` and `other` (same scenarios in
-/// the same order). A baseline built this way records the run-to-run noise of
-/// the machine, so the 110 % rule flags regressions rather than jitter.
-pub fn mergeWorstP95(into: []Result, other: []const Result) void {
-    for (into, other) |*r, o| {
-        if (r.outcome != .ok or o.outcome != .ok) continue;
-        const dst = &r.outcome.ok;
-        const src = o.outcome.ok;
-        for (&dst.stages, src.stages) |*d, maybe| if (d.*) |*st| if (maybe) |os| {
-            st.p95_ns = @max(st.p95_ns, os.p95_ns);
-        };
-        dst.total.p95_ns = @max(dst.total.p95_ns, src.total.p95_ns);
-    }
+/// Stage `i` of a result, the total at `stage_count`.
+fn statOf(r: Result, i: usize) ?Stats {
+    return switch (r.outcome) {
+        .unsupported => null,
+        .ok => |ok| if (i == stage_count) ok.total else ok.stages[i],
+    };
 }
 
-/// Writes a baseline whose references are the given p95 values.
-pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
+/// Writes a baseline from `passes` runs of the same scenarios in the same
+/// order: per stage the worst p95 and the worst p50 (so the 110 % rule
+/// flags regressions rather than jitter), and the p95 of every pass, from
+/// which `check` draws the limit of the stage's own noise.
+pub fn writeBaseline(passes: []const []const Result, w: *Io.Writer) !void {
     var s: std.json.Stringify = .{ .writer = w, .options = .{ .whitespace = .indent_2 } };
     try s.beginObject();
-    try s.objectField("reference_p95_us");
-    try s.beginObject();
-    for (results) |r| switch (r.outcome) {
-        .unsupported => {},
-        .ok => |ok| {
-            try s.objectField(r.name);
+    const Kind = enum { reference_p95_us, reference_p50_us, passes_p95_us };
+    inline for (@typeInfo(Kind).@"enum".field_names) |name| {
+        const kind = @field(Kind, name);
+        try s.objectField(name);
+        try s.beginObject();
+        for (passes[0], 0..) |first, index| {
+            if (first.outcome != .ok) continue;
+            try s.objectField(first.name);
             try s.beginObject();
-            for (ok.stages, 0..) |maybe, i| if (maybe) |st| {
-                try s.objectField(@tagName(@as(Stage, @fromBackingInt(@intCast(i)))));
-                try s.write(us(st.p95_ns));
-            };
-            try s.objectField("total");
-            try s.write(us(ok.total.p95_ns));
+            for (0..stage_count + 1) |i| {
+                if (statOf(first, i) == null) continue;
+                try s.objectField(if (i == stage_count) "total" else @tagName(@as(Stage, @fromBackingInt(@intCast(i)))));
+                if (kind == .passes_p95_us) try s.beginArray();
+                var worst: u64 = 0;
+                for (passes) |pass| {
+                    const st = statOf(pass[index], i) orelse continue;
+                    switch (kind) {
+                        .reference_p95_us => worst = @max(worst, st.p95_ns),
+                        .reference_p50_us => worst = @max(worst, st.p50_ns),
+                        .passes_p95_us => try s.write(us(st.p95_ns)),
+                    }
+                }
+                if (kind == .passes_p95_us) try s.endArray() else try s.write(us(worst));
+            }
             try s.endObject();
-        },
-    };
-    try s.endObject();
+        }
+        try s.endObject();
+    }
     try s.endObject();
     try w.writeByte('\n');
 }
@@ -459,8 +571,9 @@ pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
 /// `settle` reports the settling time of an action apart (US-015): it has
 /// no budget and no reference, its other stages are the post-action delta.
 /// `bg-act` and `bg-settle` run the background mode behind a decoy window
-/// (US-048); they come last, after the scenarios that own the foreground.
-pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "capture-gdi", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps", "marks", "bg-act", "bg-settle" };
+/// (US-048), `bg-capture` captures a covered window of 2560x1440 (US-061);
+/// they come last, after the scenarios that own the foreground.
+pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "capture-gdi", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps", "marks", "bg-act", "bg-settle", "bg-capture" };
 
 /// Scenarios that open applications on the desktop: run on request only
 /// (`neo-compute bench chrome`), never by `all`.

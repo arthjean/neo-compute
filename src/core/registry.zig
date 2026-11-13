@@ -273,7 +273,8 @@ fn backgroundMembers(comptime tools: anytype) []const type {
 /// Refusal of a call whose arguments select an intrusive variant, from the
 /// tool's `Args.intrusive` table: `.{ .<field> = .{ .<value> = "<what it
 /// would take>. Aucune action exécutée. <alternative>" } }`, the value being
-/// an enum tag, or `true` for a boolean. Null when no variant is selected.
+/// an enum tag, `true` for a boolean, or `any` for a field refused whatever
+/// its value. Null when no variant is selected.
 pub fn intrusiveVariant(comptime Args: type, args: Args) ?[]const u8 {
     if (!@hasDecl(Args, "intrusive")) return null;
     const table = Args.intrusive;
@@ -283,10 +284,10 @@ pub fn intrusiveVariant(comptime Args: type, args: Args) ?[]const u8 {
         const present = if (@typeInfo(@TypeOf(raw)) == .optional) raw else @as(?@TypeOf(raw), raw);
         if (present) |v| {
             inline for (@typeInfo(@TypeOf(variants)).@"struct".field_names) |vname| {
-                const hit = switch (@typeInfo(@TypeOf(v))) {
+                const hit = if (comptime std.mem.eql(u8, vname, "any")) true else switch (@typeInfo(@TypeOf(v))) {
                     .bool => v and comptime std.mem.eql(u8, vname, "true"),
                     .@"enum" => v == @field(@TypeOf(v), vname),
-                    else => @compileError("intrusive variants are enum tags or booleans: " ++ fname),
+                    else => @compileError("intrusive variants are enum tags, booleans or `any`: " ++ fname),
                 };
                 if (hit) return background_prefix ++ @as([]const u8, @field(variants, vname));
             }

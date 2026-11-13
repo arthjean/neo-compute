@@ -54,6 +54,16 @@ const intersection = display.intersection;
 /// delivered. With a strip of 16 px in view, 20 of 20 showed it.
 pub const frozen_covered = "Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. Déplace-la avec window_set pour qu'une bande d'au moins 16 px reste visible (window_list donne les rectangles des fenêtres au-dessus), ou sur un autre écran.";
 pub const frozen_minimized = "Fenêtre minimisée : Chromium suspend son rendu, l'arbre peut être figé. Restaure-la avec window_set state normal, une bande d'au moins 16 px visible.";
+/// US-060 (decision 0013): the image of a covered Chrome window is the last
+/// frame it drew. A box toggled while the window was covered showed in its
+/// capture only once the window was back in view; VS Code's showed at once.
+pub const frozen_image = "Fenêtre recouverte : Chromium suspend son rendu, l'image peut être figée. Déplace-la avec window_set pour qu'une bande d'au moins 16 px reste visible (window_list donne les rectangles des fenêtres au-dessus), ou sur un autre écran.";
+
+/// What the image of `window` says after its first line when it may show
+/// an old frame (US-061): the window is one whose tree may be frozen.
+pub fn imageNote(ctx: anytype, window: u64) []const u8 {
+    return if (occlusion(ctx, window).frozen != null) "\n" ++ frozen_image else "";
+}
 
 /// Electron applications measured to keep rendering while covered: they
 /// turn Chromium's occlusion calculation off (VS Code, US-058). Minimized,
@@ -265,7 +275,7 @@ pub fn tree(ctx: anytype, named: ?u64, o: TreeOptions) Result {
         .ok => |s| s,
         .err => |e| return Result.err(e),
     };
-    var labels: std.ArrayList(marks.Label) = .empty;
+    var labels: std.ArrayList(screen.Mark) = .empty;
     const r = treeText(ctx, s, window == null, o.since_last, &labels, o.depth) catch return Result.err(oom);
     return markedTree(ctx, s, r, labels.items) catch Result.err(oom);
 }
@@ -327,7 +337,7 @@ fn subtree(ctx: anytype, id_text: []const u8, o: TreeOptions) Result {
     snap.roots = &.{};
     const s: Snap = .{ .snap = snap, .roots = roots, .maps = maps, .viewports = viewports, .sub = true, .frozen = covered.frozen };
     if (!o.marks) return treeText(ctx, s, false, false, null, o.depth) catch Result.err(oom);
-    var labels: std.ArrayList(marks.Label) = .empty;
+    var labels: std.ArrayList(screen.Mark) = .empty;
     const r = treeText(ctx, s, false, false, &labels, o.depth) catch return Result.err(oom);
     return markedTree(ctx, s, r, labels.items) catch Result.err(oom);
 }
@@ -341,28 +351,33 @@ fn markable(e: uitree.Element) bool {
 
 /// Completes `ui_tree`'s text with the marked screenshot (US-031): the
 /// password fields of every root are blacked out with the scanned ones and
-/// the `deny` windows before the labels are drawn.
-fn markedTree(ctx: anytype, s: Snap, r: Result, labels: []const marks.Label) !Result {
+/// the `deny` windows before the labels are drawn. In background mode the
+/// image is the first root's window alone (US-061), never the screen.
+fn markedTree(ctx: anytype, s: Snap, r: Result, labels: []const screen.Mark) !Result {
     if (r.is_error) return r;
     var secrets: std.ArrayList(display.Rect) = .empty;
     for (s.snap.elements) |e| if (e.password and !e.states.offscreen) try secrets.append(ctx.arena, e.rect);
     const text = r.blocks[0].text;
-    // A complete snapshot of the foreground window already lists its
-    // password fields: the scan would read them a second time.
-    const fg = ctx.backend.windowAt(null);
-    const scan = s.sub or s.snap.partial or s.snap.web_pending or fg == null or fg.?.handle != s.snap.window;
-    const shot = switch (screen.marked(ctx, s.maps[0], labels, secrets.items, scan)) {
+    const marked = if (ctx.session.background) screen.markedWindow(ctx, s.roots[0].handle, labels, secrets.items) else blk: {
+        // A complete snapshot of the foreground window already lists its
+        // password fields: the scan would read them a second time.
+        const fg = ctx.backend.windowAt(null);
+        const scan = s.sub or s.snap.partial or s.snap.web_pending or fg == null or fg.?.handle != s.snap.window;
+        break :blk screen.marked(ctx, s.maps[0], labels, secrets.items, scan);
+    };
+    const shot = switch (marked) {
         .ok => |o| o,
         .err => |e| return Result.text(try std.fmt.allocPrint(ctx.arena, "{s}\nImage indisponible : {s}", .{ text, e })),
     };
     var out: Result = .{ .len = 2 };
     var w: std.Io.Writer.Allocating = .init(ctx.arena);
     try w.writer.writeAll(text);
-    if (labels.len == 0) {
+    if (shot.total == 0) {
         try w.writer.writeAll("\nAucun élément actionnable à marquer");
-    } else if (shot.drawn < labels.len) {
-        try w.writer.print("\n… {d} étiquettes omises (place prise ou plus de {d})", .{ labels.len - shot.drawn, marks.max_labels });
+    } else if (shot.drawn < shot.total) {
+        try w.writer.print("\n… {d} étiquettes omises (place prise ou plus de {d})", .{ shot.total - shot.drawn, marks.max_labels });
     }
+    if (shot.note.len > 0) try w.writer.print("\nImage : {s}", .{shot.note});
     if (shot.gdi) try w.writer.writeAll("\n" ++ screen.gdi_note);
     out.blocks[0] = .{ .text = w.written() };
     out.blocks[1] = shot.image;
@@ -398,11 +413,13 @@ fn pruneRoots(a: std.mem.Allocator, s: Snap) !Pruned {
     return .{ .kept = kept.items, .root_of = root_of.items };
 }
 
-/// The tree's text; `labels`, when given, receives one label per actionable
-/// element shown on the root's display, in tree order. With `depth`, the
+/// The tree's text; `labels`, when given, receives the actionable elements
+/// to mark, in tree order: those shown on the first root's display, or in
+/// background mode those of the first root's window, the only one in its
+/// image (US-061). With `depth`, the
 /// full text stops that many levels below each root (US-056); the delta and
 /// the tree kept for the next one are those of every level.
-fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?*std.ArrayList(marks.Label), depth: ?u16) !Result {
+fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?*std.ArrayList(screen.Mark), depth: ?u16) !Result {
     const a = ctx.arena;
     const gpa = ctx.session.gpa;
     const ui = &ctx.session.ui;
@@ -421,9 +438,12 @@ fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?
         const on = s.maps[0];
         for (p.kept, p.root_of, ids) |k, ri, id| {
             const e = els[k.index];
-            if (!markable(e) or e.states.offscreen or s.maps[ri].display != on.display or !e.rect.intersects(on.rect)) continue;
+            if (!markable(e) or e.states.offscreen) continue;
+            if (ctx.session.background) {
+                if (ri != 0) continue;
+            } else if (s.maps[ri].display != on.display or !e.rect.intersects(on.rect)) continue;
             if (depth) |limit| if (k.depth > limit) continue;
-            try out.append(a, marks.Label.of(id, on.rectToScreenshot(e.rect)));
+            try out.append(a, .{ .id = id, .rect = e.rect });
         }
     }
 
@@ -1847,7 +1867,9 @@ pub fn observeWith(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms
             return Result.text(fmt(ctx.arena, "{s} ; {s}\n{s}", .{ done, status, body }));
         },
         .screenshot => {
-            var shot = screen.screenshot(ctx, null);
+            // Background mode shows the target window alone (US-061), never
+            // the screen; `window` is the target there.
+            var shot = if (ctx.session.background) screen.screenshotWindow(ctx, window.?, imageNote(ctx, window.?)) else screen.screenshot(ctx, null);
             if (shot.is_error) return Result.text(fmt(ctx.arena, "{s} ; {s}\nObservation indisponible : {s}", .{ done, status, shot.blocks[0].text }));
             shot.blocks[1] = .{ .text = fmt(ctx.arena, "{s} ; {s}\n{s}", .{ done, status, shot.blocks[1].text }) };
             return shot;

@@ -47,9 +47,9 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build` | Server and probes. The first run downloads the pinned win32metadata nupkg from nuget.org with `curl` and fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`, then serves both from the cache |
 | `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, compile-time budget errors, generated bindings and struct layouts, generator failure message, process lifecycle. Omit the filter for the full gate |
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
-| `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010). `bg-act` and `bg-settle` run the background mode behind the decoy; `bg-settle` is budgeted on its `settle` stage, which every other scenario only reports |
+| `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 and p50 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. A p95 above 110 % still passes under the limit of its own noise (`fence`: Q3 + 1.5 IQR of the p95 of the five baseline passes, `passes_p95_us`), printed when it applies. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010). `bg-act` and `bg-settle` run the background mode behind the decoy; `bg-settle` is budgeted on its `settle` stage, which every other scenario only reports; `bg-capture` is `screenshot` of a 2560x1440 test window entirely under a decoy larger than the display (US-061, < 60 ms p95) |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
-| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned). Complete semantic actions (EP-013): `bg-check`, `bg-uncheck`, `bg-legacy`, `bg-scroll`, `bg-scroll-ancestor`, `bg-range`, `bg-select-name`, `bg-wait-enabled`, `bg-auto-scroll` each require the effect read from Win32, the verdict on the first line of the result and an unchanged session; `bg-verdict` budgets the read-back (< 10 ms p95). Targeted perception (EP-014): `bg-tree-root` (a subtree with the whole tree's ids, `depth`, `root` within the whole tree's p95), `bg-reread` (`ui_find id:` against the state Win32 gives, < 10 ms p95), `bg-occluded` (the flag under the decoy, gone with a 16 px strip that Win32 hit-tests), `bg-occlusion-cost` (< 1 ms p95 with 50 more windows above the target) |
+| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned). Complete semantic actions (EP-013): `bg-check`, `bg-uncheck`, `bg-legacy`, `bg-scroll`, `bg-scroll-ancestor`, `bg-range`, `bg-select-name`, `bg-wait-enabled`, `bg-auto-scroll` each require the effect read from Win32, the verdict on the first line of the result and an unchanged session; `bg-verdict` budgets the read-back (< 10 ms p95). Targeted perception (EP-014): `bg-tree-root` (a subtree with the whole tree's ids, `depth`, `root` within the whole tree's p95), `bg-reread` (`ui_find id:` against the state Win32 gives, < 10 ms p95), `bg-occluded` (the flag under the decoy, gone with a 16 px strip that Win32 hit-tests), `bg-occlusion-cost` (< 1 ms p95 with 50 more windows above the target). Visual pass (EP-015): `bg-capture` (`screenshot` gives the covered window's own pixels, read against what Win32 says of its controls), `bg-capture-password` (the field black in `screenshot` and in a `zoom` on it, while the raw capture shows it), `bg-capture-marks` (`ui_tree marks` draws the ids on that image), `bg-observe-shot` (`ui_act` with `observe: screenshot` returns that same image of the target), `bg-capture-hung` (a window whose thread is stopped is refused by the 200 ms check, never captured) |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 and US-037 tasks (`-Suite existing` or `parity`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity prompt names a tool. `-Solve` also plays each parity task's scripted solution, which its check must accept. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
 
@@ -59,7 +59,9 @@ also needs `selftest`, with its output in the report; a change to the
 background mode, the intrusion classes or a path they share (`ui_act`,
 `window_set`, `app_launch`, `uia.zig`, `window.zig`, `hooks.zig`,
 `indicator.zig`, `winevents.zig`, `uia_events.zig`, `guard.zig`, settling
-and `ui_find`'s wait in `a11y.zig`) also needs `selftest --background`. `selftest` moves the
+and `ui_find`'s wait in `a11y.zig`, the window capture of `screenshot`,
+`zoom` and `ui_tree marks` in `screen.zig` and `capture.zig`) also needs
+`selftest --background`. `selftest` moves the
 cursor, types, raises a topmost window, shows the control indicator and
 overwrites the clipboard (its earlier text is put back, other formats are
 lost); `selftest --background` puts a large decoy window of a second
@@ -72,13 +74,17 @@ its digits 11 times and closes it (skipped when one is already open) and
 ends with one real click on the decoy; `neo-compute bg-probe` (US-040) does the
 same with the six reference applications, which it opens and closes, as does
 `neo-compute occlusion-probe` (US-058: Chrome, VS Code and a WPF window,
-about 30 min for the 10 launches per situation, `reps=1` for one) and
+about 30 min for the 10 launches per situation, `reps=1` for one),
+`neo-compute capture-probe` (US-060: the six applications, each shown in
+view then covered and captured 20 times; `save=DIR` writes the captures as
+JPEG, which show whatever those windows show: never into the repository) and
 `neo-compute events-probe` (US-047, and the UI Automation events of
 decision 0013's amendment; `events-probe churn` hides, minimizes and closes
 the test window, a popup application and Calculator; a run that panics
 leaves the application it had open and the decoy process: close both); `bench` captures the screen, reads the
 taskbar, raises a topmost test window (`settle`) and puts the decoy in the
-foreground twice for about 15 s (`bg-act`, `bg-settle`); the eval dry run opens the task apps, moves two Explorer
+foreground three times for about 15 s (`bg-act`, `bg-settle`, and
+`bg-capture` with a decoy and a test window that fill the primary display); the eval dry run opens the task apps, moves two Explorer
 windows and overwrites the clipboard the same way. Run them one at a time.
 
 ## Architecture and gotchas
@@ -206,6 +212,50 @@ windows and overwrites the clipboard the same way. Run them one at a time.
   slot of its own (`Session.sub`) and leaves the tree the next delta
   compares with alone. A subtree's viewport is its window's frame: a fake
   fixture whose root element and window rectangle differ prunes it wrongly.
+- Window capture (EP-015, measures in decision 0013). `screenshot`, `zoom`
+  and `ui_tree marks` on one window go through `PrintWindow` with
+  `PW_RENDERFULLCONTENT` (`WindowShot` in `capture.zig`), never the screen:
+  nothing above the window is in the image, so the policy's `deny`
+  rectangles are not drawn on it. `PrintWindow` renders the window
+  rectangle, invisible resize borders included: the capture is cropped to
+  the visible frame, and reduced at its display's screenshot scale so that
+  an image pixel plus the `origin` of the text is a `ui_tree` coordinate. A
+  window capture leaves the click coordinate space (`session.current`)
+  alone. `PrintWindow` waits for the window's thread: `window.answers`
+  (200 ms) comes first. The password scan takes the captured window
+  (`beginSecretScan(hwnd)`), not the foreground one; when it can only mask
+  the whole window (a Chromium web tree that is not built) the capture is
+  refused, an all-black image tells nothing. A window's image leaves only
+  when the scan vouches for every password field (`secretScan`): a scan
+  that failed, that held more fields than its buffer, or a window of a
+  process of higher integrity refuses the capture, where a screenshot of
+  the screen still goes out unmasked (decision 0007). `PrintWindow` with
+  `PW_RENDERFULLCONTENT` gives black for a window that sets a display
+  affinity (`WDA_MONITOR`, `WDA_EXCLUDEFROMCAPTURE`); without the flag it
+  ignores the affinity. In background mode `observe: screenshot` is this
+  capture of the target. A covered Chrome hands
+  `PrintWindow` the image from before it was covered (0 pixel changed after
+  an action delivered, 153 once in view; VS Code's is current): the result
+  carries `frozen_image`. A window Windows scales for an application that
+  does not follow its display's DPI is refused; that path has never run,
+  the reference machine has two displays at 96 dpi. A selftest reads the
+  image a tool encoded from `server.session.reducer.out`, the reduced
+  pixels before JPEG.
+- A new bench scenario's reference comes from full passes: at the end of
+  `bench all` the whole process runs about 25 % slower than in a series of
+  one scenario (`bg-capture`: `parse` 2.3 µs alone, 4.2 µs in the pass), so
+  a reference recorded alone fails the gate. Run `--write-baseline` on
+  `all` into a file outside the repository and copy that scenario's entry
+  alone, from each of the three sections, into `bench/baseline.json`.
+- The p95 of a series is set by its slowest iterations: `bg-act` moved by
+  22 % between series of unchanged code, its median by 2 to 7 %. The gate
+  therefore holds the median to 110 % and the p95 to the noise limit of
+  its baseline passes (decision 0013). A provider stage of a
+  provider-relative scenario keeps its witness probe and takes no noise
+  limit: the passes of a day the provider was slow would clear the
+  regressions of the next. When the gate fails on a path nobody changed,
+  compare with a copy of `HEAD` in alternating series before anything
+  else.
 
 - A window with `WDA_EXCLUDEFROMCAPTURE` is absent from DXGI and GDI frames,
   but each change of it still produces DXGI dirty rects, and DWM dirties a

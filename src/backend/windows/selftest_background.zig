@@ -39,6 +39,7 @@ pub const Server = mcp.Server(Windows, tools.all);
 const cohabitation = @import("selftest_cohabitation.zig");
 const actions = @import("selftest_actions.zig");
 const perception = @import("selftest_perception.zig");
+const capture = @import("selftest_capture.zig");
 const uia_events = @import("uia_events.zig");
 const core_a11y = @import("../../core/a11y.zig");
 
@@ -253,13 +254,14 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     }
     report.ok("bg-setup", "decoy 0x{x} of another process in the foreground with the focus in its field, target 0x{x} under it, never active", .{ @intFromPtr(decoy.hwnd), hwnd });
 
-    // bg-list: the mode lists its nine tools.
+    // bg-list: the mode lists its eleven tools, screenshot and zoom of
+    // the target window among them (US-061).
     {
         caller.out.clearRetainingCapacity();
         try server.handleMessage("{\"jsonrpc\":\"2.0\",\"id\":9000,\"method\":\"tools/list\"}", &caller.out.writer);
         const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, try arena.dupe(u8, caller.out.written()), .{});
         const n = v.object.get("result").?.object.get("tools").?.array.items.len;
-        if (n == 9) report.ok("bg-list", "9 tools, all of intrusion class none", .{}) else report.fail("bg-list", "{d} tools listed, expected 9", .{n});
+        if (n == 11) report.ok("bg-list", "11 tools, all of intrusion class none", .{}) else report.fail("bg-list", "{d} tools listed, expected 11", .{n});
     }
 
     // bg-ui_tree: reads the covered target, named once.
@@ -320,6 +322,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     // EP-014: one element's subtree, one element read again, the occluded
     // flag and what its calculation costs.
     if (try perception.run(&b, &backend, arena)) return lost(&report);
+
+    // EP-015: the image of the covered window, its password field masked,
+    // the ids drawn on it, and no capture of a window that does not answer.
+    if (try capture.run(&b, &backend, arena)) return lost(&report);
 
     // bg-must-fail-without-effect: the verdict fails an action that changed
     // nothing in the session and did not reach the target either.

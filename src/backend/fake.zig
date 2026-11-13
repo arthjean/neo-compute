@@ -21,6 +21,8 @@ pub const displays_fixture = [_]display.Display{
 var frame0: [2560 * 1440 * 4]u8 = undefined;
 var frame1: [1920 * 1080 * 4]u8 = undefined;
 var frames_ready = false;
+/// What a window that does not let itself be captured gives (US-061).
+var black_frame: [1200 * 800 * 4]u8 = @splat(0);
 
 fn fillFrames() void {
     if (frames_ready) return;
@@ -342,9 +344,21 @@ pub const Fake = struct {
     /// Processes without a top-level window of their own (the application
     /// a UWP frame hosts): pid and executable.
     processes: []const struct { u32, []const u8 } = &.{},
-    /// Password scans started by screenshot and zoom (US-019).
+    /// Password scans started by screenshot and zoom (US-019), and the
+    /// window the last one was asked for (null: the foreground window).
     secret_scans: u32 = 0,
+    secret_window: ?u64 = null,
     secret_buf: [16]display.Rect = undefined,
+    /// The scan masks the whole window: a Chromium web tree that is not
+    /// built (US-061).
+    secret_whole_window: bool = false,
+    /// How the scan of a window that is not elevated ends (US-061).
+    secret_scan: display.SecretScan = .ok,
+    /// Window captures (US-061), the window of the last one, and what a
+    /// capture gives instead of the window's pixels.
+    window_captures: u32 = 0,
+    captured_window: ?u64 = null,
+    window_capture: enum { frame, black, scaled, failed } = .frame,
     /// Kill switch state handed over by the server (US-018).
     control: ?*Control = null,
     /// Trips the kill switch on the next key press, as a physical Escape
@@ -428,6 +442,31 @@ pub const Fake = struct {
             .fresh = self.capture_calls == 1 or self.animating or appeared,
             .dirty = if (self.animating or appeared) &animation_rect else &.{},
         } };
+    }
+
+    /// The image of one window, whatever covers it (US-061): the part of
+    /// its display's fixture frame under its rectangle. No call reads the
+    /// foreground.
+    pub fn captureWindow(self: *Fake, handle: u64) display.WindowCapture {
+        const win = self.live(handle) orelse return .closed;
+        if (win.minimized) return .minimized;
+        if (self.hung) return .hung;
+        self.window_captures += 1;
+        self.captured_window = handle;
+        const r = win.rect;
+        switch (self.window_capture) {
+            .scaled => return .scaled,
+            .failed => return .failed,
+            .black => return .{ .ok = .{ .frame = .{ .pixels = &black_frame, .width = @intCast(r.w), .height = @intCast(r.h), .stride = @as(usize, @intCast(r.w)) * 4, .source = .gdi }, .rect = r } },
+            .frame => {},
+        }
+        fillFrames();
+        const index: usize = if (displays_fixture[0].rect.contains(r.x, r.y)) 0 else 1;
+        const d = displays_fixture[index].rect;
+        const buf: []const u8 = if (index == 0) &frame0 else &frame1;
+        const stride = @as(usize, @intCast(d.w)) * 4;
+        const start = @as(usize, @intCast(r.y - d.y)) * stride + @as(usize, @intCast(r.x - d.x)) * 4;
+        return .{ .ok = .{ .frame = .{ .pixels = buf[start..], .width = @intCast(r.w), .height = @intCast(r.h), .stride = stride, .source = .gdi }, .rect = r } };
     }
 
     /// Changes since the last look: the fixture's frames are always in
@@ -680,12 +719,25 @@ pub const Fake = struct {
         return out.items;
     }
 
-    pub fn beginSecretScan(self: *Fake) void {
+    pub fn beginSecretScan(self: *Fake, window: ?u64) void {
         self.secret_scans += 1;
+        self.secret_window = window;
     }
 
-    /// Rectangles of the on-screen password elements of the foreground tree.
+    /// How the last scan ended: an elevated window's tree is closed to the
+    /// server, whatever the scan found.
+    pub fn secretScan(self: *Fake) display.SecretScan {
+        if (self.secret_window) |h| if (self.live(h)) |win| if (win.elevated) return .elevated;
+        return self.secret_scan;
+    }
+
+    /// Rectangles of the on-screen password elements of the tree last
+    /// scanned.
     pub fn secretRects(self: *Fake) []const display.Rect {
+        if (self.secret_whole_window) if (self.secret_window) |h| if (self.live(h)) |win| {
+            self.secret_buf[0] = win.rect;
+            return self.secret_buf[0..1];
+        };
         var n: usize = 0;
         for (self.ui_elements) |e| if (e.password and !e.states.offscreen and n < self.secret_buf.len) {
             self.secret_buf[n] = e.rect;

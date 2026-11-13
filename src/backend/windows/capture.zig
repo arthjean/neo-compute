@@ -8,6 +8,7 @@ const w = @import("win32");
 const com = @import("com.zig");
 const display = @import("../../core/display.zig");
 const image = @import("../../core/image.zig");
+const window = @import("window.zig");
 const check = com.check;
 const release = com.release;
 
@@ -371,3 +372,118 @@ pub const Gdi = struct {
         self.* = .{};
     }
 };
+
+/// PrintWindow copy of one window into a top-down 32-bit DIB section
+/// (US-061): the window as DWM composes it, whatever covers it on screen
+/// (`PW_RENDERFULLCONTENT`; without the flag a window drawn by DirectX,
+/// Chromium or XAML, comes back black). Measured by `capture-probe`
+/// (US-060, decision 0013). The call sends the window messages: a window
+/// whose thread does not answer is never captured.
+pub const WindowShot = struct {
+    screen: w.HDC = null,
+    memory: w.HDC = null,
+    bitmap: w.HBITMAP = null,
+    previous: w.HGDIOBJ = null,
+    bits: [*]u8 = undefined,
+    width: u32 = 0,
+    height: u32 = 0,
+
+    pub const Shot = struct {
+        /// BGRA rows of the visible frame, `stride` bytes apart, valid
+        /// until the next call.
+        pixels: []const u8,
+        width: u32,
+        height: u32,
+        stride: usize,
+        /// The visible frame, physical desktop pixels.
+        rect: display.Rect,
+    };
+
+    pub const Result = union(enum) {
+        ok: Shot,
+        closed,
+        minimized,
+        /// The window's thread did not answer within 200 ms.
+        hung,
+        /// Windows scales the window (an application without per-monitor
+        /// DPI support on a scaled display): PrintWindow renders it at its
+        /// own resolution, where no desktop rectangle applies.
+        scaled,
+        failed,
+    };
+
+    pub fn grab(self: *WindowShot, hwnd: w.HWND) Result {
+        if (hwnd == null or w.IsWindow(hwnd) == 0) return .closed;
+        if (w.IsIconic(hwnd) != 0) return .minimized;
+        if (!window.answers(hwnd)) return .hung;
+        var wr: w.RECT = undefined;
+        if (w.GetWindowRect(hwnd, &wr) == 0) return .closed;
+        const frame = window.rect(hwnd) orelse return .closed;
+        if (wr.right <= wr.left or wr.bottom <= wr.top or frame.w <= 0 or frame.h <= 0) return .failed;
+        if (scaledByWindows(hwnd)) return .scaled;
+        const width: u32 = @intCast(wr.right - wr.left);
+        const height: u32 = @intCast(wr.bottom - wr.top);
+        if (self.bitmap == null or self.width != width or self.height != height) self.allocate(width, height) catch return .failed;
+        const stride = @as(usize, width) * 4;
+        // A call that draws nothing must read as black, never as the
+        // capture before it.
+        @memset(self.bits[0 .. stride * height], 0);
+        if (w.PrintWindow(hwnd, self.memory, w.PW_RENDERFULLCONTENT) == 0) return .failed;
+        _ = w.GdiFlush();
+        // The image is the window rectangle; its invisible resize borders
+        // are left out, as in every rectangle neo-compute reports.
+        const x0: u32 = @intCast(std.math.clamp(frame.x - wr.left, 0, @as(i32, @intCast(width)) - 1));
+        const y0: u32 = @intCast(std.math.clamp(frame.y - wr.top, 0, @as(i32, @intCast(height)) - 1));
+        const fw: u32 = @min(@as(u32, @intCast(frame.w)), width - x0);
+        const fh: u32 = @min(@as(u32, @intCast(frame.h)), height - y0);
+        const start = y0 * stride + @as(usize, x0) * 4;
+        return .{ .ok = .{
+            .pixels = self.bits[start .. start + @as(usize, fh - 1) * stride + @as(usize, fw) * 4],
+            .width = fw,
+            .height = fh,
+            .stride = stride,
+            .rect = .{ .x = wr.left + @as(i32, @intCast(x0)), .y = wr.top + @as(i32, @intCast(y0)), .w = @intCast(fw), .h = @intCast(fh) },
+        } };
+    }
+
+    fn allocate(self: *WindowShot, width: u32, height: u32) Error!void {
+        self.deinit();
+        self.screen = w.GetDC(null) orelse return error.GdiFailed;
+        self.memory = w.CreateCompatibleDC(self.screen) orelse return error.GdiFailed;
+        var info = std.mem.zeroes(w.BITMAPINFO);
+        info.bmiHeader.biSize = @sizeOf(w.BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = @intCast(width);
+        info.bmiHeader.biHeight = -@as(i32, @intCast(height));
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = w.BI_RGB;
+        var bits: ?*anyopaque = null;
+        self.bitmap = w.CreateDIBSection(self.memory, &info, w.DIB_RGB_COLORS, &bits, null, 0) orelse return error.GdiFailed;
+        self.bits = @ptrCast(bits orelse return error.GdiFailed);
+        self.previous = w.SelectObject(self.memory, self.bitmap);
+        self.width = width;
+        self.height = height;
+    }
+
+    pub fn deinit(self: *WindowShot) void {
+        if (self.memory != null) {
+            if (self.previous != null) _ = w.SelectObject(self.memory, self.previous);
+            _ = w.DeleteDC(self.memory);
+        }
+        if (self.bitmap != null) _ = w.DeleteObject(self.bitmap);
+        if (self.screen != null) _ = w.ReleaseDC(null, self.screen);
+        self.* = .{};
+    }
+};
+
+/// Whether the window renders at another DPI than its display's: this
+/// process sees physical pixels (per-monitor v2), a window that does not is
+/// drawn at its own DPI and stretched by DWM.
+fn scaledByWindows(hwnd: w.HWND) bool {
+    const own = w.GetDpiForWindow(hwnd);
+    if (own == 0) return false;
+    var dx: u32 = 0;
+    var dy: u32 = 0;
+    if (w.GetDpiForMonitor(w.MonitorFromWindow(hwnd, w.MONITOR_DEFAULTTONEAREST), w.MDT_EFFECTIVE_DPI, &dx, &dy) < 0) return false;
+    return dx != 0 and dx != own;
+}

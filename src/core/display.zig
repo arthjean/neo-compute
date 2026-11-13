@@ -68,6 +68,22 @@ pub const Frame = struct {
 /// Outcome of a capture: the frame, or a message for the model (FR-06).
 pub const CaptureResult = union(enum) { frame: Frame, failed: []const u8 };
 
+/// One window as `PrintWindow` renders it (US-061), whatever covers it on
+/// screen: the pixels of its visible frame, and that frame on the desktop.
+pub const WindowFrame = struct { frame: Frame, rect: Rect };
+
+/// Outcome of a window capture. `hung`: the window's thread did not answer
+/// within 200 ms, and nothing was captured. `scaled`: Windows stretches the
+/// window (an application that does not follow its display's DPI), so its
+/// own image fits no desktop rectangle.
+pub const WindowCapture = union(enum) { ok: WindowFrame, closed, minimized, hung, scaled, failed };
+
+/// How the password scan of one window ended (US-061): its rectangles mask
+/// the window's image only when it is `ok`. `elevated`: the window belongs
+/// to a process of higher integrity, whose tree Windows closes to this one.
+/// `failed`: the scan did not run, or did not read every field.
+pub const SecretScan = enum { ok, elevated, failed };
+
 /// What `window_list` prints about a display besides its geometry (US-026).
 pub const DisplayInfo = struct {
     primary: bool,
@@ -254,6 +270,21 @@ pub const Mapping = struct {
     }
 };
 
+/// Mapping of the image of a window whose visible frame is `frame`, on the
+/// display `on` maps (US-061): the scale of that display's screenshot, so a
+/// pixel of the image and a rectangle of `ui_tree` are the same distance
+/// apart, and the image is the part of the screenshot the window would
+/// take. A window larger than `long_side` at that scale (it spans displays)
+/// is reduced further.
+pub fn windowMapping(on: Mapping, frame: Rect, long_side: u32) Mapping {
+    const fw: f64 = @floatFromInt(frame.w);
+    const fh: f64 = @floatFromInt(frame.h);
+    const width: u32 = @max(1, @as(u32, @intFromFloat(@round(fw / on.scale))));
+    const height: u32 = @max(1, @as(u32, @intFromFloat(@round(fh / on.scale))));
+    if (@max(width, height) > long_side) return Mapping.of(on.display, frame, long_side);
+    return .{ .display = on.display, .rect = frame, .width = width, .height = height, .scale = on.scale };
+}
+
 fn axisToPhysical(v: i32, scale: f64, extent: i32) i32 {
     const p: i32 = @intFromFloat(@floor((@as(f64, @floatFromInt(v)) + 0.5) * scale));
     return std.math.clamp(p, 0, extent - 1);
@@ -312,6 +343,27 @@ test "mapping keeps the ratio, never upscales and stays within 1 px at scales up
             try std.testing.expect(@abs(back[0] - px) <= 1);
         }
     }
+}
+
+test "a window's image has the scale of its display's screenshot" {
+    const on = Mapping.of(0, .{ .x = 0, .y = 0, .w = 2560, .h = 1440 }, 1280);
+    const m = windowMapping(on, .{ .x = 100, .y = 80, .w = 1200, .h = 800 }, 1280);
+    try std.testing.expectEqual(@as(f64, 2), m.scale);
+    try std.testing.expectEqual(@as(u32, 600), m.width);
+    try std.testing.expectEqual(@as(u32, 400), m.height);
+    // A pixel of the image, plus the window's origin in the screenshot, is
+    // the screenshot pixel of the same point.
+    const origin = on.toScreenshot(100, 80);
+    const in_window = m.toScreenshot(700, 480);
+    const in_screen = on.toScreenshot(700, 480);
+    try std.testing.expectEqual(in_screen[0], origin[0] + in_window[0]);
+    try std.testing.expectEqual(in_screen[1], origin[1] + in_window[1]);
+    // Never upscaled on a display shown at its own size.
+    const small = Mapping.of(1, .{ .x = -1024, .y = 0, .w = 1024, .h = 768 }, 1280);
+    try std.testing.expectEqual(@as(u32, 300), windowMapping(small, .{ .x = -900, .y = 10, .w = 300, .h = 200 }, 1280).width);
+    // A window that spans two displays stays within the long side.
+    const wide = windowMapping(small, .{ .x = -1024, .y = 0, .w = 3000, .h = 700 }, 1280);
+    try std.testing.expectEqual(@as(u32, 1280), wide.width);
 }
 
 test "subtract keeps the parts of a rectangle outside the cut" {
