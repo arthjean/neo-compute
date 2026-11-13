@@ -9,6 +9,7 @@
 | 1.1 | 2026-11-13 | Arthur Jean | Amendement après la revue de EP-012 (décision 0013, « Amendement du 2026-11-13 ») : libellé du mode en anglais (US-046) ; garde de premier plan sur l'événement de premier plan, règle du geste et issues d'audit `third_party`, `same_app`, `unknown` (US-050) ; gestionnaires d'événements UIA côté client admis pour les fenêtres UWP (contrainte levée, US-048) ; A19 séparée entre Chromium et Electron, notes pour US-058 et US-059 |
 | 1.2 | 2026-11-13 | Arthur Jean | Garde de premier plan prolongée 2 s après l'action, champ d'audit `guard_late` (US-050) ; abonnement UIA appris pour les applications qui changent sans événement (US-048) ; mesures d'agent-desktop à reprendre dans US-058 |
 | 1.3 | 2026-11-13 | Arthur Jean | Après l'exploration du 2026-11-13 (décision 0013) : EP-017 et US-064, sélection des listes Win32 par leurs messages natifs (A22, FR-46, risque 14, cas 25 et 26) ; note pour US-058 sur le `<select>` de Chrome ; questions Q18 et Q19 |
+| 1.4 | 2026-11-13 | Arthur Jean | Après la revue de EP-014 (décision 0013, « Revue de EP-014 ») : ligne « Fenêtre minimisée » gardée pour toute fenêtre Chromium (US-059) ; Q18 tranchée, la liste déroulante de la tâche Chrome de US-062 devient une liste Win32 ; EP-018 et US-065, gel appris des applications Chromium (A23, FR-47, risque 15, cas 27) |
 
 ## Problem Statement
 
@@ -38,7 +39,7 @@ Décisions de contrat proposées, à confirmer par Arthur dans la décision 0013
 4. `ui_act` reçoit trois actions et étend `value` ; `ui_tree`, `ui_find`, `screenshot` et `zoom` reçoivent des paramètres optionnels.
 5. Les modes `a11y` et `vision` gardent leur kill switch, leur indicateur, leur stabilisation et leur liste d'outils.
 
-Périmètre : 7 epics, 26 stories, 75 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014 et EP-017 (parité d'actions, perception et sélection native, 27 points). Livraison 3 : EP-015 et EP-016 (passe visuelle et mesure, 12 points).
+Périmètre : 8 epics, 27 stories, 78 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014, EP-017 et EP-018 (parité d'actions, perception, sélection native et gel appris, 30 points). Livraison 3 : EP-015 et EP-016 (passe visuelle et mesure, 12 points).
 
 ## Goals
 
@@ -112,6 +113,7 @@ Key findings that informed this PRD:
 - **A20 :** `PrintWindow` avec `PW_RENDERFULLCONTENT` rend une image non noire d'une fenêtre entièrement recouverte pour au moins 5 des 6 applications de référence. Cua rapporte du noir sur les fenêtres DirectComposition. Validé par US-060.
 - **A21 :** les trois actions nouvelles de `ui_act` et les paramètres `root` et `depth` de `ui_tree` gardent les définitions `alwaysLoad` sous 1 500 tokens estimés. Vérifié à la compilation par le budget existant.
 - **A22 :** les messages `CB_*` et `LB_*` lisent les entrées et changent la sélection d'une liste d'un autre processus sans l'ouvrir et sans changer le premier plan ni le focus, et un `WM_COMMAND` envoyé au parent lui fait voir le changement. Validé le 2026-11-13 sur une fenêtre de test (décision 0013, « Exploration ») ; les applications qui reflètent `WM_COMMAND` (WinForms) sont vérifiées dans US-064.
+- **A23 :** sur une fenêtre Chromium recouverte dont l'arbre est figé, aucune action de `ui_act` sur un élément du document web n'est lue « vérifié » avec un changement d'état : une telle lecture prouve donc que l'application rend recouverte. US-058 l'a mesuré pour `toggle` sur Chrome (0 sur 20). Les autres actions et les éléments hors document (interface du navigateur) sont mesurés par US-065.
 
 ### Hard Constraints
 - Zig 0.17.0, bindings générés depuis `bindings/windows.zon`, aucune vtable écrite à la main, aucun type WinRT (absent de win32metadata).
@@ -534,6 +536,7 @@ Lire une région d'une grande application, relire un seul élément, et savoir q
 - [ ] Le calcul de recouvrement ajoute < 1 ms p95 à `ui_tree` pour 50 fenêtres de premier niveau.
 - [ ] Le calcul ignore les fenêtres de l'indicateur, les fenêtres minimisées et les fenêtres masquées (« cloaked »).
 - [ ] Les tests du cœur couvrent : recouverte par une fenêtre, par l'union de deux fenêtres, visible d'une bande, sur un autre écran.
+- [ ] Amendement 1.4 : une cible `Chrome_WidgetWin_*` minimisée, application Electron comprise, ne porte pas `{occluded}` et reçoit la ligne « Fenêtre minimisée : Chromium suspend son rendu, l'arbre peut être figé. Restaure-la avec window_set state normal, une bande d'au moins 16 px visible. » (US-058 : 0 action sur 20 pour Chrome comme pour VS Code).
 
 ---
 
@@ -595,7 +598,7 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 **Dependencies:** Blocked by US-044, US-048, US-050, US-055
 
 **Acceptance Criteria:**
-- [ ] Une suite `background` d'au moins 8 tâches, chacune avec préparation, vérification de l'état final et nettoyage : enregistrer un document du Bloc-notes par le menu et le dialogue, un calcul dans la Calculatrice, un réglage à bascule dans Paramètres, une case et une liste déroulante d'une page Chrome, une entrée d'une longue liste à faire défiler, un curseur à régler, une application à lancer sans activation, et un contrôle visuel d'une fenêtre recouverte.
+- [ ] Une suite `background` d'au moins 8 tâches, chacune avec préparation, vérification de l'état final et nettoyage : enregistrer un document du Bloc-notes par le menu et le dialogue, un calcul dans la Calculatrice, un réglage à bascule dans Paramètres, une case d'une page Chrome, une entrée d'une liste déroulante Win32 (Q18 : le `<select>` d'une page Chrome ne s'ouvre pas fenêtre non active), une entrée d'une longue liste à faire défiler, un curseur à régler, une application à lancer sans activation, et un contrôle visuel d'une fenêtre recouverte.
 - [ ] Chaque tâche tourne avec une fenêtre leurre au premier plan ; un témoin échantillonne toutes les 50 ms le premier plan, le focus clavier et la position du curseur.
 - [ ] La vérification d'une tâche échoue si le témoin a vu un changement de premier plan ou de curseur, même quand l'état final est bon.
 - [ ] `-Solve` joue la solution scriptée de chaque tâche en mode arrière-plan, et sa vérification doit l'accepter.
@@ -653,6 +656,40 @@ Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l
 - [ ] Le selftest ajoute `bg-select-native` (liste déroulante de la fenêtre de test : sélection changée, `CBN_SELCHANGE` reçu, aucun `CBN_DROPDOWN`, session inchangée) et `bg-select-notify` (`LBN_SELCHANGE` reçu pour une entrée de la `LISTBOX`).
 - [ ] Les tests du cœur couvrent sur le backend factice : voie native prise, repli sur UI Automation, nom introuvable, doublon, fenêtre figée.
 
+### EP-018: Gel appris des applications Chromium
+
+Savoir, sans liste de noms à tenir, quelles applications Chromium continuent de rendre fenêtre recouverte, pour ne plus avertir à tort d'un arbre figé. Livraison 2.
+
+**Definition of Done:** une application Electron absente de `renders_covered`, recouverte, cesse de recevoir la ligne « Fenêtre recouverte » après sa première action vérifiée ; Chrome recouvert la garde. La sonde a rendu son verdict sur A23.
+
+#### US-065: Apprendre qu'une application Chromium rend recouverte
+**Description:** En tant que Claude Code, je veux que l'avertissement d'arbre figé cesse pour une application qui prouve qu'elle rend recouverte afin de ne pas déplacer sa fenêtre sans raison.
+
+**Contexte (US-058 et revue de EP-014, décision 0013) :** Chrome recouvert fige son arbre : 0 action sur 20 se lit dans l'arbre, toutes sont pourtant délivrées. VS Code désactive le calcul d'occlusion et reste à jour (95 à 100 %). Le code ne connaît cette différence que par une liste de noms (`renders_covered` dans `src/core/a11y.zig`, `Code.exe` seul) : toute autre application Electron qui fait de même (VS Code Insiders, Cursor) reçoit à tort la ligne « Fenêtre recouverte ». Le principe repris est celui de l'abonnement UI Automation appris de US-048 : observer plutôt que lister.
+
+**Priority:** P2
+**Size:** M (3 pts)
+**Dependencies:** Blocked by US-055, US-058, US-059
+
+**Acceptance Criteria:**
+- [ ] La sonde `occlusion-probe` mesure d'abord A23 sur Chrome recouvert, arbre construit avant le recouvrement : pour `toggle`, `set_value`, `expand` et `select`, sur un élément du document web et sur un élément de l'interface du navigateur (hors document), le nombre de verdicts « vérifié » avec changement d'état sur 20 actions par cellule.
+- [ ] Étant donné 0 verdict « vérifié » sur les éléments du document web pour une action, alors A23 est validée pour cette action. Une action qui en produit un est exclue de l'apprentissage, et le rapport la nomme.
+- [ ] Étant donné A23 infirmée pour toutes les actions, alors la story passe `BLOCKED`, rien n'est appris, et le rapport pose la question à Arthur.
+- [ ] Une action de `ui_act` au verdict « vérifié », dont l'état relu diffère de l'état lu avant l'action, sur un élément situé sous un document web d'une fenêtre `Chrome_WidgetWin_*` recouverte selon les règles de Chromium, marque l'exécutable de cette fenêtre « rend recouverte ».
+- [ ] Une application marquée est traitée comme `Code.exe` aujourd'hui : `{occluded}` jugé sur les cadres visibles, aucune ligne « Fenêtre recouverte » dans `ui_tree`, après un delta ou dans un `ui_act` contredit.
+- [ ] Ne marquent rien : une action sur une fenêtre visible, une action sans changement d'état (état demandé déjà là), une action sur un élément hors document web, un verdict « non vérifiable ».
+- [ ] Deux verdicts « contredit » de suite sur une fenêtre recouverte d'une application marquée retirent la marque ; une action vérifiée la rend. `Code.exe` part marquée et suit la même règle.
+- [ ] La ligne « Fenêtre minimisée » ne dépend pas de la marque : toute fenêtre Chromium minimisée la reçoit.
+- [ ] La marque vit dans la session, dans une table de taille fixe (8 exécutables, le plus ancien remplacé), sans écriture sur disque ni allocation en régime établi.
+- [ ] L'audit de l'action qui pose ou retire une marque l'enregistre.
+- [ ] Aucun outil, paramètre ni texte de `tools/list` ne change. Le comportement vaut dans les trois modes.
+- [ ] La décision ajoute < 1 ms p95 à une action sur une fenêtre Chromium et rien aux autres ; `bg-act` tient sa référence.
+- [ ] Les tests du cœur couvrent sur le backend factice : marque après une action vérifiée sous un document, les quatre cas qui ne marquent rien, retrait après deux contredits, marque rendue, Chrome figé jamais marqué.
+- [ ] La sonde vérifie sur VS Code lancé sans sa marque initiale (option de sonde) que la ligne disparaît après la première action vérifiée, et sur Chrome qu'elle reste ; VS Code Insiders ou Cursor sont mesurés s'ils sont installés, sinon `skipped`.
+- [ ] Les résultats sont ajoutés à `bench/apps.md` et à la décision 0013.
+
+**Note de conception :** l'appartenance à un document web se lit dans le dernier arbre montré de la fenêtre (ancêtre de rôle `document`) ou par un aller-retour vers l'élément ; à choisir à l'implémentation, sous le budget.
+
 ## Functional Requirements
 
 - FR-31: Le système doit offrir un mode `background` (`--mode background`) dont `tools/list` ne contient que des outils de classe d'interférence `none`.
@@ -671,6 +708,7 @@ Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l
 - FR-44: L'audit de chaque action enregistre le mode, l'issue de la garde de premier plan et le verdict de livraison (étend FR-13).
 - FR-45: Le système ne doit offrir au modèle aucun moyen de quitter le mode arrière-plan ou d'autoriser une action intrusive.
 - FR-46: `select` sur une liste Win32 classique (`ComboBox`, `ListBox`) doit changer la sélection sans ouvrir la liste et prévenir la fenêtre propriétaire (`CBN_SELCHANGE`, `LBN_SELCHANGE`). Les seuls messages natifs envoyés à une application sont ceux de cette sélection.
+- FR-47: L'avertissement d'arbre figé d'une fenêtre Chromium recouverte doit cesser pour une application dont une action vérifiée prouve qu'elle rend recouverte, sans liste de noms à tenir ; ce qui est appris ne dépasse pas la session.
 
 ## Non-Functional Requirements
 
@@ -717,6 +755,7 @@ Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l
 | 24 | Seconde instance | Un autre serveur contrôle déjà le bureau | Actions refusées (FR-14) | Message d'instance existant |
 | 25 | Liste sans chaînes | `select` avec un nom sur une liste dessinée par son propriétaire, une `ComboBoxEx32` ou une liste à sélection multiple | Voie UI Automation de US-053, aucun message natif | Résultat de US-053 |
 | 26 | Menu web fenêtre non active | `select` avec un nom sur un `<select>` de Chromium en mode arrière-plan | Aucune sélection, premier plan inchangé | « <conteneur> n'a aucune entrée sélectionnable » ; `expand` : « contredit, état lu replié » |
+| 27 | Application Electron inconnue recouverte | Fenêtre `Chrome_WidgetWin_*` recouverte d'une application jamais vue qui rend recouverte | Ligne d'avertissement tant qu'aucune action n'a été vérifiée, plus aucune ensuite (US-065) | « Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. […] » |
 
 ## Risks & Mitigations
 
@@ -734,8 +773,9 @@ Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l
 | 10 | La capture par fenêtre expose un mot de passe | Low | High | Balayage `IsPassword` de la fenêtre capturée avant l'encodage ; tâche canari ; refus des applications `deny` |
 | 11 | Le changement de `ui_act` (attente, verdict) fait régresser le mode `a11y` | Med | Med | Tests du cœur mis à jour ; campagne sur les 20 tâches existantes (US-063) ; seuil de 5 points |
 | 12 | La restauration du premier plan contrarie l'utilisateur qui voulait la fenêtre cible | Low | Low | Aucune restauration si un geste capable de changer la fenêtre de premier plan a été vu (clic hors de sa fenêtre, touche avec Alt ou Win) ; trois restaurations au plus par action |
-| 13 | 26 stories dépassent une livraison | High | Low | Trois livraisons ordonnées ; la livraison 1 est utilisable seule |
+| 13 | 27 stories dépassent une livraison | High | Low | Trois livraisons ordonnées ; la livraison 1 est utilisable seule |
 | 14 | Une liste de classe réelle `ComboBox` ou `ListBox` ne suit pas le protocole standard (sous-classée, données à la place du texte) : mauvaise entrée choisie ou application non prévenue | Low | Med | Styles vérifiés avant tout message ; verdict relu par `CB_GETCURSEL` ; repli sur UI Automation ; sonde WinForms dans US-064 |
+| 15 | Une action lue « vérifié » à tort sur un Chrome recouvert marque Chrome « rend recouverte » et supprime l'avertissement (A23) | Low | Med | Sonde A23 avant tout apprentissage ; éléments hors document web et actions sans changement d'état exclus ; marque retirée après deux contredits (US-065) |
 
 ## Non-Goals
 
@@ -754,6 +794,7 @@ What this version explicitly does NOT include:
 - **Partition des fenêtres entre l'utilisateur et l'agent :** l'agent peut viser toute fenêtre que la politique permet.
 - **Lot d'actions en un appel, diff visuel entre deux captures.**
 - **Autres messages natifs :** hors la sélection de `ComboBox` et `ListBox` (US-064), aucun message de contrôle n'est envoyé à une application (pas de `BM_CLICK`, pas de messages de menu). L'extension à d'autres contrôles est la question Q19.
+- **`<select>` d'une page Chromium fenêtre non active :** il ne liste aucune entrée fermé et ne s'ouvre pas par ExpandCollapse (US-058). Limite connue : aucune voie n'est ajoutée pour lui (Q18).
 
 ## Files NOT to Modify
 
@@ -812,6 +853,6 @@ Frame as questions for engineering input, not mandates:
 - **Q15 :** l'isolation forte (session enfant, prise en charge sur Windows 11 Pro d'après Power Automate) fait-elle l'objet d'un PRD séparé ? Décision d'Arthur après la livraison 2.
 - **Q16 :** quel budget pour la campagne de US-063 (environ 8 tâches × 3 répétitions × 2 modes, plus 20 tâches × 3 répétitions, soit 108 exécutions) ? Décision d'Arthur avant US-063.
 - **Q17 :** `clipboard` `get` reste-t-il permis en mode arrière-plan ? Il ne gêne pas l'utilisateur mais lit ce qu'il vient de copier. Recommandé : permis, sous `system.clipboard`. Décision d'Arthur dans US-039.
-- **Q18 :** la tâche d'éval « une case et une liste déroulante d'une page Chrome » de US-062 demande ce que la mesure du 2026-11-13 dit impossible fenêtre non active (le `<select>` ne s'ouvre pas). La garde-t-on comme échec attendu et documenté, ou la liste déroulante devient-elle une liste Win32 ? Décision d'Arthur avant US-062, après US-058.
+- **Q18 :** la tâche d'éval « une case et une liste déroulante d'une page Chrome » de US-062 demande ce que la mesure du 2026-11-13 dit impossible fenêtre non active (le `<select>` ne s'ouvre pas). La garde-t-on comme échec attendu et documenté, ou la liste déroulante devient-elle une liste Win32 ? Décision d'Arthur avant US-062, après US-058. **Décidé le 2026-11-13 :** la liste déroulante devient une liste Win32, la case d'une page Chrome reste (US-062) ; une tâche impossible par construction fausserait le taux de réussite. La limite du `<select>` est notée dans les Non-Goals.
 - **Q19 :** étend-on la voie native aux onglets, listes et arbres des contrôles communs (`SysTabControl32`, `SysListView32`, `SysTreeView32`) si leur sélection par UI Automation ne prévient pas non plus l'application ? À mesurer d'abord. Décision d'Arthur après US-064.
 [/PRD]
