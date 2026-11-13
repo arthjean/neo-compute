@@ -6,6 +6,8 @@
 | Version | Date | Author | Summary |
 |---------|------|--------|---------|
 | 1.0 | 2026-11-12 | Arthur Jean | Version initiale : mode `background` sans interférence, cohabitation avec l'utilisateur, actions sémantiques complètes, perception ciblée, passe visuelle par fenêtre et mesure (EP-011 à EP-016), d'après la recherche `docs/research/2026-11-11-agent-desktop.md` |
+| 1.1 | 2026-11-13 | Arthur Jean | Amendement après la revue de EP-012 (décision 0013, « Amendement du 2026-11-13 ») : libellé du mode en anglais (US-046) ; garde de premier plan sur l'événement de premier plan, règle du geste et issues d'audit `third_party`, `same_app`, `unknown` (US-050) ; gestionnaires d'événements UIA côté client admis pour les fenêtres UWP (contrainte levée, US-048) ; A19 séparée entre Chromium et Electron, notes pour US-058 et US-059 |
+| 1.2 | 2026-11-13 | Arthur Jean | Garde de premier plan prolongée 2 s après l'action, champ d'audit `guard_late` (US-050) ; abonnement UIA appris pour les applications qui changent sans événement (US-048) ; mesures d'agent-desktop à reprendre dans US-058 |
 
 ## Problem Statement
 
@@ -104,14 +106,14 @@ Key findings that informed this PRD:
 - **A15 :** Invoke, Toggle, Value, ExpandCollapse, SelectionItem et ScrollItem agissent sur une fenêtre non active et entièrement recouverte, sans changer le premier plan, sur les six applications de référence (Bloc-notes, Calculatrice, Paramètres, Explorateur, Chrome, VS Code). Validé par US-040.
 - **A16 :** un menu ouvert par ExpandCollapse sur une fenêtre non active reste ouvert au moins 2 s et se lit comme racine du snapshot. Validé par US-040.
 - **A17 :** une fenêtre se restaure et une application se lance sans prendre le premier plan (`SW_SHOWNOACTIVATE`, `SW_SHOWMINNOACTIVE`), ou la garde le rend en moins de 200 ms. Validé par US-040.
-- **A18 :** les WinEvents du processus cible signalent au moins 95 % des changements d'arbre d'une fenêtre non active. Validé par US-047.
-- **A19 :** l'arbre d'une fenêtre Chromium ou Electron entièrement recouverte se met à jour après une action. Inconnu : Chromium documente l'arrêt du rendu, pas l'effet sur l'arbre. Mesuré par US-058.
+- **A18 :** les WinEvents du processus cible signalent au moins 95 % des changements d'arbre d'une fenêtre non active. Validé par US-047. Amendement 1.2 : A18 étant infirmée pour les applications XAML, le compteur de changements additionne aux WinEvents les événements UI Automation de la fenêtre, pour un cadre UWP d'emblée et pour toute application dont l'arbre a changé deux fois de suite sans événement ; l'abonnement est retiré si deux changements de plus restent sans événement (décision 0013).
+- **A19 :** l'arbre d'une fenêtre Chromium entièrement recouverte se met à jour après une action. Inconnu : Chromium documente l'arrêt du rendu, pas l'effet sur l'arbre. Mesuré par US-058. Amendement 1.1 : Chromium et Electron sont deux cas. Chrome calcule lui-même l'occlusion de ses fenêtres et suspend le rendu d'une page recouverte, ce qui fige son arbre ; il ignore les fenêtres `WS_POPUP` dans ce calcul (`ui/gfx/win/hwnd_util.cc`). VS Code désactive ce calcul (`CalculateNativeWinOcclusion`) : une fenêtre VS Code recouverte continue de rendre. US-058 mesure les deux séparément.
 - **A20 :** `PrintWindow` avec `PW_RENDERFULLCONTENT` rend une image non noire d'une fenêtre entièrement recouverte pour au moins 5 des 6 applications de référence. Cua rapporte du noir sur les fenêtres DirectComposition. Validé par US-060.
 - **A21 :** les trois actions nouvelles de `ui_act` et les paramètres `root` et `depth` de `ui_tree` gardent les définitions `alwaysLoad` sous 1 500 tokens estimés. Vérifié à la compilation par le budget existant.
 
 ### Hard Constraints
 - Zig 0.17.0, bindings générés depuis `bindings/windows.zon`, aucune vtable écrite à la main, aucun type WinRT (absent de win32metadata).
-- Aucun objet COM implémenté côté client : les gestionnaires d'événements UIA sont exclus de ce PRD.
+- Objets COM implémentés côté client : uniquement les gestionnaires d'événements UI Automation de `src/backend/windows/uia_events.zig` (amendement 1.1, décision 0013). Ils sont statiques, jamais libérés, et ne font qu'incrémenter un compteur. La version 1.0 les excluait ; la sonde `events-probe` a montré qu'une application UWP ne signale ses changements qu'à un client UIA abonné.
 - Les invariants FR-07 à FR-18 restent vrais : aucune connexion réseau (FR-10), aucun outil de commande (FR-11), aucune valeur de mot de passe exposée (FR-09), une seule instance par bureau (FR-14), stdout réservé au JSON-RPC (FR-18).
 - FR-12 inchangé : seul un geste physique lève la pause.
 - Les 17 outils du toolset restent conformes à `tests/fixtures/toolset_20260801.json` ; une extension est un paramètre optionnel.
@@ -276,7 +278,7 @@ Faire que le kill switch, l'indicateur, la stabilisation et les attentes fonctio
 **Dependencies:** Blocked by US-045
 
 **Acceptance Criteria:**
-- [ ] En mode arrière-plan, pendant une action et 1 s après, seul le libellé s'affiche sur l'écran principal : « neo-compute agit en arrière-plan : <raccourci> met en pause ». Les quatre bandes de cadre ne sont pas affichées.
+- [ ] En mode arrière-plan, pendant une action et 1 s après, seul le libellé s'affiche sur l'écran principal : « neo-compute is acting in the background: <raccourci> pauses » (en anglais comme le libellé de pause, amendement 1.1). Les quatre bandes de cadre ne sont pas affichées.
 - [ ] En pause, le libellé de pause existant s'affiche, avec le raccourci de réarmement.
 - [ ] Le libellé reste exclu des captures, ne prend jamais le focus et laisse passer les clics (FR-30).
 - [ ] Étant donné `--no-indicator`, alors rien ne s'affiche, comme aujourd'hui.
@@ -346,11 +348,12 @@ Faire que le kill switch, l'indicateur, la stabilisation et les attentes fonctio
 
 **Acceptance Criteria:**
 - [ ] En mode arrière-plan, chaque outil d'action lit la fenêtre au premier plan avant et après son exécution, stabilisation comprise.
-- [ ] Étant donné un premier plan passé à une fenêtre du processus cible, sans entrée physique vue par les hooks pendant l'action, alors le serveur rend le premier plan à la fenêtre précédente en < 200 ms, sans `SendInput`.
+- [ ] Étant donné un premier plan passé à une fenêtre du processus cible, sans geste de l'utilisateur capable de changer la fenêtre de premier plan, alors le serveur rend le premier plan à la fenêtre précédente en < 200 ms, sans `SendInput`. Amendement 1.1 : la restauration part de l'événement de premier plan (`EVENT_SYSTEM_FOREGROUND`), pendant que l'action attend encore, et le regard en fin d'action reste le filet. Trois restaurations au plus par action : une cible qui reprend le premier plan à chaque fois est laissée devant, avec la ligne « Premier plan pris par <exe cible> : repris après 3 restaurations, laissé devant ».
 - [ ] Le résultat porte alors une ligne « Premier plan pris par <exe cible>, rendu à <exe> », ou « Premier plan pris par <exe cible> : Windows a refusé la restauration » si elle échoue.
-- [ ] Étant donné une entrée physique vue pendant l'action, alors aucune restauration n'est tentée, et le résultat porte « Premier plan changé pendant l'action (entrée de l'utilisateur) : non restauré ».
+- [ ] Étant donné un geste de l'utilisateur capable de changer la fenêtre de premier plan, vu par les hooks pendant l'action ou dans les 500 ms qui la précèdent, alors aucune restauration n'est tentée, et le résultat porte « Premier plan changé pendant l'action (entrée de l'utilisateur) : non restauré ». Amendement 1.1 : comptent comme tels un clic hors de la fenêtre de l'utilisateur et une touche avec Alt ou Win (Alt+Tab, Alt+Échap, Ctrl+Échap compris). Une frappe ordinaire ne compte plus : elle ne change aucune fenêtre de premier plan, et c'est elle qui tomberait dans le dialogue de la cible.
 - [ ] Étant donné un premier plan inchangé, alors le résultat ne porte aucune ligne de garde.
-- [ ] L'audit enregistre pour chaque action le mode et l'issue de la garde (`intact`, `restored`, `refused`, `user`).
+- [ ] L'audit enregistre pour chaque action le mode et l'issue de la garde (`intact`, `restored`, `refused`, `user`, et depuis l'amendement 1.1 : `third_party` quand une autre application passe devant d'elle-même, `same_app` quand l'utilisateur était déjà dans une fenêtre du processus cible, `unknown` quand les hooks d'entrée sont absents). Aucune de ces trois dernières n'est restaurée.
+- [ ] Amendement 1.2 : la garde reste armée 2 s après la fin de l'action. Étant donné une fenêtre du processus cible qui passe devant dans ce délai, sans geste de l'utilisateur, alors le premier plan est rendu en < 200 ms, le résultat de l'appel suivant porte « Premier plan pris par <exe cible> après l'action précédente, rendu à <exe> » (ou « : Windows a refusé la restauration ») et sa ligne d'audit porte `guard_late`.
 - [ ] La garde ajoute < 100 µs à une action dont le premier plan est intact.
 - [ ] Le selftest ajoute `bg-guard-restore` : une action qui ouvre un dialogue activant de la fenêtre de test, premier plan rendu au leurre.
 
@@ -496,6 +499,8 @@ Lire une région d'une grande application, relire un seul élément, et savoir q
 #### US-058: Validate assumption: l'arbre d'une fenêtre Chromium recouverte reste à jour
 **Description:** En tant qu'Arthur, je veux mesurer ce que deviennent l'arbre et les actions d'une fenêtre Chrome ou VS Code recouverte afin de savoir si l'arrière-plan tient sur les applications Electron.
 
+**Note de l'amendement 1.1 :** le leurre des sondes est désormais une fenêtre à cadre (`WS_CAPTION | WS_THICKFRAME`) : Chromium ignore une fenêtre `WS_POPUP` dans son calcul d'occlusion, donc l'absence de document web sous l'ancien leurre ne venait pas de l'occlusion. La sonde mesure en plus : si une action UIA force la mise à jour de l'arbre d'une page recouverte (l'accessibilité web s'active quand une requête UIA vise un nœud web) ; la plus petite bande visible qui suffit (16 px n'est qu'un point de départ) ; Chrome et VS Code séparément, VS Code ne calculant pas l'occlusion. Amendement 1.2 : la sonde sépare « arbre pas encore construit » (premier contact, qui se corrige en relisant) de « arbre figé par recouvrement », et vérifie que minimiser ou déplacer ce qui recouvre suffit à débloquer (mesures A1-5 et A1-6 d'agent-desktop).
+
 **Priority:** P1
 **Size:** S (2 pts)
 **Dependencies:** None
@@ -520,6 +525,7 @@ Lire une région d'une grande application, relire un seul élément, et savoir q
 - [ ] L'en-tête d'une racine entièrement recouverte par des fenêtres plus hautes dans l'ordre z porte le drapeau `{occluded}` ; une fenêtre visible, même d'un pixel, ne le porte pas.
 - [ ] `window_list` porte le même drapeau.
 - [ ] Étant donné A19 infirmée et une cible de classe `Chrome_WidgetWin_1` recouverte, alors `ui_tree` ajoute une ligne : « Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. Déplace-la avec window_set pour <situation recommandée par US-058>. »
+- [ ] Amendement 1.1 : pour une cible Chromium, « recouverte » se calcule avec les règles de Chromium (les fenêtres `WS_POPUP`, masquées, minimisées ou transparentes ne recouvrent pas), afin que le drapeau dise ce que Chrome décide. Une cible Electron qui désactive le calcul d'occlusion (VS Code) ne reçoit pas la ligne d'avertissement. `app_launch` n'ajoute aucun drapeau de ligne de commande par défaut.
 - [ ] Étant donné A19 validée, alors aucune ligne d'avertissement n'est ajoutée.
 - [ ] Le calcul de recouvrement ajoute < 1 ms p95 à `ui_tree` pour 50 fenêtres de premier niveau.
 - [ ] Le calcul ignore les fenêtres de l'indicateur, les fenêtres minimisées et les fenêtres masquées (« cloaked »).
@@ -676,17 +682,17 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 | # | Risk | Probability | Impact | Mitigation |
 |---|------|------------|--------|------------|
 | 1 | Un pattern UIA prend le premier plan sur certaines applications (A15 infirmée) | Med | High | Sonde US-040 avant le mode ; classement par application mesurée ; garde et restauration (US-050) |
-| 2 | Chromium et Electron figent leur arbre quand la fenêtre est recouverte (A19) | High | High | Sonde US-058 ; drapeau `{occluded}` et conseil de placement (US-059) ; écran secondaire comme situation de repli |
+| 2 | Chromium fige son arbre quand la fenêtre est recouverte (A19) ; Electron selon l'application (VS Code désactive le calcul d'occlusion) | High | High | Sonde US-058, Chrome et VS Code séparément ; drapeau `{occluded}` calculé avec les règles de Chromium et conseil de placement (US-059) ; écran secondaire comme situation de repli |
 | 3 | Les WinEvents manquent des changements (A18) | Med | Med | Sonde US-047 ; plancher de relecture à 250 ms ; stabilisation bornée par `settle_timeout_ms` |
 | 4 | `PrintWindow` rend du noir sur les fenêtres DirectComposition (A20) | High | Med | Sonde US-060 ; US-061 bloquée et question Q13 posée plutôt qu'une voie WinRT ajoutée sans décision |
 | 5 | La pause par raccourci est moins réflexe que la souris ou Échap : une action non voulue va à son terme | Med | Med | Aucune action du mode ne touche l'entrée de l'utilisateur ; politique par application et audit inchangés ; raccourci rappelé par le libellé |
 | 6 | L'agent agit sur la fenêtre où l'utilisateur travaille | Low | High | Fenêtre cible explicite (US-042) ; politique `deny` et `observe` par application ; aucune lecture du premier plan |
 | 7 | Les définitions `alwaysLoad` dépassent 1 500 tokens (A21) | Med | Med | Actions ajoutées à l'énumération existante, pas de paramètre nouveau sur `ui_act` ; budget vérifié à la compilation ; arrêt et rapport si dépassé |
-| 8 | Le thread WinEvents ou la couche COM fait apparaître des défauts Zig | Med | High | Bindings générés ; rappel C simple, aucun objet COM côté client ; chaque défaut compté pour la condition 3 du Rust Switch Gate |
+| 8 | Le thread WinEvents ou la couche COM fait apparaître des défauts Zig | Med | High | Bindings générés ; rappel C simple pour les WinEvents ; côté client, seuls les gestionnaires d'événements UIA statiques de `uia_events.zig` (amendement 1.1), construits sur les vtables générées ; chaque défaut compté pour la condition 3 du Rust Switch Gate |
 | 9 | Un texte lu dans une fenêtre recouverte injecte des consignes | Med | High | Texte d'`instructions` inchangé sur ce point ; aucun outil de commande ni réseau ; politique par application |
 | 10 | La capture par fenêtre expose un mot de passe | Low | High | Balayage `IsPassword` de la fenêtre capturée avant l'encodage ; tâche canari ; refus des applications `deny` |
 | 11 | Le changement de `ui_act` (attente, verdict) fait régresser le mode `a11y` | Med | Med | Tests du cœur mis à jour ; campagne sur les 20 tâches existantes (US-063) ; seuil de 5 points |
-| 12 | La restauration du premier plan contrarie l'utilisateur qui voulait la fenêtre cible | Low | Low | Aucune restauration si une entrée physique a été vue pendant l'action |
+| 12 | La restauration du premier plan contrarie l'utilisateur qui voulait la fenêtre cible | Low | Low | Aucune restauration si un geste capable de changer la fenêtre de premier plan a été vu (clic hors de sa fenêtre, touche avec Alt ou Win) ; trois restaurations au plus par action |
 | 13 | 25 stories dépassent une livraison | High | Low | Trois livraisons ordonnées ; la livraison 1 est utilisable seule |
 
 ## Non-Goals
