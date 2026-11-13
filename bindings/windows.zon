@@ -8,176 +8,196 @@
     .dll_aliases = .{.{ "api-ms-win-shcore-scaling-l1-1-1", "shcore" }},
     .apis = .{
         // COM runtime and OLE automation
-        "CoInitializeEx",                             "CoUninitialize",                         "CoCreateInstance",                           "COINIT_MULTITHREADED",                      "CLSCTX_INPROC_SERVER",
-        "SysAllocString",                             "SysFreeString",                          "SysStringLen",                               "VariantClear",                              "SafeArray*",
-        "S_OK",                                       "S_FALSE",                                "RPC_E_CHANGED_MODE",                         "VARIANT",                                   "SAFEARRAY",
+        "CoInitializeEx",                             "CoUninitialize",                            "CoCreateInstance",                           "COINIT_MULTITHREADED",                      "CLSCTX_INPROC_SERVER",
+        "SysAllocString",                             "SysFreeString",                             "SysStringLen",                               "VariantClear",                              "SafeArray*",
+        "S_OK",                                       "S_FALSE",                                   "RPC_E_CHANGED_MODE",                         "VARIANT",                                   "SAFEARRAY",
 
         // UI Automation
-        "CUIAutomation",                              "IUIAutomation",                          "IUIAutomation2",                             "IUIAutomationElement",                      "IUIAutomationElementArray",
-        "IUIAutomationCacheRequest",                  "IUIAutomationCondition",                 "IUIAutomationTreeWalker",                    "IUIAutomationInvokePattern",                "IUIAutomationValuePattern",
-        "IUIAutomationTogglePattern",                 "IUIAutomationExpandCollapsePattern",     "IUIAutomationSelectionItemPattern",          "IUIAutomationScrollItemPattern",            "UIA_NamePropertyId",
-        "UIA_ControlTypePropertyId",                  "UIA_BoundingRectanglePropertyId",        "UIA_ButtonControlTypeId",                    "TreeScope_Descendants",                     "UIA_E_ELEMENTNOTAVAILABLE",
+        "CUIAutomation",                              "IUIAutomation",                             "IUIAutomation2",                             "IUIAutomationElement",                      "IUIAutomationElementArray",
+        "IUIAutomationCacheRequest",                  "IUIAutomationCondition",                    "IUIAutomationTreeWalker",                    "IUIAutomationInvokePattern",                "IUIAutomationValuePattern",
+        "IUIAutomationTogglePattern",                 "IUIAutomationExpandCollapsePattern",        "IUIAutomationSelectionItemPattern",          "IUIAutomationScrollItemPattern",            "UIA_NamePropertyId",
+        "UIA_ControlTypePropertyId",                  "UIA_BoundingRectanglePropertyId",           "UIA_ButtonControlTypeId",                    "TreeScope_Descendants",                     "UIA_E_ELEMENTNOTAVAILABLE",
 
         // DXGI and Direct3D 11
-        "CreateDXGIFactory1",                         "IDXGIFactory1",                          "IDXGIAdapter1",                              "IDXGIOutput1",                              "IDXGIOutput5",
-        "IDXGIOutputDuplication",                     "IDXGIResource",                          "DXGI_OUTDUPL_FRAME_INFO",                    "DXGI_OUTDUPL_MOVE_RECT",                    "DXGI_FORMAT_B8G8R8A8_UNORM",
-        "DXGI_ERROR_NOT_FOUND",                       "DXGI_ERROR_UNSUPPORTED",                 "DXGI_ERROR_ACCESS_LOST",                     "DXGI_ERROR_WAIT_TIMEOUT",                   "D3D11CreateDevice",
-        "ID3D11Device",                               "ID3D11DeviceContext",                    "ID3D11Texture2D",                            "D3D11_SDK_VERSION",                         "D3D11_USAGE_STAGING",
-        "D3D11_CPU_ACCESS_READ",                      "D3D11_MAP_READ",                         "D3D_DRIVER_TYPE_UNKNOWN",
+        "CreateDXGIFactory1",                         "IDXGIFactory1",                             "IDXGIAdapter1",                              "IDXGIOutput1",                              "IDXGIOutput5",
+        "IDXGIOutputDuplication",                     "IDXGIResource",                             "DXGI_OUTDUPL_FRAME_INFO",                    "DXGI_OUTDUPL_MOVE_RECT",                    "DXGI_FORMAT_B8G8R8A8_UNORM",
+        "DXGI_ERROR_NOT_FOUND",                       "DXGI_ERROR_UNSUPPORTED",                    "DXGI_ERROR_ACCESS_LOST",                     "DXGI_ERROR_WAIT_TIMEOUT",                   "D3D11CreateDevice",
+        "ID3D11Device",                               "ID3D11DeviceContext",                       "ID3D11Texture2D",                            "D3D11_SDK_VERSION",                         "D3D11_USAGE_STAGING",
+        "D3D11_CPU_ACCESS_READ",                      "D3D11_MAP_READ",                            "D3D_DRIVER_TYPE_UNKNOWN",
 
         // Input and DPI
                            "SendInput",                                 "INPUT",
-        "MOUSEINPUT",                                 "KEYBDINPUT",                             "HARDWAREINPUT",                              "GetCursorPos",                              "SetCursorPos",
-        "SetProcessDpiAwarenessContext",              "GetDpiForMonitor",                       "DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2", "MonitorFromPoint",                          "MonitorFromWindow",
-        "GetMonitorInfoW",                            "MONITORINFO",                            "MDT_EFFECTIVE_DPI",                          "MONITOR_DEFAULTTONEAREST",                  "GetSystemMetrics",
-        "SM_XVIRTUALSCREEN",                          "SM_YVIRTUALSCREEN",                      "SM_CXVIRTUALSCREEN",                         "SM_CYVIRTUALSCREEN",                        "MOUSEEVENTF_MOVE",
-        "MOUSEEVENTF_ABSOLUTE",                       "MOUSEEVENTF_VIRTUALDESK",                "MOUSEEVENTF_LEFTDOWN",                       "MOUSEEVENTF_LEFTUP",                        "KEYEVENTF_UNICODE",
-        "KEYEVENTF_KEYUP",                            "INPUT_MOUSE",                            "INPUT_KEYBOARD",                             "GetLastError",                              "ERROR_ACCESS_DENIED",
-        "GetAwarenessFromDpiAwarenessContext",        "GetThreadDpiAwarenessContext",           "DPI_AWARENESS_PER_MONITOR_AWARE",
+        "MOUSEINPUT",                                 "KEYBDINPUT",                                "HARDWAREINPUT",                              "GetCursorPos",                              "SetCursorPos",
+        "SetProcessDpiAwarenessContext",              "GetDpiForMonitor",                          "DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2", "MonitorFromPoint",                          "MonitorFromWindow",
+        "GetMonitorInfoW",                            "MONITORINFO",                               "MDT_EFFECTIVE_DPI",                          "MONITOR_DEFAULTTONEAREST",                  "GetSystemMetrics",
+        "SM_XVIRTUALSCREEN",                          "SM_YVIRTUALSCREEN",                         "SM_CXVIRTUALSCREEN",                         "SM_CYVIRTUALSCREEN",                        "MOUSEEVENTF_MOVE",
+        "MOUSEEVENTF_ABSOLUTE",                       "MOUSEEVENTF_VIRTUALDESK",                   "MOUSEEVENTF_LEFTDOWN",                       "MOUSEEVENTF_LEFTUP",                        "KEYEVENTF_UNICODE",
+        "KEYEVENTF_KEYUP",                            "INPUT_MOUSE",                               "INPUT_KEYBOARD",                             "GetLastError",                              "ERROR_ACCESS_DENIED",
+        "GetAwarenessFromDpiAwarenessContext",        "GetThreadDpiAwarenessContext",              "DPI_AWARENESS_PER_MONITOR_AWARE",
 
         // Process counters, timing
                    "GetCurrentProcess",                         "K32GetProcessMemoryInfo",
-        "GetProcessHandleCount",                      "PROCESS_MEMORY_COUNTERS_EX",             "GetModuleHandleW",                           "GetCurrentThreadId",                        "QueryPerformanceCounter",
+        "GetProcessHandleCount",                      "PROCESS_MEMORY_COUNTERS_EX",                "GetModuleHandleW",                           "GetCurrentThreadId",                        "QueryPerformanceCounter",
         "QueryPerformanceFrequency",                  "Sleep",
 
         // Windows and painting (probe and selftest fixtures)
-                                         "RegisterClassExW",                           "CreateWindowExW",                           "DefWindowProcW",
-        "GetMessageW",                                "PeekMessageW",                           "TranslateMessage",                           "DispatchMessageW",                          "PostMessageW",
-        "PostThreadMessageW",                         "PostQuitMessage",                        "DestroyWindow",                              "ShowWindow",                                "IsWindow",
-        "SetTimer",                                   "InvalidateRect",                         "UpdateWindow",                               "BeginPaint",                                "EndPaint",
-        "FillRect",                                   "CreateSolidBrush",                       "DeleteObject",                               "GetForegroundWindow",                       "SetForegroundWindow",
-        "FindWindowW",                                "GetWindowRect",                          "GetClientRect",                              "ClientToScreen",                            "WS_POPUP",
-        "WS_CHILD",                                   "WS_VISIBLE",                             "WS_OVERLAPPEDWINDOW",                        "WS_EX_TOPMOST",                             "WS_EX_TOOLWINDOW",
-        "WS_EX_NOACTIVATE",                           "SW_SHOWNOACTIVATE",                      "SW_SHOW",                                    "WM_DESTROY",                                "WM_CLOSE",
-        "WM_QUIT",                                    "WM_PAINT",                               "WM_TIMER",                                   "WM_LBUTTONDOWN",                            "WM_CHAR",
+                                            "RegisterClassExW",                           "CreateWindowExW",                           "DefWindowProcW",
+        "GetMessageW",                                "PeekMessageW",                              "TranslateMessage",                           "DispatchMessageW",                          "PostMessageW",
+        "PostThreadMessageW",                         "PostQuitMessage",                           "DestroyWindow",                              "ShowWindow",                                "IsWindow",
+        "SetTimer",                                   "InvalidateRect",                            "UpdateWindow",                               "BeginPaint",                                "EndPaint",
+        "FillRect",                                   "CreateSolidBrush",                          "DeleteObject",                               "GetForegroundWindow",                       "SetForegroundWindow",
+        "FindWindowW",                                "GetWindowRect",                             "GetClientRect",                              "ClientToScreen",                            "WS_POPUP",
+        "WS_CHILD",                                   "WS_VISIBLE",                                "WS_OVERLAPPEDWINDOW",                        "WS_EX_TOPMOST",                             "WS_EX_TOOLWINDOW",
+        "WS_EX_NOACTIVATE",                           "SW_SHOWNOACTIVATE",                         "SW_SHOW",                                    "WM_DESTROY",                                "WM_CLOSE",
+        "WM_QUIT",                                    "WM_PAINT",                                  "WM_TIMER",                                   "WM_LBUTTONDOWN",                            "WM_CHAR",
         "PM_REMOVE",
 
         // Capture state: secure desktop detection, recreation after loss
-                                         "OpenInputDesktop",                       "CloseDesktop",                               "GetUserObjectInformationW",                 "UOI_NAME",
-        "DESKTOP_READOBJECTS",                        "E_ACCESSDENIED",                         "DXGI_ERROR_SESSION_DISCONNECTED",            "DXGI_ERROR_DEVICE_REMOVED",                 "DXGI_ERROR_INVALID_CALL",
+                                         "OpenInputDesktop",                          "CloseDesktop",                               "GetUserObjectInformationW",                 "UOI_NAME",
+        "DESKTOP_READOBJECTS",                        "E_ACCESSDENIED",                            "DXGI_ERROR_SESSION_DISCONNECTED",            "DXGI_ERROR_DEVICE_REMOVED",                 "DXGI_ERROR_INVALID_CALL",
         "DXGI_OUTDUPL_DESC",
 
         // Injection target checks (UIPI) and keyboard layout
-                                 "WindowFromPoint",                        "GetAncestor",                                "GA_ROOT",                                   "GetWindowThreadProcessId",
-        "OpenProcess",                                "PROCESS_QUERY_LIMITED_INFORMATION",      "OpenProcessToken",                           "TOKEN_QUERY",                               "GetTokenInformation",
-        "TokenIntegrityLevel",                        "TOKEN_MANDATORY_LABEL",                  "GetSidSubAuthority",                         "GetSidSubAuthorityCount",                   "CloseHandle",
-        "GetCurrentProcessId",                        "WHEEL_DELTA",                            "VkKeyScanExW",                               "GetKeyboardLayout",                         "MapVirtualKeyExW",
-        "MAPVK_VK_TO_VSC_EX",                         "KEYEVENTF_EXTENDEDKEY",                  "VIRTUAL_KEY",                                "GetAsyncKeyState",                          "GetKeyState",
+                                 "WindowFromPoint",                           "GetAncestor",                                "GA_ROOT",                                   "GetWindowThreadProcessId",
+        "OpenProcess",                                "PROCESS_QUERY_LIMITED_INFORMATION",         "OpenProcessToken",                           "TOKEN_QUERY",                               "GetTokenInformation",
+        "TokenIntegrityLevel",                        "TOKEN_MANDATORY_LABEL",                     "GetSidSubAuthority",                         "GetSidSubAuthorityCount",                   "CloseHandle",
+        "GetCurrentProcessId",                        "WHEEL_DELTA",                               "VkKeyScanExW",                               "GetKeyboardLayout",                         "MapVirtualKeyExW",
+        "MAPVK_VK_TO_VSC_EX",                         "KEYEVENTF_EXTENDEDKEY",                     "VIRTUAL_KEY",                                "GetAsyncKeyState",                          "GetKeyState",
         "GetKeyboardLayoutList",                      "ActivateKeyboardLayout",
 
         // Window list and focus
-                        "EnumWindows",                                "IsWindowVisible",                           "GetWindowTextW",
-        "GetWindowLongPtrW",                          "GWL_EXSTYLE",                            "WS_EX_APPWINDOW",                            "IsIconic",                                  "DwmGetWindowAttribute",
-        "DWMWA_CLOAKED",                              "DWMWA_EXTENDED_FRAME_BOUNDS",            "QueryFullProcessImageNameW",                 "PROCESS_NAME_WIN32",                        "SW_RESTORE",
-        "SW_MINIMIZE",                                "BringWindowToTop",                       "AttachThreadInput",                          "SetWindowPos",                              "SWP_NOSIZE",
-        "SWP_NOZORDER",                               "SWP_NOACTIVATE",                         "GetModuleFileNameW",                         "WM_KEYDOWN",                                "WM_MOUSEWHEEL",
-        "WM_RBUTTONDOWN",                             "WM_APP",                                 "SetWindowTextW",                             "SetThreadDpiAwarenessContext",              "DPI_AWARENESS_CONTEXT_UNAWARE",
+                           "EnumWindows",                                "IsWindowVisible",                           "GetWindowTextW",
+        "GetWindowLongPtrW",                          "GWL_EXSTYLE",                               "WS_EX_APPWINDOW",                            "IsIconic",                                  "DwmGetWindowAttribute",
+        "DWMWA_CLOAKED",                              "DWMWA_EXTENDED_FRAME_BOUNDS",               "QueryFullProcessImageNameW",                 "PROCESS_NAME_WIN32",                        "SW_RESTORE",
+        "SW_MINIMIZE",                                "BringWindowToTop",                          "AttachThreadInput",                          "SetWindowPos",                              "SWP_NOSIZE",
+        "SWP_NOZORDER",                               "SWP_NOACTIVATE",                            "GetModuleFileNameW",                         "WM_KEYDOWN",                                "WM_MOUSEWHEEL",
+        "WM_RBUTTONDOWN",                             "WM_APP",                                    "SetWindowTextW",                             "SetThreadDpiAwarenessContext",              "DPI_AWARENESS_CONTEXT_UNAWARE",
         "ClientToScreen",
 
         // UI Automation worker (US-011): job signaling, timeouts, desktop fallback
-                                    "CreateEventW",                           "SetEvent",                                   "WaitForSingleObject",                       "INFINITE",
-        "UIA_E_TIMEOUT",                              "GetClassNameW",                          "SendMessageTimeoutW",                        "InternalGetWindowText",                     "SMTO_ABORTIFHUNG",
+                                    "CreateEventW",                              "SetEvent",                                   "WaitForSingleObject",                       "INFINITE",
+        "UIA_E_TIMEOUT",                              "GetClassNameW",                             "SendMessageTimeoutW",                        "InternalGetWindowText",                     "SMTO_ABORTIFHUNG",
         "WM_NULL",                                    "IsWindowEnabled",
 
         // Selftest fixtures for the accessibility tools
-                               "ES_PASSWORD",                                "WM_COMMAND",                                "BN_CLICKED",
-        "WS_BORDER",                                  "KillTimer",                              "GetWindowTextLengthW",
+                                  "ES_PASSWORD",                                "WM_COMMAND",                                "BN_CLICKED",
+        "WS_BORDER",                                  "KillTimer",                                 "GetWindowTextLengthW",
 
         // Security (EP-004): kill switch hooks, single instance, policy targets, masking
                               "SetWindowsHookExW",                         "UnhookWindowsHookEx",
-        "CallNextHookEx",                             "WH_KEYBOARD_LL",                         "WH_MOUSE_LL",                                "KBDLLHOOKSTRUCT",                           "MSLLHOOKSTRUCT",
-        "LLKHF_INJECTED",                             "LLMHF_INJECTED",                         "HC_ACTION",                                  "WM_SYSKEYDOWN",                             "WM_KEYUP",
-        "WM_SYSKEYUP",                                "WM_MOUSEMOVE",                           "GetLastInputInfo",                           "LASTINPUTINFO",                             "GetTickCount",
-        "CreateMutexW",                               "ERROR_ALREADY_EXISTS",                   "AcquireSRWLockExclusive",                    "ReleaseSRWLockExclusive",                   "SRWLOCK",
-        "WS_EX_LAYERED",                              "WS_EX_TRANSPARENT",                      "UIA_IsPasswordPropertyId",                   "UIA_IsOffscreenPropertyId",
+        "CallNextHookEx",                             "WH_KEYBOARD_LL",                            "WH_MOUSE_LL",                                "KBDLLHOOKSTRUCT",                           "MSLLHOOKSTRUCT",
+        "LLKHF_INJECTED",                             "LLMHF_INJECTED",                            "HC_ACTION",                                  "WM_SYSKEYDOWN",                             "WM_KEYUP",
+        "WM_SYSKEYUP",                                "WM_MOUSEMOVE",                              "GetLastInputInfo",                           "LASTINPUTINFO",                             "GetTickCount",
+        "CreateMutexW",                               "ERROR_ALREADY_EXISTS",                      "AcquireSRWLockExclusive",                    "ReleaseSRWLockExclusive",                   "SRWLOCK",
+        "WS_EX_LAYERED",                              "WS_EX_TRANSPARENT",                         "UIA_IsPasswordPropertyId",                   "UIA_IsOffscreenPropertyId",
 
         // Ranges, scrolling and selection (US-022)
                         "UIA_RangeValueValuePropertyId",
-        "UIA_RangeValueMinimumPropertyId",            "UIA_RangeValueMaximumPropertyId",        "UIA_RangeValueIsReadOnlyPropertyId",         "UIA_ScrollVerticalScrollPercentPropertyId", "UIA_ScrollHorizontalScrollPercentPropertyId",
-        "UIA_IsRangeValuePatternAvailablePropertyId", "UIA_IsScrollPatternAvailablePropertyId", "UIA_RangeValuePatternId",                    "UIA_ScrollPatternId",                       "UIA_TextPatternId",
-        "UIA_ScrollPatternNoScroll",                  "IUIAutomationTextPattern",               "IUIAutomationTextRange",                     "IUIAutomationTextRangeArray",               "InitCommonControlsEx",
-        "INITCOMMONCONTROLSEX",                       "ICC_BAR_CLASSES",                        "TBM_SETRANGE",                               "TBM_SETPOS",
+        "UIA_RangeValueMinimumPropertyId",            "UIA_RangeValueMaximumPropertyId",           "UIA_RangeValueIsReadOnlyPropertyId",         "UIA_ScrollVerticalScrollPercentPropertyId", "UIA_ScrollHorizontalScrollPercentPropertyId",
+        "UIA_IsRangeValuePatternAvailablePropertyId", "UIA_IsScrollPatternAvailablePropertyId",    "UIA_RangeValuePatternId",                    "UIA_ScrollPatternId",                       "UIA_TextPatternId",
+        "UIA_ScrollPatternNoScroll",                  "IUIAutomationTextPattern",                  "IUIAutomationTextRange",                     "IUIAutomationTextRangeArray",               "InitCommonControlsEx",
+        "INITCOMMONCONTROLSEX",                       "ICC_BAR_CLASSES",                           "TBM_SETRANGE",                               "TBM_SETPOS",
 
         // Menus, popups and modal dialogs as snapshot roots (US-023)
                                        "GetWindow",
-        "GW_OWNER",                                   "GWL_STYLE",                              "WS_CAPTION",                                 "UIA_WindowIsModalPropertyId",               "TrackPopupMenu",
-        "CreatePopupMenu",                            "AppendMenuW",                            "DestroyMenu",                                "MF_STRING",                                 "TPM_RETURNCMD",
-        "EndMenu",                                    "SendMessageW",                           "SetFocus",                                   "EM_SETSEL",                                 "LoadLibraryW",
+        "GW_OWNER",                                   "GWL_STYLE",                                 "WS_CAPTION",                                 "UIA_WindowIsModalPropertyId",               "TrackPopupMenu",
+        "CreatePopupMenu",                            "AppendMenuW",                               "DestroyMenu",                                "MF_STRING",                                 "TPM_RETURNCMD",
+        "EndMenu",                                    "SendMessageW",                              "SetFocus",                                   "EM_SETSEL",                                 "LoadLibraryW",
 
         // Web page text (US-024)
         "IUIAutomationScrollPattern",
 
         // Firefox through the MSAA proxy of UI Automation (US-025)
-                        "UIA_ProviderDescriptionPropertyId",      "UIA_LegacyIAccessibleRolePropertyId",        "UIA_LegacyIAccessibleStatePropertyId",      "UIA_LegacyIAccessiblePatternId",
-        "IUIAutomationLegacyIAccessiblePattern",      "ROLE_SYSTEM_TEXT",                       "STATE_SYSTEM_PROTECTED",                     "STATE_SYSTEM_FOCUSABLE",
+                        "UIA_ProviderDescriptionPropertyId",         "UIA_LegacyIAccessibleRolePropertyId",        "UIA_LegacyIAccessibleStatePropertyId",      "UIA_LegacyIAccessiblePatternId",
+        "IUIAutomationLegacyIAccessiblePattern",      "ROLE_SYSTEM_TEXT",                          "STATE_SYSTEM_PROTECTED",                     "STATE_SYSTEM_FOCUSABLE",
 
         // Selftest trackbars that stop answering mid-snapshot (US-022 timeout)
                            "SetWindowSubclass",
-        "DefSubclassProc",                            "WM_USER",                                "SetTimer",                                   "WM_TIMER",                                  "DestroyWindow",
+        "DefSubclassProc",                            "WM_USER",                                   "SetTimer",                                   "WM_TIMER",                                  "DestroyWindow",
 
         // Shell worker in a single-threaded apartment (EP-006)
-        "COINIT_APARTMENTTHREADED",                   "CLSCTX_ALL",                             "MsgWaitForMultipleObjects",                  "QS_ALLINPUT",                               "WAIT_OBJECT_0",
+        "COINIT_APARTMENTTHREADED",                   "CLSCTX_ALL",                                "MsgWaitForMultipleObjects",                  "QS_ALLINPUT",                               "WAIT_OBJECT_0",
         "WAIT_TIMEOUT",                               "CoTaskMemFree",
 
         // Displays and virtual desktops in window_list (US-026)
-                                 "MONITORINFOF_PRIMARY",                       "IVirtualDesktopManager",                    "VirtualDesktopManager",
+                                    "MONITORINFOF_PRIMARY",                       "IVirtualDesktopManager",                    "VirtualDesktopManager",
 
         // window_set (US-027)
-        "IsZoomed",                                   "WM_SYSCOMMAND",                          "SC_CLOSE",                                   "SW_MAXIMIZE",                               "SW_SHOWMINNOACTIVE",
-        "CreateToolhelp32Snapshot",                   "Process32FirstW",                        "Process32NextW",                             "PROCESSENTRY32W",                           "TH32CS_SNAPPROCESS",
-        "TerminateProcess",                           "PROCESS_TERMINATE",                      "PROCESS_SYNCHRONIZE",                        "GetProcessTimes",                           "FILETIME",
+        "IsZoomed",                                   "WM_SYSCOMMAND",                             "SC_CLOSE",                                   "SW_MAXIMIZE",                               "SW_SHOWMINNOACTIVE",
+        "CreateToolhelp32Snapshot",                   "Process32FirstW",                           "Process32NextW",                             "PROCESSENTRY32W",                           "TH32CS_SNAPPROCESS",
+        "TerminateProcess",                           "PROCESS_TERMINATE",                         "PROCESS_SYNCHRONIZE",                        "GetProcessTimes",                           "FILETIME",
         "INVALID_HANDLE_VALUE",                       "EnumChildWindows",
 
         // Start menu catalog (US-028)
-                              "SHGetKnownFolderItem",                       "FOLDERID_AppsFolder",                       "KF_FLAG_DEFAULT",
-        "IShellItem",                                 "IShellItem2",                            "IEnumShellItems",                            "BHID_EnumItems",                            "SIGDN_NORMALDISPLAY",
-        "PKEY_AppUserModel_ID",                       "PKEY_Link_TargetParsingPath",            "PROPERTYKEY",                                "SHCreateItemFromParsingName",
+                                 "SHGetKnownFolderItem",                       "FOLDERID_AppsFolder",                       "KF_FLAG_DEFAULT",
+        "IShellItem",                                 "IShellItem2",                               "IEnumShellItems",                            "BHID_EnumItems",                            "SIGDN_NORMALDISPLAY",
+        "PKEY_AppUserModel_ID",                       "PKEY_Link_TargetParsingPath",               "PROPERTYKEY",                                "SHCreateItemFromParsingName",
 
         // app_launch (US-029)
                       "IApplicationActivationManager",
-        "ApplicationActivationManager",               "AO_NONE",                                "ShellExecuteExW",                            "SHELLEXECUTEINFOW",                         "SEE_MASK_NOCLOSEPROCESS",
-        "SEE_MASK_FLAG_NO_UI",                        "GetProcessId",                           "GetFileAttributesW",                         "INVALID_FILE_ATTRIBUTES",                   "FILE_ATTRIBUTE_DIRECTORY",
-        "GetDriveTypeW",                              "DRIVE_REMOTE",                           "GetFullPathNameW",                           "GetEnvironmentVariableW",                   "AssocQueryStringW",
-        "ASSOCSTR_EXECUTABLE",                        "ASSOCF_INIT_IGNOREUNKNOWN",              "GetExitCodeProcess",                         "STILL_ACTIVE",                              "ASSOCSTR_COMMAND",
+        "ApplicationActivationManager",               "AO_NONE",                                   "ShellExecuteExW",                            "SHELLEXECUTEINFOW",                         "SEE_MASK_NOCLOSEPROCESS",
+        "SEE_MASK_FLAG_NO_UI",                        "GetProcessId",                              "GetFileAttributesW",                         "INVALID_FILE_ATTRIBUTES",                   "FILE_ATTRIBUTE_DIRECTORY",
+        "GetDriveTypeW",                              "DRIVE_REMOTE",                              "GetFullPathNameW",                           "GetEnvironmentVariableW",                   "AssocQueryStringW",
+        "ASSOCSTR_EXECUTABLE",                        "ASSOCF_INIT_IGNOREUNKNOWN",                 "GetExitCodeProcess",                         "STILL_ACTIVE",                              "ASSOCSTR_COMMAND",
         "GetLongPathNameW",                           "AssocIsDangerous",
 
         // GDI capture when DXGI duplication fails (US-032)
-                              "GetDC",                                      "ReleaseDC",                                 "CreateCompatibleDC",
-        "DeleteDC",                                   "CreateDIBSection",                       "SelectObject",                               "BitBlt",                                    "GdiFlush",
-        "BITMAPINFO",                                 "BI_RGB",                                 "DIB_RGB_COLORS",                             "SRCCOPY",                                   "CAPTUREBLT",
+                                 "GetDC",                                      "ReleaseDC",                                 "CreateCompatibleDC",
+        "DeleteDC",                                   "CreateDIBSection",                          "SelectObject",                               "BitBlt",                                    "GdiFlush",
+        "BITMAPINFO",                                 "BI_RGB",                                    "DIB_RGB_COLORS",                             "SRCCOPY",                                   "CAPTUREBLT",
 
         // Server CPU in cycles for the selftest's wait budgets (US-030)
-        "QueryProcessCycleTime",                      "QueryThreadCycleTime",                   "GetCurrentThread",
+        "QueryProcessCycleTime",                      "QueryThreadCycleTime",                      "GetCurrentThread",
 
         // Capture exclusion probe (US-033) and the control indicator (US-034)
                                   "SetWindowDisplayAffinity",                  "GetWindowDisplayAffinity",
-        "WDA_EXCLUDEFROMCAPTURE",                     "WDA_NONE",                               "SetLayeredWindowAttributes",                 "LWA_ALPHA",                                 "EnumDisplayMonitors",
-        "CreateFontW",                                "SetTextColor",                           "SetBkMode",                                  "DrawTextW",                                 "DT_CENTER",
-        "DT_VCENTER",                                 "DT_SINGLELINE",                          "DT_CALCRECT",                                "HWND_TOPMOST",                              "SWP_NOMOVE",
-        "SWP_SHOWWINDOW",                             "SW_HIDE",                                "WM_DISPLAYCHANGE",                           "FW_SEMIBOLD",                               "CLEARTYPE_QUALITY",
+        "WDA_EXCLUDEFROMCAPTURE",                     "WDA_NONE",                                  "SetLayeredWindowAttributes",                 "LWA_ALPHA",                                 "EnumDisplayMonitors",
+        "CreateFontW",                                "SetTextColor",                              "SetBkMode",                                  "DrawTextW",                                 "DT_CENTER",
+        "DT_VCENTER",                                 "DT_SINGLELINE",                             "DT_CALCRECT",                                "HWND_TOPMOST",                              "SWP_NOMOVE",
+        "SWP_SHOWWINDOW",                             "SW_HIDE",                                   "WM_DISPLAYCHANGE",                           "FW_SEMIBOLD",                               "CLEARTYPE_QUALITY",
         "TRANSPARENT",                                "WM_DPICHANGED",
 
         // clipboard (US-035): a message-only owner window on its own thread
-                                 "OpenClipboard",                              "CloseClipboard",                            "EmptyClipboard",
-        "GetClipboardData",                           "SetClipboardData",                       "IsClipboardFormatAvailable",                 "EnumClipboardFormats",                      "GetClipboardFormatNameW",
-        "RegisterClipboardFormatW",                   "GetClipboardOwner",                      "GetOpenClipboardWindow",                     "GetClipboardSequenceNumber",                "GlobalAlloc",
-        "GlobalLock",                                 "GlobalUnlock",                           "GlobalSize",                                 "GlobalFree",                                "GMEM_MOVEABLE",
-        "HWND_MESSAGE",                               "CF_UNICODETEXT",                         "CreateWaitableTimerExW",                     "SetWaitableTimer",                          "CREATE_WAITABLE_TIMER_HIGH_RESOLUTION",
+                                    "OpenClipboard",                              "CloseClipboard",                            "EmptyClipboard",
+        "GetClipboardData",                           "SetClipboardData",                          "IsClipboardFormatAvailable",                 "EnumClipboardFormats",                      "GetClipboardFormatNameW",
+        "RegisterClipboardFormatW",                   "GetClipboardOwner",                         "GetOpenClipboardWindow",                     "GetClipboardSequenceNumber",                "GlobalAlloc",
+        "GlobalLock",                                 "GlobalUnlock",                              "GlobalSize",                                 "GlobalFree",                                "GMEM_MOVEABLE",
+        "HWND_MESSAGE",                               "CF_UNICODETEXT",                            "CreateWaitableTimerExW",                     "SetWaitableTimer",                          "CREATE_WAITABLE_TIMER_HIGH_RESOLUTION",
         "TIMER_ALL_ACCESS",
 
         // registry_read (US-036): read functions only, never a write
-                                  "RegOpenKeyExW",                          "RegCloseKey",                                "RegQueryValueExW",                          "RegEnumValueW",
-        "RegEnumKeyExW",                              "RegQueryInfoKeyW",                       "HKEY_CURRENT_USER",                          "HKEY_LOCAL_MACHINE",                        "HKEY_CLASSES_ROOT",
-        "HKEY_USERS",                                 "HKEY_CURRENT_CONFIG",                    "KEY_QUERY_VALUE",                            "KEY_ENUMERATE_SUB_KEYS",                    "KEY_WOW64_64KEY",
-        "ERROR_FILE_NOT_FOUND",                       "ERROR_MORE_DATA",                        "ERROR_NO_MORE_ITEMS",                        "ERROR_SUCCESS",                             "ExpandEnvironmentStringsW",
+                                  "RegOpenKeyExW",                             "RegCloseKey",                                "RegQueryValueExW",                          "RegEnumValueW",
+        "RegEnumKeyExW",                              "RegQueryInfoKeyW",                          "HKEY_CURRENT_USER",                          "HKEY_LOCAL_MACHINE",                        "HKEY_CLASSES_ROOT",
+        "HKEY_USERS",                                 "HKEY_CURRENT_CONFIG",                       "KEY_QUERY_VALUE",                            "KEY_ENUMERATE_SUB_KEYS",                    "KEY_WOW64_64KEY",
+        "ERROR_FILE_NOT_FOUND",                       "ERROR_MORE_DATA",                           "ERROR_NO_MORE_ITEMS",                        "ERROR_SUCCESS",                             "ExpandEnvironmentStringsW",
         "ERROR_NOT_ENOUGH_MEMORY",
 
         // Background mode (EP-011): the decoy window and the non-interference
         // witness (foreground, keyboard focus), the probe and selftest controls.
-                           "GetGUIThreadInfo",                       "GUITHREADINFO",                              "SW_SHOWMAXIMIZED",                          "SC_MAXIMIZE",
-        "WM_SETFOCUS",                                "BS_AUTOCHECKBOX",                        "BM_GETCHECK",                                "LBS_NOTIFY",                                "LB_ADDSTRING",
-        "LB_GETCURSEL",                               "LB_GETTOPINDEX",                         "CBS_DROPDOWNLIST",                           "CB_ADDSTRING",                              "CB_SETCURSEL",
-        "CB_GETDROPPEDSTATE",                         "CreateMenu",                             "SetMenu",                                    "MF_POPUP",                                  "WM_CANCELMODE",
-        "GetFocus",                                   "CUIAutomation8",                         "CB_SHOWDROPDOWN",                            "SC_RESTORE",
+                           "GetGUIThreadInfo",                          "GUITHREADINFO",                              "SW_SHOWMAXIMIZED",                          "SC_MAXIMIZE",
+        "WM_SETFOCUS",                                "BS_AUTOCHECKBOX",                           "BM_GETCHECK",                                "LBS_NOTIFY",                                "LB_ADDSTRING",
+        "LB_GETCURSEL",                               "LB_GETTOPINDEX",                            "CBS_DROPDOWNLIST",                           "CB_ADDSTRING",                              "CB_SETCURSEL",
+        "CB_GETDROPPEDSTATE",                         "CreateMenu",                                "SetMenu",                                    "MF_POPUP",                                  "WM_CANCELMODE",
+        "GetFocus",                                   "CUIAutomation8",                            "CB_SHOWDROPDOWN",                            "SC_RESTORE",
+
+        // Cohabitation (EP-012): WinEvents of the target's process, the
+        // foreground guard's fixture, the indicator on the primary display.
+                                       "SetWinEventHook",
+        "UnhookWinEvent",                             "WINEVENT_OUTOFCONTEXT",                     "EVENT_MIN",                                  "EVENT_MAX",                                 "OBJID_CURSOR",
+        "AllowSetForegroundWindow",                   "WM_SETTEXT",                                "WM_MBUTTONDOWN",                             "WM_XBUTTONDOWN",                            "WM_ERASEBKGND",
+        "SetActiveWindow",                            "NotifyWinEvent",                            "EVENT_OBJECT_NAMECHANGE",                    "OBJID_CLIENT",
+
+        // Foreground guard on the foreground event, gestures that change
+        // the foreground window, a decoy that occludes for Chromium
+        // (decision 0013, amendment of 2026-11-13).
+                                     "EVENT_SYSTEM_FOREGROUND",
+        "ChildWindowFromPointEx",                     "GetDesktopWindow",                          "CWP_SKIPINVISIBLE",                          "CWP_SKIPDISABLED",                          "CWP_SKIPTRANSPARENT",
+        "WS_THICKFRAME",
+
+        // UI Automation events of the target window (decision 0013,
+        // amendment of 2026-11-13): the handler interfaces the client
+        // implements, and the object that registers a notification handler.
+                                     "IUIAutomationStructureChangedEventHandler", "IUIAutomationPropertyChangedEventHandler",   "IUIAutomationEventHandler",                 "IUIAutomationNotificationEventHandler",
+        "IUIAutomation5",
     },
 }

@@ -47,9 +47,9 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build` | Server and probes. The first run downloads the pinned win32metadata nupkg from nuget.org with `curl` and fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`, then serves both from the cache |
 | `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, compile-time budget errors, generated bindings and struct layouts, generator failure message, process lifecycle. Omit the filter for the full gate |
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
-| `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010) |
+| `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010). `bg-act` and `bg-settle` run the background mode behind the decoy; `bg-settle` is budgeted on its `settle` stage, which every other scenario only reports |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
-| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`) |
+| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned) |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 and US-037 tasks (`-Suite existing` or `parity`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity prompt names a tool. `-Solve` also plays each parity task's scripted solution, which its check must accept. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
 
@@ -57,17 +57,25 @@ A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
 also needs `selftest`, with its output in the report; a change to the
 background mode, the intrusion classes or a path they share (`ui_act`,
-`window_set`, `app_launch`, `uia.zig`, `window.zig`) also needs
-`selftest --background`. `selftest` moves the
+`window_set`, `app_launch`, `uia.zig`, `window.zig`, `hooks.zig`,
+`indicator.zig`, `winevents.zig`, `uia_events.zig`, `guard.zig`, settling
+and `ui_find`'s wait in `a11y.zig`) also needs `selftest --background`. `selftest` moves the
 cursor, types, raises a topmost window, shows the control indicator and
 overwrites the clipboard (its earlier text is put back, other formats are
 lost); `selftest --background` puts a large decoy window of a second
 neo-compute process in the foreground for about a minute (it presses F15
-there), opens and closes Calculator (skipped when one is already open) and
+there), shows the mode's label at the top of the primary display, opens a
+second window of a neo-compute process whose dialog takes the foreground about
+110 times and a topmost still window for 5 s, opens Calculator, presses one of
+its digits 11 times and closes it (skipped when one is already open) and
 ends with one real click on the decoy; `neo-compute bg-probe` (US-040) does the
-same with the six reference applications, which it opens and closes; `bench`
-captures the screen, reads the taskbar and raises a topmost test
-window (`settle`); the eval dry run opens the task apps, moves two Explorer
+same with the six reference applications, which it opens and closes, as does
+`neo-compute events-probe` (US-047, and the UI Automation events of
+decision 0013's amendment; `events-probe churn` hides, minimizes and closes
+the test window, a popup application and Calculator; a run that panics
+leaves the application it had open and the decoy process: close both); `bench` captures the screen, reads the
+taskbar, raises a topmost test window (`settle`) and puts the decoy in the
+foreground twice for about 15 s (`bg-act`, `bg-settle`); the eval dry run opens the task apps, moves two Explorer
 windows and overwrites the clipboard the same way. Run them one at a time.
 
 ## Architecture and gotchas
@@ -111,6 +119,52 @@ windows and overwrites the clipboard the same way. Run them one at a time.
   may take the foreground: a non-interference measure is valid only once the
   decoy has pressed a key itself (`decoy_window.zig`), and each `bg-probe`
   target prints that control line.
+- Cohabitation (EP-012, measures in decision 0013). In background mode the
+  user's mouse and Escape key pause nothing: `Control.background` makes the
+  re-arm shortcut a pause toggle (`hooks.zig`), and the indicator is the
+  label alone. The low-level hook sees every auto-repeat key-down of a held
+  key: a toggle acts on the first and consumes the rest until the key-up
+  (`swallow`). Settling and `ui_find`'s wait read one change counter of
+  the target (`windowEvents`), never the screen: the WinEvents of its
+  process (`winevents.zig`) plus, where the server subscribed, the UI
+  Automation events of its subtree (`uia_events.zig`). A UWP application raises no WinEvent
+  of its own and raises UI Automation events only for a subscribed client.
+  The subscription is not for every window: it costs the target processor
+  time on each of its events (Explorer: 4.6 times the cycles of the same
+  actions) where WinEvents already report every change. A UWP frame gets
+  it from the start; any other application gets it once its tree changed
+  twice in a row while its change counter stood still, and loses it for
+  good when two more changes stay silent (`treeObserved` in `windows.zig`,
+  told of each tree the core shows). Adding or removing the handlers
+  raises events of its own in the target: a count read across such a step
+  compares with nothing. Its handlers are
+  the only COM objects the client implements: static, never freed, built
+  on the generated vtables, and they only count. Adding or removing them
+  is a round trip to the provider: check `responsive` first, as
+  `watchWindow` in `uia.zig` does. A Win32 STATIC raises nothing when its
+  text changes, so 50 ms of silence settles, and a tree re-read every
+  250 ms (`reread_floor_ms`) covers a stream of events or a refused hook. A
+  fixture that must keep settling busy reports its change itself
+  (`NotifyWinEvent`, `TestWindow.churn`). Windows 11 refuses
+  SetForegroundWindow to the server even with the foreground thread's
+  input attached: the foreground guard gives the foreground back by
+  activating the user's window inside the foreground input queue
+  (`restoreForeground` in `window.zig`). UI Automation's SetFocus is not a
+  substitute: on a top-level window it moves nothing, on a child it leaves
+  that child as the foreground window. The guard acts from the WinEvent
+  thread on `EVENT_SYSTEM_FOREGROUND` (`core/guard.zig` decides,
+  `winevents.zig` acts), while the tool may still wait. That event arrives
+  before `GetForegroundWindow` names the new window: the thread remembers
+  the window and a 10 ms timer restores once it really is in front. Only a
+  gesture that can change the foreground window stops a restoration (a
+  click outside the user's window, a key with Alt or Win, in `hooks.zig`):
+  ordinary typing does not. The guard stays armed 2 s after the action
+  (`linger_ms`): an Invoke may return before its dialog comes in front, and
+  the next call's result and audit line (`guard_late`) say what it did. The
+  decoy of the selftests and probes is a
+  framed window: Chromium ignores a `WS_POPUP` window when it computes
+  occlusion.
+
 - A window with `WDA_EXCLUDEFROMCAPTURE` is absent from DXGI and GDI frames,
   but each change of it still produces DXGI dirty rects, and DWM dirties a
   window's whole rectangle whatever its region. An overlay that must not

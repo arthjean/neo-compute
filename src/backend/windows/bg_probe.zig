@@ -38,7 +38,7 @@ const watch_ms = 700;
 const launch_watch_ms = 2000;
 
 /// How a step finds its element in the target's tree.
-const Pick = struct {
+pub const Pick = struct {
     role: ?uitree.Role = null,
     /// The name contains one of these, ASCII case ignored; empty: any name.
     names: []const []const u8 = &.{},
@@ -52,9 +52,9 @@ const Pick = struct {
 /// reads the element's state back from a new snapshot.
 const Truth = enum { uia, command, checkbox, field, combo_open, combo_closed, list_selection, list_top, menu_open, menu_closed };
 
-const Undo = struct { action: uitree.Action, pick: Pick, value: ?[]const u8 = null };
+pub const Undo = struct { action: uitree.Action, pick: Pick, value: ?[]const u8 = null };
 
-const Step = struct {
+pub const Step = struct {
     label: []const u8,
     action: uitree.Action,
     pick: Pick,
@@ -71,7 +71,7 @@ const Menu = struct {
     item: Pick,
 };
 
-const App = struct {
+pub const App = struct {
     name: []const u8,
     argv: []const []const u8,
     exe: ?[]const u8 = null,
@@ -98,7 +98,7 @@ const labels = struct {
     const scroll = "ScrollItem.ScrollIntoView";
 };
 
-const window_steps = [_]Step{
+pub const window_steps = [_]Step{
     .{ .label = labels.focus, .action = .focus, .pick = .{ .role = .button, .names = &.{test_window.button_label} } },
     .{ .label = labels.invoke, .action = .invoke, .pick = .{ .role = .button, .names = &.{test_window.button_label} }, .truth = .command },
     .{ .label = labels.toggle, .action = .toggle, .pick = .{ .role = .checkbox, .names = &.{test_window.checkbox_label} }, .truth = .checkbox },
@@ -112,7 +112,7 @@ const window_steps = [_]Step{
 
 const window_menu: Menu = .{ .expand = .{ .role = .menuitem, .names = &.{test_window.bar_label} }, .item = .{ .role = .menuitem, .names = &.{test_window.bar_item} } };
 
-const reference_apps = [_]App{
+pub const reference_apps = [_]App{
     // Notepad restores the user's unsaved tabs: no step writes a value or
     // closes a tab, and no live name is printed.
     .{
@@ -226,7 +226,7 @@ const Stat = struct {
     missing: bool = false,
 };
 
-fn qpcMs() u64 {
+pub fn qpcMs() u64 {
     var t: i64 = 0;
     var f: i64 = 1;
     _ = w.QueryPerformanceCounter(&t);
@@ -261,7 +261,7 @@ const Measure = struct {
     }
 };
 
-const Probe = struct {
+pub const Probe = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     log: *std.Io.Writer,
@@ -278,9 +278,11 @@ const Probe = struct {
     only: ?[]const u8 = null,
     /// Why the last snapshot failed.
     snapshot_error: []const u8 = "",
+    /// Start of every line (the events probe of US-047 shares this type).
+    prefix: []const u8 = "bg-probe",
 
-    fn print(p: *Probe, comptime f: []const u8, args: anytype) void {
-        p.log.print("bg-probe: " ++ f ++ "\n", args) catch {};
+    pub fn print(p: *Probe, comptime f: []const u8, args: anytype) void {
+        p.log.print("{s}: " ++ f ++ "\n", .{p.prefix} ++ args) catch {};
         p.log.flush() catch {};
     }
 
@@ -340,7 +342,7 @@ const Probe = struct {
         });
     }
 
-    fn snapshot(p: *Probe, hwnd: u64) ?[]const uitree.Element {
+    pub fn snapshot(p: *Probe, hwnd: u64) ?[]const uitree.Element {
         const a = p.scratch.allocator();
         return switch (p.backend.uiSnapshot(a, hwnd, .{ .extra_roots = p.backend.uiRoots(a, hwnd) })) {
             .ok => |s| s.elements,
@@ -364,7 +366,7 @@ fn supports(e: uitree.Element, action: uitree.Action) bool {
     };
 }
 
-fn find(els: []const uitree.Element, pick: Pick, action: uitree.Action) ?uitree.Element {
+pub fn find(els: []const uitree.Element, pick: Pick, action: uitree.Action) ?uitree.Element {
     var skipped: usize = 0;
     for (els) |e| {
         if (!supports(e, action) or e.states.disabled) continue;
@@ -391,7 +393,7 @@ fn byKey(els: []const uitree.Element, key: u64) ?uitree.Element {
     return null;
 }
 
-fn treeHash(els: []const uitree.Element) u64 {
+pub fn treeHash(els: []const uitree.Element) u64 {
     var h: std.hash.Wyhash = .init(0);
     for (els) |e| {
         h.update(std.mem.asBytes(&e.key));
@@ -472,7 +474,7 @@ fn actText(r: uitree.ActResult) []const u8 {
     };
 }
 
-fn undo(p: *Probe, hwnd: u64, u: Undo) void {
+pub fn undo(p: *Probe, hwnd: u64, u: Undo) void {
     const els = p.snapshot(hwnd) orelse return;
     const e = find(els, u.pick, u.action) orelse return;
     _ = p.backend.uiAct(p.scratch.allocator(), hwnd, e.key, u.action, u.value);
@@ -711,7 +713,7 @@ fn newWindow(p: *Probe, a: std.mem.Allocator, app: App, before: []const u64) ?u6
     return null;
 }
 
-fn closeWindow(hwnd: w.HWND) bool {
+pub fn closeWindow(hwnd: w.HWND) bool {
     _ = w.PostMessageW(hwnd, w.WM_CLOSE, 0, 0);
     var waited: u32 = 0;
     while (waited < 4000) : (waited += 50) {
@@ -733,7 +735,7 @@ fn tuck(p: *Probe, hwnd: w.HWND) void {
 
 /// Opens a reference application in a window of its own. Null: skipped,
 /// with its reason printed.
-fn openApp(p: *Probe, a: std.mem.Allocator, app: App) ?u64 {
+pub fn openApp(p: *Probe, a: std.mem.Allocator, app: App) ?u64 {
     const before = handlesOf(p, a);
     const listed = p.backend.listWindows(a, true) catch &.{};
     // An application that reuses its window would hand the probe a window

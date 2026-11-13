@@ -41,8 +41,19 @@ pub const Detail = struct {
     }
 };
 
+/// What the foreground guard of the background mode saw around an action
+/// (US-050).
+pub const Guard = @import("guard.zig").Outcome;
+
 pub const Entry = struct {
     tool: []const u8,
+    /// a11y, vision or background.
+    mode: []const u8 = "a11y",
+    /// Set for an action the background mode ran.
+    guard: ?Guard = null,
+    /// What the guard did after the action before this call, once that
+    /// action had returned (`guard.linger_ms`): `restored` or `refused`.
+    guard_late: ?Guard = null,
     target: ?policy.Target = null,
     duration_ns: u64,
     /// ok, error, denied, paused, instance, cancelled.
@@ -119,7 +130,8 @@ pub const Audit = struct {
     }
 };
 
-/// One line: `{"ts":"2026-11-04T09:12:03.456Z","tool":"left_click","app":"notepad.exe","pid":4242,"policy":"full","ms":12.3,"result":"ok"}`.
+/// One line: `{"ts":"2026-11-04T09:12:03.456Z","tool":"left_click","app":"notepad.exe","pid":4242,"policy":"full","mode":"a11y","ms":12.3,"result":"ok"}`.
+/// A background action adds `"guard":"intact"` after its result.
 pub fn format(w: *Io.Writer, e: Entry, now_ns: i96) !void {
     const ms_total: u64 = @intCast(@divTrunc(@max(now_ns, 0), std.time.ns_per_ms));
     const secs: std.time.epoch.EpochSeconds = .{ .secs = ms_total / 1000 };
@@ -135,7 +147,9 @@ pub fn format(w: *Io.Writer, e: Entry, now_ns: i96) !void {
         try std.json.Stringify.value(t.exe(), .{}, w);
         try w.print(",\"pid\":{d},\"policy\":\"{t}\"", .{ t.pid, t.level });
     } else try w.writeAll(",\"app\":null,\"pid\":null,\"policy\":null");
-    try w.print(",\"ms\":{d:.1},\"result\":\"{s}\"", .{ @as(f64, @floatFromInt(e.duration_ns)) / std.time.ns_per_ms, e.result });
+    try w.print(",\"mode\":\"{s}\",\"ms\":{d:.1},\"result\":\"{s}\"", .{ e.mode, @as(f64, @floatFromInt(e.duration_ns)) / std.time.ns_per_ms, e.result });
+    if (e.guard) |g| try w.print(",\"guard\":\"{t}\"", .{g});
+    if (e.guard_late) |g| try w.print(",\"guard_late\":\"{t}\"", .{g});
     if (e.text_len) |n| try w.print(",\"text_len\":{d}", .{n});
     if (e.detail.state) |s| {
         try w.writeAll(",\"state\":");
@@ -216,7 +230,7 @@ test "an audit line carries time, tool, target, level, duration and result, neve
     t.exe_len = 11;
     // 2026-11-04T09:12:03.456Z
     try format(&w, .{ .tool = "type", .target = t, .duration_ns = 12_345_678, .result = "ok", .text_len = 42 }, 1_793_783_523_456 * std.time.ns_per_ms);
-    try std.testing.expectEqualStrings("{\"ts\":\"2026-11-04T09:12:03.456Z\",\"tool\":\"type\",\"app\":\"notepad.exe\",\"pid\":4242,\"policy\":\"full\",\"ms\":12.3,\"result\":\"ok\",\"text_len\":42}\n", w.buffered());
+    try std.testing.expectEqualStrings("{\"ts\":\"2026-11-04T09:12:03.456Z\",\"tool\":\"type\",\"app\":\"notepad.exe\",\"pid\":4242,\"policy\":\"full\",\"mode\":\"a11y\",\"ms\":12.3,\"result\":\"ok\",\"text_len\":42}\n", w.buffered());
 }
 
 test "the log rotates at its size limit and keeps 5 files" {

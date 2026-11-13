@@ -16,6 +16,8 @@ const com = @import("windows/com.zig");
 const uia = @import("windows/uia.zig");
 const hooks = @import("windows/hooks.zig");
 const indicator_mod = @import("windows/indicator.zig");
+const winevents = @import("windows/winevents.zig");
+const uia_events = @import("windows/uia_events.zig");
 const shell_mod = @import("windows/shell.zig");
 const clip_mod = @import("windows/clipboard.zig");
 const reg_mod = @import("windows/regread.zig");
@@ -23,6 +25,7 @@ const clipboard = @import("../core/clipboard.zig");
 const regread = @import("../core/regread.zig");
 const apps = @import("../core/apps.zig");
 const Control = @import("../core/control.zig").Control;
+const guard = @import("../core/guard.zig");
 const uitree = @import("../core/uitree.zig");
 const Capture = capture_mod.Capture;
 const fmt = @import("../core/session.zig").fmt;
@@ -49,6 +52,32 @@ pub const Windows = struct {
     /// Selftest only: the indicator fails to start, as if its windows
     /// could not be created.
     refuse_indicator: bool = false,
+    /// WinEvents of the background target's process (US-048), started on
+    /// first use.
+    events: ?*winevents.Watcher = null,
+    /// Selftest only: Windows refuses the WinEvent hook.
+    refuse_events: bool = false,
+    /// The window whose UI Automation events are subscribed to, whether the
+    /// subscription holds, and GetTickCount of the last attempt.
+    uia_window: u64 = 0,
+    uia_listening: bool = false,
+    uia_tick: u32 = 0,
+    /// Probe only (`events-probe`): `windowEvents` subscribes to nothing,
+    /// the probe registers the handlers itself.
+    no_uia_events: bool = false,
+    /// The change count just before the last tree of a window was read.
+    snap_window: u64 = 0,
+    snap_count: u64 = 0,
+    /// The window whose tree was last shown, the change count before that
+    /// read, and the hooks it was read under (`treeObserved`).
+    seen_window: u64 = 0,
+    seen_count: u64 = 0,
+    seen_epoch: u32 = 0,
+    /// What the changes of each application taught: see `treeObserved`.
+    learned: [8]Learned = @splat(.{}),
+    learned_next: usize = 0,
+    /// GetTickCount when the foreground guard was last armed.
+    guard_tick: u32 = 0,
     /// Per display, the indicator change its last look saw (`dropEchoes`).
     indicator_seen: [display.max_displays]i64 = @splat(0),
     /// GDI capture per display (US-032), and the displays whose duplication
@@ -79,6 +108,7 @@ pub const Windows = struct {
     pub fn deinit(self: *Windows) void {
         self.stopKillSwitch();
         self.stopIndicator();
+        self.stopEvents();
         self.ui.deinit();
         self.shell.deinit();
         if (self.clip) |c| {
@@ -477,6 +507,10 @@ pub const Windows = struct {
     /// Tree of `window` (the foreground window when null), read on the UIA
     /// worker thread.
     pub fn uiSnapshot(self: *Windows, arena: std.mem.Allocator, hwnd: ?u64, request: uitree.Request) uitree.SnapshotResult {
+        if (hwnd) |h| {
+            self.snap_window = h;
+            self.snap_count = self.changeCount();
+        }
         return self.ui.snapshot(arena, hwnd, request);
     }
 
@@ -497,6 +531,149 @@ pub const Windows = struct {
     pub fn uiAutoFocus(self: *Windows, enabled: bool) void {
         _ = self;
         uia.auto_set_focus.store(enabled, .monotonic);
+    }
+
+    // ------------------------------------------------------------ change events (US-048)
+
+    /// The WinEvent watcher, started on first use.
+    pub fn eventWatcher(self: *Windows) ?*winevents.Watcher {
+        if (self.events) |e| return e;
+        const e = self.gpa.create(winevents.Watcher) catch return null;
+        e.* = .{};
+        e.start() catch |err| {
+            std.debug.print("neo-compute: WinEvent thread unavailable ({t}): settling reads the tree again instead\n", .{err});
+            self.gpa.destroy(e);
+            return null;
+        };
+        self.events = e;
+        return e;
+    }
+
+    pub fn stopEvents(self: *Windows) void {
+        const e = self.events orelse return;
+        e.stop();
+        self.gpa.destroy(e);
+        self.events = null;
+    }
+
+    /// Count of the changes `hwnd` reported since the server started: it
+    /// moves when the window's tree may have changed, whatever covers the
+    /// window. Two sources add up (decision 0013, amendment of 2026-11-13).
+    /// The WinEvents of the window's process, with those of the application
+    /// a UWP frame hosts, are what a Win32 control raises: they signaled
+    /// every tree change of the Win32, Explorer, Notepad and VS Code targets
+    /// of `events-probe`. A UWP application raises none of its own: it
+    /// raises UI Automation events, and only for a client that subscribed
+    /// (`uia_events.zig`), which signaled every tree change of Calculator
+    /// and Settings within 11 ms. The subscription is for those windows
+    /// and for the applications `treeObserved` found changing without an
+    /// event: it costs the target processor time on each of its events
+    /// (Explorer: 4.6 times the cycles of the same actions), for changes
+    /// its WinEvents already report. Null when the window is gone or
+    /// Windows refuses the WinEvent hook: the caller reads the tree again
+    /// instead. The first call for a window hooks its process and, for
+    /// such a window, subscribes to its events.
+    pub fn windowEvents(self: *Windows, hwnd: u64) ?u64 {
+        const ref = window.ref(hwnd) orelse return null;
+        const app = window.appPid(hwnd) orelse ref.pid;
+        const e = self.eventWatcher() orelse return null;
+        e.refuse = self.refuse_events;
+        if (!e.watch(.{ ref.pid, if (app != ref.pid) app else 0 })) return null;
+        if (!self.no_uia_events) self.uiaListen(if (window.uwpFrame(hwnd) or self.learnedState(app) == .listening) hwnd else 0);
+        return self.changeCount();
+    }
+
+    fn changeCount(self: *const Windows) u64 {
+        return (if (self.events) |e| e.stamp() else 0) +% uia_events.count.load(.acquire);
+    }
+
+    /// What the server knows of an application's change events.
+    /// `listening`: it changed its tree without raising any, so the server
+    /// subscribes to its UI Automation events. `deaf`: it still raised none
+    /// with the subscription, which is dropped for good: the handlers cost
+    /// the target processor time and bought nothing.
+    pub const LearnState = enum { unknown, listening, deaf };
+    const Learned = struct { pid: u32 = 0, hits: u8 = 0, state: LearnState = .unknown };
+    /// Changes without an event, in a row, before the state moves.
+    pub const blind_hits = 2;
+
+    pub fn learnedState(self: *const Windows, pid: u32) LearnState {
+        for (self.learned) |l| if (l.pid == pid and pid != 0) return l.state;
+        return .unknown;
+    }
+
+    fn learnedOf(self: *Windows, pid: u32) *Learned {
+        for (&self.learned) |*l| if (l.pid == pid) return l;
+        const l = &self.learned[self.learned_next];
+        self.learned_next = (self.learned_next + 1) % self.learned.len;
+        l.* = .{ .pid = pid };
+        return l;
+    }
+
+    /// The core showed a tree of `hwnd`; `changed`: whether it differs from
+    /// the one shown before, null when the two were not compared. A tree
+    /// that changed while the window's change count stood still, from
+    /// before the earlier read to now and under the same hooks, is a change
+    /// no event reported. Twice in a row, the server subscribes to the
+    /// application's UI Automation events (decision 0013, amendment of
+    /// 2026-11-13): what a XAML island or a WinUI 3 window needs, found by
+    /// what the application does rather than by its window class. Twice
+    /// more with the subscription, it is dropped. A UWP frame is subscribed
+    /// to from the start and is not judged here.
+    pub fn treeObserved(self: *Windows, hwnd: u64, changed: ?bool) void {
+        const e = self.events orelse return;
+        const before = if (self.snap_window == hwnd) self.snap_count else self.changeCount();
+        const comparable = self.seen_window == hwnd and self.seen_epoch == e.epoch and e.hooked;
+        const since = self.seen_count;
+        self.seen_window = hwnd;
+        self.seen_count = before;
+        self.seen_epoch = e.epoch;
+        if (changed != true or !comparable or self.no_uia_events or window.uwpFrame(hwnd)) return;
+        const ref = window.ref(hwnd) orelse return;
+        if (e.asked[0] != ref.pid) return;
+        const l = self.learnedOf(window.appPid(hwnd) orelse ref.pid);
+        if (self.changeCount() != since) {
+            // Reported: the count moved with the tree.
+            l.hits = 0;
+            return;
+        }
+        l.hits += 1;
+        if (l.hits < blind_hits) return;
+        l.hits = 0;
+        switch (l.state) {
+            .unknown => {
+                l.state = .listening;
+                std.debug.print("neo-compute: process {d} changed its tree {d} times without a change event: subscribing to its UI Automation events\n", .{ l.pid, blind_hits });
+                self.uiaListen(hwnd);
+            },
+            .listening => {
+                l.state = .deaf;
+                std.debug.print("neo-compute: process {d} still changed its tree without an event: UI Automation subscription dropped\n", .{l.pid});
+                self.uiaListen(0);
+            },
+            .deaf => {},
+        }
+        // Adding or removing the handlers raises events of its own in the
+        // target: the next tree starts a new comparison.
+        self.seen_window = 0;
+    }
+
+    /// Moves the UI Automation subscription to `hwnd`; 0 removes it. A
+    /// refusal (a window that does not answer) is tried again a second
+    /// later, not on every read of the count.
+    fn uiaListen(self: *Windows, hwnd: u64) void {
+        if (hwnd == 0 and self.uia_window == 0) return;
+        const now = w.GetTickCount();
+        if (self.uia_window == hwnd and (self.uia_listening or now -% self.uia_tick < 1000)) return;
+        self.uia_window = hwnd;
+        self.uia_tick = now;
+        self.uia_listening = self.ui.watch(hwnd);
+    }
+
+    /// Probe only: subscribes to the UI Automation events of `hwnd` in
+    /// place of the window watched before (0: none).
+    pub fn uiaWatch(self: *Windows, hwnd: u64) bool {
+        return self.ui.watch(hwnd);
     }
 
     // ------------------------------------------------------------ windows
@@ -562,6 +739,50 @@ pub const Windows = struct {
         _ = self;
         const fg = w.GetForegroundWindow();
         return if (fg == null) null else @intFromPtr(fg);
+    }
+
+    /// Arms the foreground guard for the action that begins (US-050):
+    /// from now on the event thread gives the foreground back when a
+    /// window of the session's target takes it without a gesture of the
+    /// user. Without that thread, the dispatcher's look after the action
+    /// still restores.
+    pub fn guardArm(self: *Windows, watch: *guard.Watch) void {
+        self.guard_tick = w.GetTickCount();
+        if (self.kill) |k| {
+            var pid: u32 = 0;
+            _ = w.GetWindowThreadProcessId(@ptrFromInt(watch.prev), &pid);
+            k.home_pid.store(pid, .release);
+        }
+        if (self.eventWatcher()) |e| e.arm(watch, self.kill, self.guard_tick);
+    }
+
+    /// Leaves the guard armed for `ms` after the action ended
+    /// (`guard.linger_ms`). The gestures that count are still those since
+    /// shortly before the action began.
+    pub fn guardLinger(self: *Windows, watch: *guard.Watch, ms: u32) void {
+        if (self.kill) |k| {
+            var pid: u32 = 0;
+            _ = w.GetWindowThreadProcessId(@ptrFromInt(watch.prev), &pid);
+            k.home_pid.store(pid, .release);
+        }
+        if (self.events) |e| e.armFor(watch, self.kill, self.guard_tick, ms);
+    }
+
+    /// Disarms it, once a restoration in progress has ended. Whether the
+    /// user made a gesture that can change the foreground window since
+    /// shortly before the action began; null without the input hooks.
+    pub fn guardDisarm(self: *Windows) ?bool {
+        if (self.events) |e| e.disarm();
+        const k = self.kill orelse return null;
+        k.home_pid.store(0, .release);
+        return k.gestureSince(self.guard_tick -% guard.gesture_slack_ms);
+    }
+
+    /// Gives the foreground back to `handle` (US-050), without injected
+    /// input.
+    pub fn restoreForeground(self: *Windows, handle: u64) bool {
+        _ = self;
+        return window.restoreForeground(handle);
     }
 
     pub fn closeWindow(self: *Windows, handle: u64) display.SetResult {
@@ -718,8 +939,13 @@ pub const Windows = struct {
     /// `selftest-decoy`: the foreground window of another process the
     /// background probe and selftest work behind (EP-011).
     pub const decoyWindow = @import("windows/decoy_window.zig").run;
+    /// `selftest-popup`: the application of another process whose dialog
+    /// takes the foreground, for the foreground guard (US-050).
+    pub const popupWindow = @import("windows/popup_window.zig").run;
     /// `bg-probe`: which background primitives take the foreground (US-040).
     pub const bgProbe = @import("windows/bg_probe.zig").run;
+    /// `events-probe`: do WinEvents report the changes of a covered window (US-047).
+    pub const eventsProbe = @import("windows/events_probe.zig").run;
     /// `clipboard-probe`: formats and owner of each new clipboard content (A11).
     pub const clipboardProbe = @import("windows/clipboard_probe.zig").run;
 

@@ -27,6 +27,8 @@ const msg_menu = w.WM_APP + 4;
 const msg_select = w.WM_APP + 5;
 const msg_late_button = w.WM_APP + 6;
 const msg_remove_late = w.WM_APP + 7;
+const msg_churn = w.WM_APP + 8;
+const msg_silent = w.WM_APP + 9;
 
 /// Text of the plain edit field, and the part `select` selects (US-022).
 pub const note_text = "neo-compute selection";
@@ -40,6 +42,7 @@ pub const menu_items = [_][]const u8{ "neo-compute menu copy", "neo-compute menu
 const menu_first_id = 100;
 const animation_timer = 1;
 const late_timer = 2;
+const churn_timer = 3;
 const bar_first_id = 200;
 
 /// Controls of a `background` window (EP-011).
@@ -53,6 +56,8 @@ pub const list_count = 30;
 pub const list_prefix = "neo-compute item ";
 /// Label of the button `lateButton` creates (US-030).
 pub const late_label = "neo-compute late button";
+/// The label `churn` rewrites, followed by a counter.
+pub const churn_prefix = "neo-compute churn ";
 
 var last_click: std.atomic.Value(u32) = .init(0xFFFF_FFFF);
 var clicks: std.atomic.Value(u32) = .init(0);
@@ -67,6 +72,21 @@ var menu_choice: std.atomic.Value(u32) = .init(0);
 var menu_open: std.atomic.Value(bool) = .init(false);
 var brush: w.HBRUSH = null;
 var late_button: w.HWND = null;
+/// The `background` window's label whose text `churn` keeps changing.
+var churn_label: w.HWND = null;
+var churn_step: u32 = 0;
+
+/// Writes the next text of the churn label. A STATIC control reports
+/// nothing when its text changes.
+fn stepChurnLabel() void {
+    churn_step +%= 1;
+    var buf: [40]u8 = undefined;
+    var wbuf: [40:0]u16 = undefined;
+    const text = std.fmt.bufPrint(&buf, churn_prefix ++ "{d}", .{churn_step}) catch return;
+    const n = std.unicode.utf8ToUtf16Le(&wbuf, text) catch return;
+    wbuf[n] = 0;
+    _ = w.SetWindowTextW(churn_label, &wbuf);
+}
 /// The `background` window's check box: its BN_CLICKED is not a button command.
 var checkbox_hwnd: w.HWND = null;
 /// Menu bar commands received.
@@ -209,6 +229,19 @@ pub const TestWindow = struct {
         _ = w.PostMessageW(self.window(), msg_late_button, ms, 0);
     }
 
+    /// Makes the `background` window change without rest (`on`): the text
+    /// of one label every 15 ms, so its tree and its change events never
+    /// settle (US-048), or stops it.
+    pub fn churn(self: *TestWindow, on: bool) void {
+        _ = w.PostMessageW(self.window(), msg_churn, @intFromBool(on), 0);
+    }
+
+    /// Changes the text of that label once and reports nothing: what a
+    /// control that raises no change event does.
+    pub fn silentChange(self: *TestWindow) void {
+        _ = w.PostMessageW(self.window(), msg_silent, 0, 0);
+    }
+
     /// Destroys the button `lateButton` created.
     pub fn removeLateButton(self: *TestWindow) void {
         _ = w.PostMessageW(self.window(), msg_remove_late, 0, 0);
@@ -327,6 +360,16 @@ pub const TestWindow = struct {
                 _ = w.SetTimer(hwnd, late_timer, @truncate(wparam), null);
                 return 0;
             },
+            msg_churn => {
+                if (wparam != 0) {
+                    _ = w.SetTimer(hwnd, churn_timer, 15, null);
+                } else _ = w.KillTimer(hwnd, churn_timer);
+                return 0;
+            },
+            msg_silent => {
+                stepChurnLabel();
+                return 0;
+            },
             msg_remove_late => {
                 if (late_button != null) _ = w.DestroyWindow(late_button);
                 late_button = null;
@@ -336,6 +379,15 @@ pub const TestWindow = struct {
                 if (wparam == late_timer) {
                     _ = w.KillTimer(hwnd, late_timer);
                     late_button = w.CreateWindowExW(0, std.unicode.utf8ToUtf16LeStringLiteral("BUTTON"), std.unicode.utf8ToUtf16LeStringLiteral(late_label), w.WS_CHILD | w.WS_VISIBLE, 20, 130, 200, 40, hwnd, null, w.GetModuleHandleW(null), null);
+                    return 0;
+                }
+                if (wparam == churn_timer) {
+                    stepChurnLabel();
+                    // A STATIC control reports nothing when its text
+                    // changes (measured: the tree changed, no WinEvent).
+                    // The fixture reports it itself, as an application
+                    // that keeps its accessibility clients informed does.
+                    w.NotifyWinEvent(w.EVENT_OBJECT_NAMECHANGE, churn_label, w.OBJID_CLIENT, 0);
                     return 0;
                 }
                 frame_parity = !frame_parity;
@@ -405,7 +457,8 @@ pub const TestWindow = struct {
         const checkbox = w.CreateWindowExW(0, utf16("BUTTON"), utf16(checkbox_label), w.WS_CHILD | w.WS_VISIBLE | @as(u32, @intCast(w.BS_AUTOCHECKBOX)), 20, 170, 220, 24, hwnd, null, instance, null);
         const field = w.CreateWindowExW(0, utf16("EDIT"), utf16(field_text), w.WS_CHILD | w.WS_VISIBLE | w.WS_BORDER, 20, 200, 220, 26, hwnd, null, instance, null);
         const combo = w.CreateWindowExW(0, utf16("COMBOBOX"), null, w.WS_CHILD | w.WS_VISIBLE | w.WS_VSCROLL | @as(u32, @intCast(w.CBS_DROPDOWNLIST)), 20, 236, 220, 160, hwnd, null, instance, null);
-        if (list == null or checkbox == null or field == null or combo == null) return false;
+        churn_label = w.CreateWindowExW(0, utf16("STATIC"), utf16(churn_prefix ++ "0"), w.WS_CHILD | w.WS_VISIBLE, 260, 190, 180, 20, hwnd, null, instance, null);
+        if (list == null or checkbox == null or field == null or combo == null or churn_label == null) return false;
         for (0..list_count) |i| {
             var buf: [40]u8 = undefined;
             var wbuf: [40:0]u16 = undefined;

@@ -7,6 +7,7 @@ const input = @import("../core/input.zig");
 const keys = @import("../core/keys.zig");
 const uitree = @import("../core/uitree.zig");
 const Control = @import("../core/control.zig").Control;
+const guard = @import("../core/guard.zig");
 const apps = @import("../core/apps.zig");
 const clipboard = @import("../core/clipboard.zig");
 const regread = @import("../core/regread.zig");
@@ -134,6 +135,57 @@ pub const Fake = struct {
     stamp_calls: u32 = 0,
     /// GDI looks for changes that copied a window's area only (US-032).
     gdi_area_looks: u32 = 0,
+
+    // Change events of a window's process (US-048, US-049): the simulated
+    // source the background mode settles and waits on.
+    /// Windows refused the event hook: `windowEvents` answers null.
+    events_refused: bool = false,
+    event_reads: u32 = 0,
+    event_stamp: u64 = 0,
+    /// Reads that still see a new event: a target that changes for a while.
+    events_pending: u32 = 0,
+    /// Every read sees a new event and every snapshot a new tree: a target
+    /// that never rests.
+    events_churn: bool = false,
+    /// At this read an event arrives and `ui_elements` becomes
+    /// `appear_elements`: a control that shows up, or goes.
+    appear_at_event: ?u32 = null,
+    /// At this read the request is cancelled, as a `notifications/cancelled`
+    /// during the wait would.
+    cancel_at_event: ?u32 = null,
+    // Foreground guard (US-050).
+    /// The window that takes the foreground when a pattern runs, as a
+    /// dialog the action opens.
+    foreground_after_act: ?u64 = null,
+    /// Whether the hooks saw a gesture of the user that can change the
+    /// foreground window (a click outside their window, Alt+Tab); null: no
+    /// hooks.
+    gesture: ?bool = false,
+    /// The user makes such a gesture while the pattern runs.
+    gesture_on_act: bool = false,
+    /// False: the foreground event never reaches the guard (hook refused),
+    /// so only the look after the action restores.
+    foreground_events: bool = true,
+    /// The dialog takes the foreground again after each restoration.
+    steals_again: bool = false,
+    restore_refused: bool = false,
+    restores: u32 = 0,
+    restored_to: ?u64 = null,
+    /// Reads of the change events (settling) done when the guard first
+    /// restored: 0 means before settling began.
+    restored_at_event_read: ?u32 = null,
+    guard_watch: ?*guard.Watch = null,
+    /// How long the guard was last left armed after an action.
+    lingered_ms: ?u32 = null,
+    /// What `treeObserved` was last told, and how many times it was called.
+    observed_window: u64 = 0,
+    observed_changed: ?bool = null,
+    observations: u32 = 0,
+
+    /// At this read the target window closes, with an event.
+    close_at_event: ?u32 = null,
+    /// At this read the user presses the pause shortcut (US-045).
+    pause_at_event: ?u32 = null,
 
     /// Accessibility tree served by uiSnapshot; tests replace it.
     ui_window: u64 = 0x1a2b,
@@ -447,6 +499,81 @@ pub const Fake = struct {
         return refOf(self.live(handle) orelse return null);
     }
 
+    /// Arms the foreground guard for the action that begins (US-050).
+    pub fn guardArm(self: *Fake, watch: *guard.Watch) void {
+        self.guard_watch = watch;
+    }
+
+    /// A tree of `window` was shown; `changed`: against the one before.
+    pub fn treeObserved(self: *Fake, window: u64, changed: ?bool) void {
+        self.observed_window = window;
+        self.observed_changed = changed;
+        self.observations += 1;
+    }
+
+    /// Leaves the guard armed for `ms` once the action has returned.
+    pub fn guardLinger(self: *Fake, watch: *guard.Watch, ms: u32) void {
+        self.guard_watch = watch;
+        self.lingered_ms = ms;
+    }
+
+    /// Disarms it. Whether the user made a gesture that can change the
+    /// foreground window around the action; null without the hooks.
+    pub fn guardDisarm(self: *Fake) ?bool {
+        self.guard_watch = null;
+        return self.gesture;
+    }
+
+    /// Gives the foreground back to `window` without injected input.
+    pub fn restoreForeground(self: *Fake, window: u64) bool {
+        self.restores += 1;
+        if (self.restore_refused) return false;
+        self.restored_to = window;
+        self.foreground_window = window;
+        return true;
+    }
+
+    /// `window` takes the foreground while an action runs: what the event
+    /// thread of the real backend does with the armed guard.
+    pub fn foregroundEvent(self: *Fake, window: u64) void {
+        self.foreground_window = window;
+        if (!self.foreground_events) return;
+        const watch = self.guard_watch orelse return;
+        while (watch.onForeground(window, self.appPid(window), if (watch.target != 0) self.appPid(watch.target) else null, self.appPid(watch.prev), self.gesture) == .restore) {
+            if (self.restored_at_event_read == null) self.restored_at_event_read = self.event_reads;
+            watch.done(self.restoreForeground(watch.prev), 0);
+            if (!self.steals_again) break;
+            self.foreground_window = window;
+        }
+    }
+
+    /// A stamp that changes with every event of `window`'s process, null
+    /// when the hook is refused (US-048).
+    pub fn windowEvents(self: *Fake, window: u64) ?u64 {
+        _ = window;
+        if (self.events_refused) return null;
+        self.event_reads += 1;
+        if (self.cancel_at_event) |n| if (self.event_reads == n) if (self.control) |c| c.cancel.store(true, .release);
+        if (self.pause_at_event) |n| if (self.event_reads == n) if (self.control) |c| {
+            _ = c.toggle();
+        };
+        var event = self.events_churn;
+        if (self.events_pending > 0) {
+            self.events_pending -= 1;
+            event = true;
+        }
+        if (self.close_at_event) |n| if (self.event_reads == n) {
+            self.markGone(self.ui_window);
+            event = true;
+        };
+        if (self.appear_at_event) |n| if (self.event_reads == n) {
+            self.ui_elements = self.appear_elements;
+            event = true;
+        };
+        if (event) self.event_stamp += 1;
+        return self.event_stamp;
+    }
+
     /// Changes when a top-level window appears or goes (US-030): a hash of
     /// the live windows' handles.
     pub fn topWindowStamp(self: *Fake) u64 {
@@ -521,6 +648,7 @@ pub const Fake = struct {
             };
             return .{ .err = "Fenêtre fermée : rappelle window_list" };
         };
+        if (window) |h| if (std.mem.indexOfScalar(u64, self.gone_buf[0..self.gone_len], h) != null) return .{ .err = "Fenêtre fermée : rappelle window_list" };
         self.ui_snapshots += 1;
         self.ui_requested = request.extra_roots.len;
         var snap: uitree.Snapshot = .{ .window = self.ui_window, .elements = self.ui_elements, .partial = self.ui_partial, .desktop = self.ui_desktop, .web_pending = self.ui_web_pending, .firefox_no_tree = self.ui_firefox_no_tree };
@@ -531,6 +659,11 @@ pub const Fake = struct {
                 snap.web_text = .read;
                 snap.page = self.ui_page;
             } else snap.web_text = .no_document;
+        }
+        if (self.events_churn and snap.elements.len > 0) {
+            const moved = arena.dupe(uitree.Element, snap.elements) catch return .{ .err = "Mémoire insuffisante : réessaie." };
+            moved[moved.len - 1].rect.h += @intCast(self.ui_snapshots);
+            snap.elements = moved;
         }
         if (request.extra_roots.len == 0 and !self.ui_modal) return .{ .ok = snap };
         var els: std.ArrayList(uitree.Element) = .empty;
@@ -567,6 +700,8 @@ pub const Fake = struct {
         };
         if (!supported) return .{ .unsupported = e.rect };
         self.ui_last_act = .{ .key = key, .action = action, .value_len = if (value) |v| v.len else 0 };
+        if (self.gesture_on_act and self.gesture != null) self.gesture = true;
+        if (self.foreground_after_act) |f| self.foregroundEvent(f);
         return .ok;
     }
 

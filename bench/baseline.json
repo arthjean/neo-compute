@@ -45,6 +45,28 @@
       "serialize": 2.4,
       "write": 0.3,
       "total": 29925.9
+    },
+    "bg-act": {
+      "parse": 3.8,
+      "dispatch": 2549.3,
+      "accessibility": 2545.3,
+      "policy": 0.1,
+      "serialize": 1.2,
+      "write": 0.1,
+      "guard": 0.4,
+      "total": 2548.9
+    },
+    "bg-settle": {
+      "parse": 4.3,
+      "dispatch": 92328.2,
+      "accessibility": 30413.6,
+      "diff": 1.4,
+      "policy": 0.3,
+      "settle": 64061.4,
+      "serialize": 2.4,
+      "write": 0.3,
+      "guard": 0.4,
+      "total": 30420.6
     }
   }
 }

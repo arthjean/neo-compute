@@ -35,27 +35,34 @@ const mcp = @import("../../core/mcp.zig");
 const tools = @import("../../core/tools.zig");
 const display = @import("../../core/display.zig");
 
-const Server = mcp.Server(Windows, tools.all);
+pub const Server = mcp.Server(Windows, tools.all);
+const cohabitation = @import("selftest_cohabitation.zig");
+const uia_events = @import("uia_events.zig");
+const core_a11y = @import("../../core/a11y.zig");
 
 /// Actions of `bg-loop` (PRD, US-044).
-const loop_actions = 1000;
+pub const loop_actions = 1000;
 
 /// Why a control passes or fails: an action must reach its target and
 /// leave the session alone, both.
-const Verdict = enum { ok, no_effect, violation };
+pub const Verdict = enum { ok, no_effect, violation };
 
-fn verdict(effect: bool, v: Violation) Verdict {
+pub fn verdict(effect: bool, v: Violation) Verdict {
     if (v.any()) return .violation;
     return if (effect) .ok else .no_effect;
 }
 
-const Bench = struct {
+pub const Bench = struct {
     report: *Report,
     caller: *Caller,
     decoy: *const Decoy,
     tw: *TestWindow,
     ks: ?*const hooks.KillSwitch,
     hwnd: u64,
+    /// Time the foreground guard added to each action of `bg-loop`
+    /// (US-050), in nanoseconds.
+    guard_ns: [loop_actions]u64 = undefined,
+    guard_n: usize = 0,
     /// The first tree of the target, where the controls take their ids.
     tree: []const u8 = "",
     /// Measures during which the user's own mouse moved: the cursor is not
@@ -64,7 +71,7 @@ const Bench = struct {
 
     /// The decoy in front and the target under it, then the session's
     /// state. Null when the decoy cannot take the foreground back.
-    fn begin(b: *Bench) ?State {
+    pub fn begin(b: *Bench) ?State {
         if (!b.decoy.front()) return null;
         w.Sleep(60);
         const t = b.tw.window();
@@ -77,14 +84,19 @@ const Bench = struct {
 
     /// What changed since `before`. The decoy's own input is injected
     /// before the sample, never after it.
-    fn end(b: *Bench, before: State) Violation {
+    pub fn end(b: *Bench, before: State) Violation {
         const after = State.sample(b.ks);
         if (State.userMouse(before, after)) b.user_mouse += 1;
         return Violation.of(before, after);
     }
 
-    fn id(b: *Bench, needle: []const u8) ?[]const u8 {
-        var lines = std.mem.splitScalar(u8, b.tree, '\n');
+    pub fn id(b: *Bench, needle: []const u8) ?[]const u8 {
+        return idIn(b.tree, needle);
+    }
+
+    /// The id of the first line of `tree` that holds `needle`.
+    pub fn idIn(tree: []const u8, needle: []const u8) ?[]const u8 {
+        var lines = std.mem.splitScalar(u8, tree, '\n');
         while (lines.next()) |line| {
             if (std.mem.indexOf(u8, line, needle) == null) continue;
             var it = std.mem.tokenizeScalar(u8, line, ' ');
@@ -103,6 +115,10 @@ const Bench = struct {
             try b.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"{s}\",\"value\":\"{s}\",\"observe\":\"none\"}}", .{ element, action, v })
         else
             try b.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"{s}\",\"observe\":\"none\"}}", .{ element, action });
+        if (b.guard_n < b.guard_ns.len) {
+            b.guard_ns[b.guard_n] = b.caller.server.timings.get(.guard);
+            b.guard_n += 1;
+        }
         var reached = false;
         var waited: u32 = 0;
         while (waited <= 500) : (waited += 10) {
@@ -176,7 +192,6 @@ const effects = struct {
 };
 
 pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, log: *std.Io.Writer) !?[]const u8 {
-    _ = env;
     var report: Report = .{ .log = log };
     try com.check(w.CoInitializeEx(null, @bitCast(w.COINIT_MULTITHREADED)));
     defer w.CoUninitialize();
@@ -212,18 +227,20 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     w.Sleep(200);
     const hwnd: u64 = @intFromPtr(tw.window());
 
-    // The low-level hooks count injected events. They report to a control
-    // of their own: the user's mouse must not pause the server under test.
-    var witness: Control = .{};
-    backend.startKillSwitch(&witness, .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } });
+    var server: Server = .init(gpa, io, &backend, .{ .mode = .background });
+    defer server.deinit();
+    // The mode as it ships (EP-012): the low-level hooks on the server's
+    // own control, where the user's mouse and Escape pause nothing, and the
+    // label of the indicator. The hooks also count injected events. The
+    // kill switch stops first: its thread notifies the indicator.
+    defer backend.stopIndicator();
+    backend.startKillSwitch(&server.control, mcp.control.default_rearm);
     defer backend.stopKillSwitch();
     if (backend.kill == null) {
         report.fail("bg-setup", "low-level hooks could not be installed: injected events cannot be counted", .{});
         return report.failed;
     }
-
-    var server: Server = .init(gpa, io, &backend, .{ .mode = .background });
-    defer server.deinit();
+    backend.startIndicator(&server.control, mcp.control.default_rearm);
     var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
     defer caller.out.deinit();
     var b: Bench = .{ .report = &report, .caller = &caller, .decoy = &decoy, .tw = &tw, .ks = backend.kill, .hwnd = hwnd };
@@ -419,6 +436,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
             // One sample around the whole series would hide a change that
             // came and went: every action is sampled.
             var n: usize = 0;
+            b.guard_n = 0;
             while (n < loop_actions) : (n += 1) {
                 const s = steps[n % steps.len];
                 const r = b.act(ids[n % steps.len], s.action, s.value, s.effect) catch return lost(&report);
@@ -452,6 +470,12 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
             }
         }
     }
+
+    // EP-012: pause shortcut, label, settling and waits on change events,
+    // foreground guard.
+    if (try cohabitation.run(&b, &backend, &server, &decoy, io, env, arena, area)) return lost(&report);
+    // The session's target again: the guard's check named another window.
+    _ = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{hwnd});
 
     // bg-launch: Calculator opens without taking the foreground.
     launchCheck(&b, &backend, arena) catch |err| report.fail("bg-launch", "{t}", .{err});
@@ -493,6 +517,42 @@ fn lost(report: *Report) ?[]const u8 {
 
 const calculator_aumid = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
 
+/// Settling on a XAML application (decision 0013, amendment of 2026-11-13).
+/// Calculator raises no WinEvent of its own when a key changes its display:
+/// it raises UI Automation events, for a client that subscribed. Ten Invoke
+/// on a digit: each must move the server's UI Automation counter and settle
+/// on the events, with no tree read in place of them. A first action,
+/// unmeasured, is the one whose settling subscribes.
+fn xamlSettle(b: *Bench, handle: u64) !void {
+    const name = "bg-settle-xaml";
+    const tree = try b.caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{handle});
+    const digit = Bench.idIn(tree.text, "button \"Un\"") orelse Bench.idIn(tree.text, "button \"One\"") orelse
+        return b.report.skip(name, "no digit button named Un or One in Calculator's tree", .{});
+    const invoke = "{{\"id\":\"{s}\",\"action\":\"invoke\"}}";
+    _ = try b.caller.call("ui_act", invoke, .{digit});
+    const reps = 10;
+    var signaled: u32 = 0;
+    var unsettled: u32 = 0;
+    var reread: u32 = 0;
+    var violations: u32 = 0;
+    var events: u64 = 0;
+    for (0..reps) |_| {
+        const before = b.begin() orelse return error.DecoyLost;
+        const seen = uia_events.count.load(.acquire);
+        const res = try b.caller.call("ui_act", invoke, .{digit});
+        const got = uia_events.count.load(.acquire) - seen;
+        if (b.end(before).any()) violations += 1;
+        if (got > 0) signaled += 1;
+        events += got;
+        if (res.is_error or std.mem.indexOf(u8, res.text, "; settled in ") == null) unsettled += 1;
+        if (std.mem.indexOf(u8, res.text, core_a11y.reread_note) != null) reread += 1;
+    }
+    if (signaled == reps and unsettled == 0 and reread == 0 and violations == 0)
+        b.report.ok(name, "{d} Invoke on a Calculator digit under the decoy: each raised UI Automation events for the server's handlers ({d} in all) and settled on them, session unchanged", .{ reps, events })
+    else
+        b.report.fail(name, "{d} of {d} actions raised a UI Automation event ({d} in all), {d} not settled, {d} settled by reading the tree again, {d} with the session changed", .{ signaled, reps, events, unsettled, reread, violations });
+}
+
 fn calculatorOpen(backend: *Windows, arena: std.mem.Allocator) bool {
     const wins = backend.listWindows(arena, true) catch return true;
     for (wins) |win| {
@@ -516,6 +576,7 @@ fn launchCheck(b: *Bench, backend: *Windows, arena: std.mem.Allocator) !void {
     const v = b.end(before);
     var it = std.mem.tokenizeAny(u8, res.text, " \n");
     const handle = tools.parseHandle(it.next() orelse "") orelse return b.report.fail("bg-launch", "no handle in `{s}`", .{res.text});
+    xamlSettle(b, handle) catch |err| b.report.fail("bg-settle-xaml", "{t}", .{err});
     // Closed by the mode's own tool, then checked.
     _ = try b.caller.call("window_set", "{{\"window\":\"0x{x}\",\"state\":\"closed\",\"observe\":\"none\"}}", .{handle});
     var waited: u32 = 0;

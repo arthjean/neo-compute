@@ -26,9 +26,11 @@ const msg_simulate_key = w.WM_APP + 2;
 const msg_simulate_move = w.WM_APP + 3;
 const msg_remove = w.WM_APP + 4;
 const msg_rearmed = w.WM_APP + 5;
+const msg_simulate_click = w.WM_APP + 6;
 
-/// Why the switch tripped (`msg_release` wParam).
-const Cause = enum(usize) { escape, mouse };
+/// Why the server paused (`msg_release` wParam). `shortcut`: the re-arm
+/// shortcut of the background mode, which pauses as well (US-045).
+const Cause = enum(usize) { escape, mouse, shortcut };
 
 pub const Rearm = struct { vk: u32, mods: keys.Mods };
 
@@ -64,6 +66,19 @@ pub const KillSwitch = struct {
     /// own mouse is not the server's doing. Never part of the kill switch.
     user_mouse: std.atomic.Value(u32) = .init(0),
     user_mouse_tick: std.atomic.Value(u32) = .init(0),
+    /// Physical gestures that can change the foreground window (`switches`,
+    /// `leavesHome`), and the GetTickCount of the last one. The foreground
+    /// guard of the background mode asks whether one came around an action
+    /// (US-050). Ordinary typing and a click inside the user's own window
+    /// change no foreground window and are not counted.
+    gestures: std.atomic.Value(u32) = .init(0),
+    gesture_tick: std.atomic.Value(u32) = .init(0),
+    /// Process of the user's window while the foreground guard is armed, 0
+    /// otherwise: a click on a window of another process leaves it.
+    home_pid: std.atomic.Value(u32) = .init(0),
+    /// Key events the hook consumed (selftest: Escape is not, in background
+    /// mode; the pause shortcut is).
+    consumed: std.atomic.Value(u32) = .init(0),
     /// Longest time spent in a hook procedure (selftest: < 1 ms).
     max_proc_ns: std.atomic.Value(u64) = .init(0),
 
@@ -102,6 +117,41 @@ pub const KillSwitch = struct {
         _ = w.PostThreadMessageW(self.thread_id, msg_simulate_move, @as(u32, @bitCast(dx)), @as(i32, dy));
     }
 
+    /// Feeds a physical left button press at screen point `pt` to the hook
+    /// logic (selftest).
+    pub fn simulateClick(self: *KillSwitch, pt: [2]i32) void {
+        _ = w.PostThreadMessageW(self.thread_id, msg_simulate_click, @as(u32, @bitCast(pt[0])), @as(i32, pt[1]));
+    }
+
+    /// Whether the user made a gesture that can change the foreground
+    /// window at GetTickCount `tick` or later.
+    pub fn gestureSince(self: *const KillSwitch, tick: u32) bool {
+        if (self.gestures.load(.acquire) == 0) return false;
+        const after: i32 = @bitCast(self.gesture_tick.load(.acquire) -% tick);
+        return after >= 0;
+    }
+
+    fn gesture(self: *KillSwitch) void {
+        self.gesture_tick.store(w.GetTickCount(), .release);
+        _ = self.gestures.fetchAdd(1, .release);
+    }
+
+    /// Whether a button press at `pt` lands outside the user's application:
+    /// on a window of another process than the one the guard protects, or,
+    /// when no guard is armed, than the foreground window's. Read before
+    /// the click reaches anyone, so the windows are still where the user
+    /// saw them. Neither call sends a message: the hook never waits on
+    /// another thread.
+    fn leavesHome(self: *const KillSwitch, pt: [2]i32) bool {
+        const hit = w.ChildWindowFromPointEx(w.GetDesktopWindow(), .{ .x = pt[0], .y = pt[1] }, w.CWP_SKIPINVISIBLE | w.CWP_SKIPDISABLED | w.CWP_SKIPTRANSPARENT);
+        if (hit == null) return true;
+        var pid: u32 = 0;
+        _ = w.GetWindowThreadProcessId(hit, &pid);
+        var home = self.home_pid.load(.acquire);
+        if (home == 0) _ = w.GetWindowThreadProcessId(w.GetForegroundWindow(), &home);
+        return pid == 0 or pid != home;
+    }
+
     /// Unhooks without telling the check, as Windows does after a timeout.
     pub fn simulateRemoval(self: *KillSwitch) void {
         _ = w.PostThreadMessageW(self.thread_id, msg_remove, 0, 0);
@@ -136,16 +186,26 @@ pub const KillSwitch = struct {
             // would hold the procedure past LowLevelHooksTimeout.
             msg_release => {
                 self.release(self.release_ctx);
-                std.debug.print("neo-compute: kill switch ({s}): action cancelled, server paused until the re-arm shortcut\n", .{if (msg.wParam == @backingInt(Cause.escape)) "Escape" else "mouse moved"});
+                // Compared as integers: any process can post a thread
+                // message, and a value outside `Cause` must not trap.
+                if (msg.wParam == @backingInt(Cause.shortcut))
+                    std.debug.print("neo-compute: paused by the physical shortcut: the same shortcut resumes\n", .{})
+                else
+                    std.debug.print("neo-compute: kill switch ({s}): action cancelled, server paused until the re-arm shortcut\n", .{if (msg.wParam == @backingInt(Cause.escape)) "Escape" else "mouse moved"});
             },
             msg_rearmed => std.debug.print("neo-compute: re-armed by the physical shortcut\n", .{}),
-            msg_simulate_key => _ = self.onKey(@intCast(msg.wParam), msg.lParam != 0, false),
+            msg_simulate_key => _ = self.keyEvent(@intCast(msg.wParam), msg.lParam != 0, false),
             msg_simulate_move => {
                 const p = self.last_pt orelse cursor();
                 self.last_pt = p;
                 const dx: i32 = @bitCast(@as(u32, @truncate(msg.wParam)));
                 const dy: i32 = @truncate(msg.lParam);
                 self.onMouse(w.WM_MOUSEMOVE, .{ p[0] + dx, p[1] + dy }, false);
+            },
+            msg_simulate_click => {
+                const x: i32 = @bitCast(@as(u32, @truncate(msg.wParam)));
+                const y: i32 = @truncate(msg.lParam);
+                self.onMouse(w.WM_LBUTTONDOWN, .{ x, y }, false);
             },
             msg_remove => self.uninstall(),
             else => {},
@@ -179,6 +239,13 @@ pub const KillSwitch = struct {
         return true;
     }
 
+    /// `onKey`, counting what it consumes.
+    fn keyEvent(self: *KillSwitch, vk: u32, down: bool, injected: bool) bool {
+        const eat = self.onKey(vk, down, injected);
+        if (eat) _ = self.consumed.fetchAdd(1, .monotonic);
+        return eat;
+    }
+
     /// Returns whether the event is consumed.
     fn onKey(self: *KillSwitch, vk: u32, down: bool, injected: bool) bool {
         if (injected) return false;
@@ -187,16 +254,35 @@ pub const KillSwitch = struct {
             const bit: u4 = @bitCast(m);
             self.mods = @bitCast(if (down) bits | bit else bits & ~bit);
         }
+        if (down and switches(vk, self.mods)) self.gesture();
         if (!down) {
             if (self.swallow != vk) return false;
             self.swallow = null;
+            return true;
+        }
+        const shortcut = vk == self.rearm.vk and @as(u4, @bitCast(self.mods)) == @as(u4, @bitCast(self.rearm.mods));
+        // Background mode (US-045): Escape is the user's and reaches their
+        // application; the shortcut pauses and resumes, consumed both ways.
+        if (self.control.background.load(.acquire)) {
+            // The keyboard repeats a held key: one press toggles once, and
+            // its repeats are consumed with it.
+            if (self.swallow == vk) return true;
+            if (!shortcut) return false;
+            self.swallow = vk;
+            switch (self.control.toggle()) {
+                .paused => {
+                    _ = self.trips.fetchAdd(1, .acq_rel);
+                    _ = w.PostThreadMessageW(self.thread_id, msg_release, @backingInt(Cause.shortcut), 0);
+                },
+                .rearmed => _ = w.PostThreadMessageW(self.thread_id, msg_rearmed, 0, 0),
+            }
             return true;
         }
         if (vk == w.VK_ESCAPE and self.trip(.escape)) {
             self.swallow = vk;
             return true;
         }
-        if (vk == self.rearm.vk and @as(u4, @bitCast(self.mods)) == @as(u4, @bitCast(self.rearm.mods)) and self.control.rearm()) {
+        if (shortcut and self.control.rearm()) {
             self.swallow = vk;
             _ = w.PostThreadMessageW(self.thread_id, msg_rearmed, 0, 0);
             return true;
@@ -207,7 +293,9 @@ pub const KillSwitch = struct {
     fn onMouse(self: *KillSwitch, message: u32, pt: [2]i32, injected: bool) void {
         const prev = self.last_pt;
         self.last_pt = pt;
-        if (message != w.WM_MOUSEMOVE or injected) return;
+        if (!injected and buttonDown(message) and self.leavesHome(pt)) self.gesture();
+        // Background mode (US-045): the user's mouse never pauses the server.
+        if (message != w.WM_MOUSEMOVE or injected or self.control.background.load(.acquire)) return;
         const p = prev orelse return;
         const epoch = self.control.epoch.load(.acquire);
         if (epoch != self.seen_epoch) {
@@ -245,6 +333,26 @@ fn modifierOf(vk: u32) ?keys.Mods {
     };
 }
 
+/// Whether a key press, with the modifiers held once it is down, can make
+/// Windows change the foreground window: the Windows key and anything
+/// pressed with it, Alt and anything pressed with it (Alt+Tab, Alt+Esc,
+/// Alt+F4), Ctrl+Esc. Ctrl+Alt is AltGr on many layouts (it types @ or { on
+/// a French keyboard) and counts only with Tab or Esc. Ordinary typing,
+/// Enter included, changes no foreground window by itself.
+fn switches(vk: u32, mods: keys.Mods) bool {
+    if (mods.super) return true;
+    if (vk == w.VK_TAB) return mods.alt;
+    if (vk == w.VK_ESCAPE) return mods.alt or mods.ctrl;
+    return mods.alt and !mods.ctrl;
+}
+
+fn buttonDown(message: u32) bool {
+    return switch (message) {
+        w.WM_LBUTTONDOWN, w.WM_RBUTTONDOWN, w.WM_MBUTTONDOWN, w.WM_XBUTTONDOWN => true,
+        else => false,
+    };
+}
+
 fn cursor() [2]i32 {
     var p: w.POINT = .{ .x = 0, .y = 0 };
     _ = w.GetCursorPos(&p);
@@ -265,7 +373,7 @@ fn keyboardProc(code: i32, wparam: w.WPARAM, lparam: w.LPARAM) callconv(.winapi)
     ks.last_event_tick.store(w.GetTickCount(), .release);
     const down = wparam == w.WM_KEYDOWN or wparam == w.WM_SYSKEYDOWN;
     if (info.flags & w.LLKHF_INJECTED != 0) _ = ks.injected.fetchAdd(1, .monotonic);
-    const eat = ks.onKey(info.vkCode, down, info.flags & w.LLKHF_INJECTED != 0);
+    const eat = ks.keyEvent(info.vkCode, down, info.flags & w.LLKHF_INJECTED != 0);
     ks.recordLatency(t0);
     return if (eat) 1 else w.CallNextHookEx(null, code, wparam, lparam);
 }

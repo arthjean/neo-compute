@@ -30,6 +30,7 @@ const w = @import("win32");
 const com = @import("com.zig");
 const uitree = @import("../../core/uitree.zig");
 const display = @import("../../core/display.zig");
+const uia_events = @import("uia_events.zig");
 const check = com.check;
 const release = com.release;
 
@@ -132,6 +133,9 @@ const Job = union(enum) {
     /// into `Worker.secret_buf` (no arena: the dispatcher keeps using its
     /// own while the scan runs).
     secrets,
+    /// Subscribes to the UI Automation events of `hwnd` in place of the
+    /// window watched before; 0: none.
+    watch: struct { hwnd: u64, out: bool = false },
     quit,
 };
 
@@ -184,6 +188,16 @@ pub const Worker = struct {
         self.job = .{ .act = .{ .arena = arena, .window = window, .key = key, .action = action, .value = value } };
         self.run();
         return self.job.act.out;
+    }
+
+    /// Subscribes to the UI Automation events of `hwnd` (`uia_events.zig`)
+    /// in place of the window watched before; 0 removes the subscription.
+    /// False when the window does not answer or refuses the handlers.
+    pub fn watch(self: *Worker, hwnd: u64) bool {
+        if (self.start() != null) return false;
+        self.job = .{ .watch = .{ .hwnd = hwnd } };
+        self.run();
+        return self.job.watch.out;
     }
 
     /// Starts the password scan of the foreground window without waiting
@@ -274,6 +288,7 @@ pub const Worker = struct {
                 },
                 .act => |*j| j.out = session.?.act(j.arena, j.window, j.key, j.action, j.value),
                 .secrets => self.secret_len = session.?.secrets(&self.secret_buf),
+                .watch => |*j| j.out = session.?.watchWindow(j.hwnd),
             }
             _ = w.SetEvent(self.done);
         }
@@ -347,6 +362,10 @@ const Session = struct {
     extras_ns: u64 = 0,
     retained: [4]Retained = @splat(.{}),
     clock: u64 = 0,
+    /// The event handlers registered on the watched window, and those of a
+    /// window that did not answer when they had to be removed.
+    watched: ?uia_events.Subscription = null,
+    stale: ?uia_events.Subscription = null,
 
     /// `background`: the Windows 8 automation object (CUIAutomation8), the
     /// only one that exposes IUIAutomation2, with AutoSetFocus off. The
@@ -389,7 +408,40 @@ const Session = struct {
         return .{ .gpa = gpa, .automation = automation, .background = background, .subtree = cache.?, .control_view = cond.? };
     }
 
+    /// Moves the event subscription to `hwnd` (0: none). Removing handlers
+    /// is a round trip to the provider, like adding them: a window whose
+    /// thread is stopped would hold either, so its handlers wait in `stale`
+    /// until it answers or is gone.
+    fn watchWindow(self: *Session, hwnd: u64) bool {
+        const h: w.HWND = @ptrFromInt(hwnd);
+        if (self.watched) |sub| {
+            if (sub.hwnd == h) return true;
+            self.watched = null;
+            self.unwatch(sub);
+        }
+        if (self.stale) |sub| {
+            self.stale = null;
+            self.unwatch(sub);
+        }
+        if (hwnd == 0 or w.IsWindow(h) == 0 or !responsive(h)) return false;
+        self.watched = uia_events.add(self.automation, h);
+        return self.watched != null;
+    }
+
+    fn unwatch(self: *Session, sub: uia_events.Subscription) void {
+        if (w.IsWindow(sub.hwnd) != 0 and !responsive(sub.hwnd)) {
+            // A second one while the first still waits: the older keeps its
+            // handlers until the process ends. They only count.
+            if (self.stale) |old| release(old.element);
+            self.stale = sub;
+            return;
+        }
+        uia_events.remove(self.automation, &sub);
+    }
+
     fn deinit(self: *Session) void {
+        _ = self.watchWindow(0);
+        if (self.stale) |sub| release(sub.element);
         for (&self.retained) |*r| r.deinit(self.gpa);
         if (self.element_cache) |c| release(c);
         if (self.password_condition) |c| release(c);

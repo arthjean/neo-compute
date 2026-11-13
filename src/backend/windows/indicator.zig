@@ -18,6 +18,10 @@
 //! never animates: an excluded window still produces DXGI dirty rects
 //! (US-033), and those of its own changes are dropped from captures
 //! (`dropEchoes`), so settling and ui_find's wait do not see it.
+//!
+//! Background mode (US-046): the agent works behind the user, so a frame
+//! around their displays would be noise. Only the label is created, on the
+//! primary display, with the text of that mode; the strips do not exist.
 
 const std = @import("std");
 const w = @import("win32");
@@ -73,7 +77,9 @@ const Screen = struct {
 
 pub const Indicator = struct {
     control: *control_mod.Control,
-    acting_text: [64:0]u16 = undefined,
+    /// Background mode: the label alone, on the primary display.
+    label_only: bool = false,
+    acting_text: [128:0]u16 = undefined,
     paused_text: [128:0]u16 = undefined,
     observer: control_mod.Observer = undefined,
     thread: ?std.Thread = null,
@@ -100,7 +106,8 @@ pub const Indicator = struct {
     // Shared with captures and the selftest.
     lock: w.SRWLOCK = .{ .Ptr = null },
     /// Per display: the acting frame and label, then the paused label,
-    /// desktop coordinates.
+    /// desktop coordinates. Label only: the acting label, then the paused
+    /// one.
     rects: [max_screens * 6]display.Rect = undefined,
     rects_len: usize = 0,
     /// QPC milliseconds of the last change on screen.
@@ -115,7 +122,8 @@ pub const Indicator = struct {
     /// indicator stays off.
     pub fn start(self: *Indicator, rearm: keys.Combo) !void {
         var buf: [128]u8 = undefined;
-        setWide(&self.acting_text, core.acting_label);
+        self.label_only = self.control.background.load(.acquire);
+        setWide(&self.acting_text, if (self.label_only) core.backgroundLabel(&buf, rearm) else core.acting_label);
         setWide(&self.paused_text, core.pausedLabel(&buf, rearm));
         self.observer = .{ .ctx = self, .notify = notify };
         instance = self;
@@ -181,7 +189,8 @@ pub const Indicator = struct {
     }
 
     /// The indicator's rectangles, six per display: the acting frame's
-    /// four strips and label, then the paused label (selftest).
+    /// four strips and label, then the paused label; label only, the two
+    /// labels (selftest).
     pub fn geometry(self: *Indicator, out: []display.Rect) []display.Rect {
         w.AcquireSRWLockExclusive(&self.lock);
         defer w.ReleaseSRWLockExclusive(&self.lock);
@@ -280,6 +289,7 @@ pub const Indicator = struct {
         for (self.screens[0..self.count], 0..) |*s, i| {
             for (&s.hwnds, s.acting.rects, 0..) |*hwnd, r, p| {
                 if (self.quit.load(.acquire)) return;
+                if (self.label_only and p != label_part) continue;
                 hwnd.* = w.CreateWindowExW(ex, class, null, w.WS_POPUP, r.x, r.y, r.w, r.h, null, null, module, null);
                 if (hwnd.* == null) return self.fail("CreateWindowExW failed");
                 owned[i * parts + p].store(@intFromPtr(hwnd.*), .release);
@@ -287,6 +297,12 @@ pub const Indicator = struct {
                 // Without exclusion the indicator would show in every
                 // capture: no indicator rather than a visible one.
                 if (w.SetWindowDisplayAffinity(hwnd.*, w.WDA_EXCLUDEFROMCAPTURE) == 0) return self.fail("SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) failed");
+            }
+            if (self.label_only) {
+                self.rects[n] = s.acting.label();
+                self.rects[n + 1] = s.paused.label();
+                n += 2;
+                continue;
             }
             @memcpy(self.rects[n..][0..5], &s.acting.rects);
             self.rects[n + 5] = s.paused.label();
@@ -337,6 +353,7 @@ pub const Indicator = struct {
         if (self.count == max_screens or self.quit.load(.acquire)) return 0;
         var mi: w.MONITORINFO = .{ .cbSize = @sizeOf(w.MONITORINFO), .rcMonitor = undefined, .rcWork = undefined, .dwFlags = 0 };
         if (w.GetMonitorInfoW(monitor, &mi) == 0) return 1;
+        if (self.label_only and mi.dwFlags & w.MONITORINFOF_PRIMARY == 0) return 1;
         var dx: u32 = 96;
         var dy: u32 = 96;
         if (w.GetDpiForMonitor(monitor, w.MDT_EFFECTIVE_DPI, &dx, &dy) < 0) dx = 96;
@@ -392,6 +409,7 @@ pub const Indicator = struct {
         if (look == self.look) return;
         self.look = look;
         for (self.screens[0..self.count]) |*s| for (s.hwnds, 0..) |hwnd, p| {
+            if (hwnd == null) continue;
             if (look == .hidden) {
                 _ = w.ShowWindow(hwnd, w.SW_HIDE);
                 continue;
@@ -425,8 +443,9 @@ pub const Indicator = struct {
         defer _ = w.SelectObject(hdc, old);
         _ = w.SetBkMode(hdc, @intCast(w.TRANSPARENT));
         _ = w.SetTextColor(hdc, if (look == .paused) paused_ink else acting_ink);
-        // Below the top strip the label box continues.
-        rc.top += core.frameWidth(s.dpi);
+        // Below the top strip the label box continues. Without a frame the
+        // text sits in the middle of its box.
+        if (!self.label_only) rc.top += core.frameWidth(s.dpi);
         _ = w.DrawTextW(hdc, if (look == .paused) &self.paused_text else &self.acting_text, -1, &rc, w.DT_CENTER | w.DT_VCENTER | w.DT_SINGLELINE);
     }
 
@@ -439,7 +458,7 @@ pub const Indicator = struct {
             },
             w.WM_DISPLAYCHANGE, w.WM_DPICHANGED => {
                 // Every window hears it: rebuild once, from the loop.
-                if (self.count > 0 and hwnd == self.screens[0].hwnds[0]) _ = w.PostThreadMessageW(self.thread_id.load(.acquire), msg_rebuild, 0, 0);
+                if (self.count > 0 and hwnd == self.screens[0].hwnds[if (self.label_only) label_part else 0]) _ = w.PostThreadMessageW(self.thread_id.load(.acquire), msg_rebuild, 0, 0);
                 return 0;
             },
             else => return w.DefWindowProcW(hwnd, msg, wparam, lparam),

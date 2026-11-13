@@ -65,6 +65,20 @@ pub const Decoy = struct {
         return self.isFront();
     }
 
+    /// Has the decoy, the foreground process, let process `pid` take the
+    /// foreground once (US-050). Call it after `front`: the decoy's own
+    /// input withdraws the grant.
+    pub fn allow(self: *const Decoy, pid: u32) bool {
+        var granted: usize = 0;
+        if (w.SendMessageTimeoutW(self.hwnd, decoy_window.msg_allow, pid, 0, w.SMTO_ABORTIFHUNG, 500, &granted) == 0) return false;
+        return granted != 0;
+    }
+
+    /// Repaints the whole decoy every 15 ms (`on`), or stops.
+    pub fn animate(self: *const Decoy, on: bool) void {
+        _ = w.SendMessageTimeoutW(self.hwnd, decoy_window.msg_animate, @intFromBool(on), 0, w.SMTO_ABORTIFHUNG, 500, null);
+    }
+
     /// Whether `hwnd` lies entirely under the decoy: inside its rectangle and
     /// below it in the z-order.
     pub fn covers(self: *const Decoy, hwnd: w.HWND) bool {

@@ -63,7 +63,7 @@ fn waitFor(comptime pred: anytype, args: anytype, timeout_ms: u32) bool {
     return false;
 }
 
-fn qpcUs() u64 {
+pub fn qpcUs() u64 {
     var t: i64 = 0;
     var f: i64 = 1;
     _ = w.QueryPerformanceCounter(&t);
@@ -1934,7 +1934,13 @@ fn indicatorWindowsOf(io: std.Io, env: *const std.process.Environ.Map, arena: st
 /// GetProcessTimes made the same wait read 0.9 to 5.3 %. The server's
 /// policy and audit log go to a scratch directory, not the user's.
 fn stillWaitCheck(io: std.Io, env: *const std.process.Environ.Map, report: *Report, arena: std.mem.Allocator, name: []const u8, rect: display.Rect, capture: []const u8) void {
-    const measured = cpuOfWait(io, env, arena, rect, capture) catch |err| return report.fail(name, "{t}", .{err});
+    stillWaitCheckIn(io, env, report, arena, name, rect, capture, null);
+}
+
+/// `stillWaitCheck` with the server in `--mode <mode>` (US-049: the
+/// background wait reads change events, not pixels).
+pub fn stillWaitCheckIn(io: std.Io, env: *const std.process.Environ.Map, report: *Report, arena: std.mem.Allocator, name: []const u8, rect: display.Rect, capture: []const u8, mode: ?[]const u8) void {
+    const measured = cpuOfWait(io, env, arena, rect, capture, mode) catch |err| return report.fail(name, "{t}", .{err});
     const m = switch (measured) {
         .ok => |m| m,
         .failed => |why| return report.fail(name, "{s}", .{why}),
@@ -1943,9 +1949,9 @@ fn stillWaitCheck(io: std.Io, env: *const std.process.Environ.Map, report: *Repo
     const expected = "Aucun élément « neo-compute absent element » après 5000 ms : vérifie la requête ou augmente wait_ms";
     const answered = std.mem.indexOf(u8, m.response, "\"isError\":true") != null and std.mem.indexOf(u8, m.response, expected) != null;
     if (answered and m.placed and percent < 5)
-        report.ok(name, "5 s wait without change on a {d}x{d} window, server --capture {s} in a process of its own: {d:.2} % of a core ({d} us CPU over {d} ms)", .{ rect.w, rect.h, capture, percent, m.cpu_us, m.wall_us / 1000 })
+        report.ok(name, "5 s wait without change on a {d}x{d} window, server --capture {s} --mode {s} in a process of its own: {d:.2} % of a core ({d} us CPU over {d} ms)", .{ rect.w, rect.h, capture, mode orelse "a11y", percent, m.cpu_us, m.wall_us / 1000 })
     else
-        report.fail(name, "{d}x{d} window placed={}, --capture {s}: {d:.2} % of a core (budget 5 %), response `{s}`", .{ rect.w, rect.h, m.placed, capture, percent, m.response });
+        report.fail(name, "{d}x{d} window placed={}, --capture {s} --mode {s}: {d:.2} % of a core (budget 5 %), response `{s}`", .{ rect.w, rect.h, m.placed, capture, mode orelse "a11y", percent, m.response });
 }
 
 const Wait = union(enum) {
@@ -1960,7 +1966,7 @@ fn rpc(wr: *std.Io.File.Writer, rd: *std.Io.File.Reader, line: []const u8, answe
     return (try rd.interface.takeDelimiter('\n')) orelse error.NoResponse;
 }
 
-fn cpuOfWait(io: std.Io, env: *const std.process.Environ.Map, arena: std.mem.Allocator, rect: display.Rect, capture: []const u8) !Wait {
+fn cpuOfWait(io: std.Io, env: *const std.process.Environ.Map, arena: std.mem.Allocator, rect: display.Rect, capture: []const u8, mode: ?[]const u8) !Wait {
     var path_w: [1024:0]u16 = undefined;
     const n = w.GetModuleFileNameW(null, &path_w, path_w.len);
     const path = try arena.alloc(u8, n * 3);
@@ -1992,7 +1998,7 @@ fn cpuOfWait(io: std.Io, env: *const std.process.Environ.Map, arena: std.mem.All
     var server_env = try env.clone(arena);
     try server_env.put("APPDATA", home);
     try server_env.put("LOCALAPPDATA", home);
-    var server = try std.process.spawn(io, .{ .argv = &.{ exe, "--capture", capture }, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore, .environ_map = &server_env });
+    var server = try std.process.spawn(io, .{ .argv = &.{ exe, "--capture", capture, "--mode", mode orelse "a11y" }, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore, .environ_map = &server_env });
     defer server.kill(io);
     var wbuf: [1024]u8 = undefined;
     var sw = server.stdin.?.writerStreaming(io, &wbuf);
@@ -2018,7 +2024,7 @@ fn cpuOfWait(io: std.Io, env: *const std.process.Environ.Map, arena: std.mem.All
 
 /// Cycles per microsecond of the counter QueryProcessCycleTime reads,
 /// against QueryPerformanceCounter over a 100 ms busy loop of this thread.
-fn cyclesPerUs() f64 {
+pub fn cyclesPerUs() f64 {
     var c0: u64 = 0;
     _ = w.QueryThreadCycleTime(w.GetCurrentThread(), &c0);
     const t0 = qpcUs();

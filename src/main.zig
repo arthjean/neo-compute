@@ -22,13 +22,14 @@ pub const Server = mcp.Server(Backend, tools.all);
 const usage =
     \\usage: neo-compute [serve] [--trace] [--screenshot-size 1024..1920] [--mode a11y|vision|background]
     \\                   [--policy FILE] [--rearm-key COMBO] [--capture auto|gdi] [--no-indicator]
-    \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|APP>
+    \\       neo-compute bench <all|transport|diff|capture|capture-gdi|snapshot|screenshot|window_list|ui_tree|settle|marks|bg-act|bg-settle|APP>
     \\                         [--iterations N] [--check BASELINE.json] [--write-baseline FILE] [--capture auto|gdi]
     \\       neo-compute selftest [--capture auto|gdi]
     \\       neo-compute selftest --background
     \\       neo-compute clipboard-probe [SECONDS]
     \\       neo-compute bg-probe [dump] [autofocus=on|off] [only=PRIMITIVE]
     \\                            [window|show|launch|notepad|calculator|settings|explorer|chrome|vscode]...
+    \\       neo-compute events-probe [window|notepad|calculator|settings|explorer|chrome|vscode|churn]...
     \\       neo-compute --version
     \\
 ;
@@ -69,12 +70,21 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-stall") and @hasDecl(Backend, "stallProvider")) return Backend.stallProvider();
     // Started by the background probe and selftest only: the user's window (EP-011).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-decoy") and @hasDecl(Backend, "decoyWindow")) return Backend.decoyWindow(args[2..]);
+    // Started by the background selftest only: a dialog that takes the foreground (US-050).
+    if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-popup") and @hasDecl(Backend, "popupWindow")) return Backend.popupWindow(args[2..]);
     // US-040: which background primitives take the foreground, on stderr.
     if (args.len > 1 and std.mem.eql(u8, args[1], "bg-probe") and @hasDecl(Backend, "bgProbe")) {
         var err_buf: [4096]u8 = undefined;
         var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
         defer stderr.interface.flush() catch {};
         return Backend.bgProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
+    }
+    // US-047: whether WinEvents report the changes of a covered window, on stderr.
+    if (args.len > 1 and std.mem.eql(u8, args[1], "events-probe") and @hasDecl(Backend, "eventsProbe")) {
+        var err_buf: [4096]u8 = undefined;
+        var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
+        defer stderr.interface.flush() catch {};
+        return Backend.eventsProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
     }
     // Started by selftest only: a still window of another process (US-032 wait CPU).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-still") and @hasDecl(Backend, "stillWindow")) return Backend.stillWindow(args[2..]);
@@ -83,7 +93,7 @@ pub fn main(init: std.process.Init) !u8 {
     var screenshot_size: u32 = display.default_long_side;
     var mode: mcp.Mode = .a11y;
     var policy_path: ?[]const u8 = null;
-    var rearm: keys.Combo = default_rearm;
+    var rearm: keys.Combo = mcp.control.default_rearm;
     var indicator = true;
     var i: usize = 1;
     if (i < args.len and std.mem.eql(u8, args[i], "serve")) i += 1;
@@ -141,9 +151,6 @@ pub fn main(init: std.process.Init) !u8 {
     return serve(init, .{ .trace = trace, .screenshot_size = screenshot_size, .mode = mode }, policy_path, rearm, indicator);
 }
 
-/// The only way to lift a kill switch pause (US-018), physical only.
-const default_rearm: keys.Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
-
 fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, rearm: keys.Combo, indicator: bool) !u8 {
     const arena = init.arena.allocator();
     const env = init.environ_map;
@@ -154,6 +161,7 @@ fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, re
     const pol: policy.Policy = if (path) |p| policy.load(arena, init.io, p, policy_path != null) else policy.defaults;
     if (pol.problem) |why| std.debug.print("neo-compute: {s}: every application is limited to observe\n", .{why});
     options.policy = &pol;
+    options.rearm = rearm;
 
     // US-019: %LOCALAPPDATA%\neo-compute\audit.jsonl.
     var log: ?audit.Audit = null;
@@ -305,6 +313,7 @@ test {
     _ = @import("core/a11y_test.zig");
     _ = @import("core/policy.zig");
     _ = @import("core/control.zig");
+    _ = @import("core/guard.zig");
     _ = @import("core/indicator.zig");
     _ = @import("core/audit.zig");
     _ = @import("core/security_test.zig");

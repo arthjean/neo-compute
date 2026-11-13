@@ -1,0 +1,17 @@
+events-probe: decoy 0x1f06e6 of another process in the foreground; WinEvents out of context, EVENT_MIN to EVENT_MAX, filtered by the target's process; 20 actions per target
+events-probe: churn | removal of the UI Automation handlers after the watched window was hidden, minimized, opened dialogs or closed; 10 cycles per arm
+events-probe: churn | window (this process) | window left alone for 1 s | handlers added in 21.9 ms | 0 UIA events | tree read with the handlers in place: ok in 23.2 ms | handlers removed in 0.8 ms
+events-probe: churn | window (this process) | hidden and shown 10 times | handlers added in 6.3 ms | 20 UIA events | tree read with the handlers in place: ok in 27.6 ms | handlers removed in 3.4 ms
+events-probe: churn | window (this process) | minimized and restored 10 times | handlers added in 8.5 ms | 0 UIA events | tree read with the handlers in place: ok in 26.4 ms | handlers removed in 1.0 ms
+events-probe: churn | window (this process) | closed while watched | handlers added in 7.9 ms | 2 UIA events | tree read with the handlers in place: not readable in 0.0 ms | handlers removed in 1.9 ms
+events-probe: churn | popup (another process, Win32) | window left alone for 1 s | handlers added in 13.2 ms | 0 UIA events | tree read with the handlers in place: ok in 4.3 ms | handlers removed in 0.9 ms
+events-probe: churn | popup (another process, Win32) | hidden and shown 10 times | handlers added in 4.9 ms | 20 UIA events | tree read with the handlers in place: ok in 4.2 ms | handlers removed in 4.2 ms
+events-probe: churn | popup (another process, Win32) | minimized and restored 10 times | handlers added in 5.1 ms | 0 UIA events | tree read with the handlers in place: ok in 4.5 ms | handlers removed in 0.8 ms
+events-probe: churn | popup (another process, Win32) | a dialog opened and closed 10 times | handlers added in 4.8 ms | 10 UIA events | tree read with the handlers in place: ok in 4.4 ms | handlers removed in 3.9 ms
+events-probe: churn | popup (another process, Win32) | closed while watched | handlers added in 4.7 ms | 2 UIA events | tree read with the handlers in place: not readable in 0.0 ms | handlers removed in 1.0 ms
+events-probe: churn | calculator (UWP frame) | window left alone for 1 s | handlers added in 12.5 ms | 0 UIA events | tree read with the handlers in place: ok in 30.9 ms | handlers removed in 2.1 ms
+events-probe: churn | calculator (UWP frame) | hidden and shown 10 times | handlers added in 7.1 ms | 20 UIA events | tree read with the handlers in place: ok in 20.3 ms | handlers removed in 5.4 ms
+events-probe: churn | calculator (UWP frame) | minimized and restored 10 times | handlers added in 7.3 ms | 30 UIA events | tree read with the handlers in place: ok in 21.2 ms | handlers removed in 3.4 ms
+events-probe: churn | calculator (UWP frame) | closed while watched | handlers added in 8.4 ms | 3 UIA events | tree read with the handlers in place: not readable in 0.0 ms | handlers removed in 1.9 ms
+events-probe: churn | verdict | slowest removal of the handlers: 5.4 ms
+events-probe: handlers | 0 property events received, 0 with a VARIANT type UI Automation does not send for the subscribed properties

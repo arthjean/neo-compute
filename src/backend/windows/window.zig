@@ -201,6 +201,58 @@ pub fn focus(handle: u64) display.FocusResult {
     return if (w.GetForegroundWindow() == hwnd) .ok else .refused;
 }
 
+/// Longest wait for Windows to show a window it agreed to put in front.
+const restore_wait_ms = 100;
+
+fn inFront(hwnd: w.HWND, ms: u32) bool {
+    var waited: u32 = 0;
+    while (true) : (waited += 5) {
+        if (w.GetForegroundWindow() == hwnd) return true;
+        if (waited >= ms) return false;
+        w.Sleep(5);
+    }
+}
+
+/// Gives the foreground back to the window that had it before a window of
+/// the agent's target took it (US-050), without injected input.
+///
+/// The server holds no foreground right of its own, and Windows 11 refuses
+/// it SetForegroundWindow, alone or with the foreground thread's input
+/// attached (20 refusals out of 20 on build 26300, the attach itself
+/// succeeding). What Windows does allow is an activation inside the input
+/// queue that holds the foreground: this thread and the thread of the
+/// user's window both join the queue of the window that took the
+/// foreground, the user's window is raised and made the active window of
+/// that queue, and the threads are detached again. The window gets the
+/// activation messages it gets when the user switches back to it, so it
+/// puts the keyboard focus where it keeps it (20 out of 20, focus
+/// included, decision 0013).
+///
+/// The activation messages are sent to both windows: neither is touched
+/// when its thread does not answer (`answers`): they would hold the
+/// dispatcher.
+pub fn restoreForeground(handle: u64) bool {
+    const hwnd: w.HWND = @ptrFromInt(handle);
+    if (w.IsWindow(hwnd) == 0) return false;
+    const fg = w.GetForegroundWindow();
+    if (fg == hwnd) return true;
+    if (w.SetForegroundWindow(hwnd) != 0) return inFront(hwnd, restore_wait_ms);
+    if (fg == null or !answers(hwnd) or !answers(fg)) return false;
+    const holder = w.GetWindowThreadProcessId(fg, null);
+    const owner = w.GetWindowThreadProcessId(hwnd, null);
+    const me = w.GetCurrentThreadId();
+    if (holder == 0 or owner == 0) return false;
+    const joined = holder != me and w.AttachThreadInput(me, holder, 1) != 0;
+    const lent = owner != holder and w.AttachThreadInput(owner, holder, 1) != 0;
+    if (joined and (lent or owner == holder)) {
+        _ = w.BringWindowToTop(hwnd);
+        _ = w.SetActiveWindow(hwnd);
+    }
+    if (lent) _ = w.AttachThreadInput(owner, holder, 0);
+    if (joined) _ = w.AttachThreadInput(me, holder, 0);
+    return inFront(hwnd, restore_wait_ms);
+}
+
 // ---------------------------------------------------------------- snapshot roots
 
 /// Further roots read with a window's tree (US-023), at most this many.
@@ -414,6 +466,14 @@ fn hostedChild(hwnd: w.HWND, lparam: w.LPARAM) callconv(.winapi) w.BOOL {
     return 1;
 }
 
+/// Whether `handle` is the frame ApplicationFrameHost.exe shows a UWP
+/// application in. Its content is XAML alone: no Win32 control under it
+/// raises a WinEvent.
+pub fn uwpFrame(handle: u64) bool {
+    var cbuf: [64:0]u16 = undefined;
+    return std.mem.eql(u16, className(@ptrFromInt(handle), &cbuf), std.unicode.utf8ToUtf16LeStringLiteral("ApplicationFrameWindow"));
+}
+
 /// Process of the application a window shows: a UWP frame
 /// (`ApplicationFrameWindow`, owned by ApplicationFrameHost.exe, which hosts
 /// every UWP window) shows the process of its CoreWindow child.
@@ -422,8 +482,7 @@ pub fn appPid(handle: u64) ?u32 {
     if (w.IsWindow(hwnd) == 0) return null;
     var pid: u32 = 0;
     _ = w.GetWindowThreadProcessId(hwnd, &pid);
-    var cbuf: [64:0]u16 = undefined;
-    if (!std.mem.eql(u16, className(hwnd, &cbuf), std.unicode.utf8ToUtf16LeStringLiteral("ApplicationFrameWindow"))) return pid;
+    if (!uwpFrame(handle)) return pid;
     var h: Hosted = .{ .frame_pid = pid };
     _ = w.EnumChildWindows(hwnd, hostedChild, @bitCast(@intFromPtr(&h)));
     return if (h.pid != 0) h.pid else pid;

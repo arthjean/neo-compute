@@ -46,8 +46,10 @@ pub const Result = struct { name: []const u8, outcome: Outcome };
 /// (decision 0004). A budget `over` another scenario is that scenario's
 /// total p95 in the same run (its absolute budget when it did not run) plus
 /// `ms`, plus the scenario's witness when it has one: `marks` is budgeted
-/// on what it adds to the ui_tree of the same window.
-pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: bool = false, over: ?[]const u8 = null }{
+/// on what it adds to the ui_tree of the same window. A budget with a
+/// `stage` is on that stage's p95 instead of the total: the settling of the
+/// background mode, which the total leaves out.
+pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: bool = false, over: ?[]const u8 = null, stage: ?Stage = null }{
     .{ .scenario = "capture", .ms = 8 },
     // US-032: BitBlt of a 2560x1440 display into a DIB section.
     .{ .scenario = "capture-gdi", .ms = 40 },
@@ -80,6 +82,11 @@ pub const budgets = [_]struct { scenario: []const u8, ms: f64, provider_bound: b
     // US-031: ui_tree marks on a test window costs less than 8 ms beyond
     // a screenshot of the same display.
     .{ .scenario = "marks", .ms = 8, .over = "screenshot" },
+    // US-048: a background ui_act on the covered test window, settling
+    // apart; and the settling of an action without effect while the window
+    // over the target repaints itself.
+    .{ .scenario = "bg-act", .ms = 20 },
+    .{ .scenario = "bg-settle", .ms = 150, .stage = .settle },
 };
 
 /// Total p95 in ms of scenario `name` in `results`, else its absolute
@@ -327,6 +334,18 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
             .unsupported => continue,
         };
         for (budgets) |b| if (std.mem.eql(u8, b.scenario, r.name)) {
+            if (b.stage) |stage| {
+                const st = ok.stages[@backingInt(stage)] orelse {
+                    violations += 1;
+                    try log.print("bench: {s} has no {t} stage to hold against its {d} ms budget\n", .{ r.name, stage, b.ms });
+                    continue;
+                };
+                const stage_ms = us(st.p95_ns) / 1000.0;
+                if (stage_ms <= b.ms) continue;
+                violations += 1;
+                try log.print("bench: {s} {t} p95 {d:.2} ms exceeds the {d} ms budget\n", .{ r.name, stage, stage_ms, b.ms });
+                continue;
+            }
             const p95_ms = us(ok.total.p95_ns) / 1000.0;
             if (b.over) |other| {
                 const witness_ms = if (ok.witness_p95_ns) |wn| us(wn) / 1000.0 else 0;
@@ -439,7 +458,9 @@ pub fn writeBaseline(results: []const Result, w: *Io.Writer) !void {
 
 /// `settle` reports the settling time of an action apart (US-015): it has
 /// no budget and no reference, its other stages are the post-action delta.
-pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "capture-gdi", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps", "marks" };
+/// `bg-act` and `bg-settle` run the background mode behind a decoy window
+/// (US-048); they come last, after the scenarios that own the foreground.
+pub const scenario_names = [_][]const u8{ "transport", "diff", "capture", "capture-gdi", "snapshot", "screenshot", "window_list", "ui_tree", "settle", "window_set", "apps-catalog", "apps", "marks", "bg-act", "bg-settle" };
 
 /// Scenarios that open applications on the desktop: run on request only
 /// (`neo-compute bench chrome`), never by `all`.

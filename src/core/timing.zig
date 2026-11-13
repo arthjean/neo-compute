@@ -12,7 +12,7 @@ const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 /// blackout of US-017 and US-019, `catalog` the Start menu enumeration and
 /// name matching of US-028, `marks` the layout and drawing of element ids on
 /// an image (US-031).
-pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, diff, windows, policy, mask, settle, serialize, write, catalog, marks };
+pub const Stage = enum { parse, dispatch, capture, reduce, encode, accessibility, diff, windows, policy, mask, settle, serialize, write, catalog, marks, guard };
 pub const stage_count = @typeInfo(Stage).@"enum".field_names.len;
 
 pub fn now(io: Io) i96 {

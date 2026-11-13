@@ -263,14 +263,19 @@ pub const ui_find = struct {
         window: ?[]const u8 = null,
         /// US-030: wait for a match, searching again on screen changes.
         wait_ms: u32 = 0,
-        pub const field_info = .{ .wait_ms = .{ .description = "Wait up to this long for a match", .minimum = 0, .maximum = a11y.max_wait_ms } };
+        /// US-049: with `wait_ms`, wait until nothing matches any more.
+        gone: bool = false,
+        pub const field_info = .{
+            .wait_ms = .{ .description = "Wait up to this long for a match", .minimum = 0, .maximum = a11y.max_wait_ms },
+            .gone = .{ .description = "With wait_ms: wait until no match" },
+        };
     };
     pub fn run(ctx: anytype, args: Args) Result {
         const handle = switch (optionalHandle(ctx, args.window)) {
             .ok => |h| h,
             .err => |r| return r,
         };
-        return a11y.find(ctx, args.query, handle, args.wait_ms);
+        return a11y.find(ctx, args.query, handle, args.wait_ms, args.gone);
     }
 };
 

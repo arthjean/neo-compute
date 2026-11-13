@@ -20,6 +20,12 @@ pub const Observe = enum {
     pub const json_schema = "{\"enum\":[\"delta\",\"screenshot\",\"none\"]}";
 };
 
+/// Period of the tree re-read under the background mode's settling
+/// (US-048). US-047 measured that Calculator and Settings do not signal
+/// every tree change by a WinEvent (A18 refuted, decision 0013): 250 ms,
+/// where a validated A18 would have allowed 1 s.
+pub const reread_floor_ms = 250;
+
 pub const Session = struct {
     gpa: std.mem.Allocator,
     long_side: u32 = display.default_long_side,
@@ -48,6 +54,8 @@ pub const Session = struct {
     /// close before `force` (US-027); tests shorten them.
     launch_wait_ms: u32 = 10_000,
     close_wait_ms: u32 = 2000,
+    /// Period of the settling floor; tests shorten it.
+    reread_ms: u32 = reread_floor_ms,
 
     pub fn init(gpa: std.mem.Allocator, long_side: u32) Session {
         return .{ .gpa = gpa, .long_side = long_side };

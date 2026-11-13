@@ -21,6 +21,17 @@ const lifetime_ms = 30 * 60 * 1000;
 
 /// Posted by the probe or the selftest: take the foreground back.
 pub const msg_front = w.WM_APP + 1;
+/// Lets process `wParam` take the foreground once (US-050): what Windows
+/// grants an application the user just started or clicked. Only the
+/// foreground process can grant it, and the next input event withdraws it.
+pub const msg_allow = w.WM_APP + 2;
+/// Starts (`wParam` 1) or stops repainting the window in a new color every
+/// 15 ms (US-048): what a video over the agent's target does to the screen.
+pub const msg_animate = w.WM_APP + 3;
+
+const lifetime_timer = 1;
+const animation_timer = 2;
+var animation_step: u32 = 0;
 
 var field: w.HWND = null;
 
@@ -81,13 +92,17 @@ pub fn run(args: []const [:0]const u8) u8 {
     };
     if (w.RegisterClassExW(&wc) == 0) return 1;
     // Not topmost: it covers the target only by being the foreground window,
-    // as a user's application does.
-    const hwnd = w.CreateWindowExW(w.WS_EX_APPWINDOW, class, std.unicode.utf8ToUtf16LeStringLiteral(title), w.WS_POPUP | w.WS_VISIBLE, r[0], r[1], r[2], r[3], null, null, instance, null);
+    // as a user's application does. An ordinary framed window, not a popup:
+    // Chromium's occlusion tracker ignores popup windows (`hwnd_util.cc`,
+    // "Ignore popup windows since they're transient"), so a target under a
+    // popup decoy would never see itself covered as it is under a user's
+    // editor or browser. No system menu: nothing on it closes it by a click.
+    const hwnd = w.CreateWindowExW(w.WS_EX_APPWINDOW, class, std.unicode.utf8ToUtf16LeStringLiteral(title), w.WS_CAPTION | w.WS_THICKFRAME | w.WS_VISIBLE, r[0], r[1], r[2], r[3], null, null, instance, null);
     if (hwnd == null) return 1;
     field = w.CreateWindowExW(0, std.unicode.utf8ToUtf16LeStringLiteral("EDIT"), std.unicode.utf8ToUtf16LeStringLiteral("decoy: the user types here"), w.WS_CHILD | w.WS_VISIBLE | w.WS_BORDER, 20, 20, 320, 28, hwnd, null, instance, null);
     if (field == null) return 1;
     takeForeground(hwnd);
-    _ = w.SetTimer(hwnd, 1, lifetime_ms, null);
+    _ = w.SetTimer(hwnd, lifetime_timer, lifetime_ms, null);
     var msg: w.MSG = undefined;
     while (w.GetMessageW(&msg, null, 0, 0) > 0) {
         _ = w.TranslateMessage(&msg);
@@ -107,7 +122,35 @@ fn wndProc(hwnd: w.HWND, msg: u32, wparam: w.WPARAM, lparam: w.LPARAM) callconv(
             takeForeground(hwnd);
             return 0;
         },
+        msg_allow => return w.AllowSetForegroundWindow(@truncate(wparam)),
+        msg_animate => {
+            if (wparam != 0) {
+                _ = w.SetTimer(hwnd, animation_timer, 15, null);
+            } else {
+                _ = w.KillTimer(hwnd, animation_timer);
+                animation_step = 0;
+                _ = w.InvalidateRect(hwnd, null, 1);
+            }
+            return 0;
+        },
+        w.WM_ERASEBKGND => {
+            if (animation_step == 0) return w.DefWindowProcW(hwnd, msg, wparam, lparam);
+            // A new color over the whole window, the agent's target under
+            // it included.
+            var rc: w.RECT = undefined;
+            _ = w.GetClientRect(hwnd, &rc);
+            const fill = w.CreateSolidBrush(0x00403020 + (animation_step % 64) * 0x00020202);
+            defer _ = w.DeleteObject(fill);
+            _ = w.FillRect(@ptrFromInt(wparam), &rc, fill);
+            return 1;
+        },
         w.WM_TIMER => {
+            if (wparam == animation_timer) {
+                animation_step +%= 1;
+                if (animation_step == 0) animation_step = 1;
+                _ = w.InvalidateRect(hwnd, null, 1);
+                return 0;
+            }
             _ = w.DestroyWindow(hwnd);
             return 0;
         },

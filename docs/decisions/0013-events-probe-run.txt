@@ -1,0 +1,141 @@
+events-probe: decoy 0x3207b2 of another process in the foreground; WinEvents out of context, EVENT_MIN to EVENT_MAX, filtered by the target's process; 20 actions per target
+events-probe: window | at rest: 0.0 events/s over 3000 ms
+events-probe: window | Invoke #1 | call: ok | tree changed: no | events within 200 ms: 9, within 500 ms: 9, first after 1.0 ms | ids: 0x8 0x3 0x8000 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | Toggle #2 | call: ok | tree changed: yes | events within 200 ms: 6, within 500 ms: 6, first after 0.6 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | ValuePattern.SetValue #3 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 1.4 ms | ids: 0x800e | covered: yes
+events-probe: window | Expand #4 | call: ok | tree changed: not readable | events within 200 ms: 18, within 500 ms: 18, first after 1.2 ms | ids: 0x8004 0x800b 0x8002 0x8 | covered: yes
+events-probe: window | Invoke #5 | call: ok | tree changed: no | events within 200 ms: 5, within 500 ms: 5, first after 0.7 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | Toggle #6 | call: ok | tree changed: yes | events within 200 ms: 6, within 500 ms: 6, first after 1.0 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | ValuePattern.SetValue #7 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 1.0 ms | ids: 0x800e | covered: yes
+events-probe: window | Expand #8 | call: ok | tree changed: not readable | events within 200 ms: 16, within 500 ms: 16, first after 1.0 ms | ids: 0x800b 0x8002 0x8 | covered: yes
+events-probe: window | Invoke #9 | call: ok | tree changed: no | events within 200 ms: 5, within 500 ms: 5, first after 1.0 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | Toggle #10 | call: ok | tree changed: yes | events within 200 ms: 6, within 500 ms: 6, first after 0.8 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | ValuePattern.SetValue #11 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 0.8 ms | ids: 0x800e | covered: yes
+events-probe: window | Expand #12 | call: ok | tree changed: not readable | events within 200 ms: 16, within 500 ms: 16, first after 1.2 ms | ids: 0x800b 0x8002 0x8 | covered: yes
+events-probe: window | Invoke #13 | call: ok | tree changed: no | events within 200 ms: 5, within 500 ms: 5, first after 0.9 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | Toggle #14 | call: ok | tree changed: yes | events within 200 ms: 6, within 500 ms: 6, first after 1.0 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | ValuePattern.SetValue #15 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 0.8 ms | ids: 0x800e | covered: yes
+events-probe: window | Expand #16 | call: ok | tree changed: not readable | events within 200 ms: 16, within 500 ms: 16, first after 0.9 ms | ids: 0x800b 0x8002 0x8 | covered: yes
+events-probe: window | Invoke #17 | call: ok | tree changed: no | events within 200 ms: 5, within 500 ms: 5, first after 0.7 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | Toggle #18 | call: ok | tree changed: yes | events within 200 ms: 6, within 500 ms: 6, first after 0.7 ms | ids: 0x8 0x8005 0x800a 0x9 | covered: yes
+events-probe: window | ValuePattern.SetValue #19 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 1.0 ms | ids: 0x800e | covered: yes
+events-probe: window | Expand #20 | call: ok | tree changed: not readable | events within 200 ms: 16, within 500 ms: 16, first after 1.8 ms | ids: 0x800b 0x8002 0x8 | covered: yes
+events-probe: notepad | at rest: 0.0 events/s over 3000 ms
+events-probe: notepad | Invoke #1 | call: ok | tree changed: yes | events within 200 ms: 16, within 500 ms: 16, first after 3.5 ms | ids: 0x3 0x800b 0x8005 0x8000 0x800c 0x800f | covered: yes
+events-probe: notepad | Expand #2 | call: ok | tree changed: yes | events within 200 ms: 13, within 500 ms: 13, first after 3.5 ms | ids: 0x8000 0x800c 0x800f 0x800b 0x8002 0x8 | covered: yes
+events-probe: notepad | Invoke #3 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.1 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #4 | call: ok | tree changed: yes | events within 200 ms: 2, within 500 ms: 2, first after 4.8 ms | ids: 0x8002 0x800b | covered: yes
+events-probe: notepad | Invoke #5 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.6 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #6 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 4.3 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #7 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.9 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #8 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.8 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #9 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 2.9 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #10 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.9 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #11 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.2 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #12 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 4.0 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #13 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.0 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #14 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 4.1 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #15 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.3 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #16 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.9 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #17 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.1 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #18 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.7 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Invoke #19 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.0 ms | ids: 0x8002 | covered: yes
+events-probe: notepad | Expand #20 | call: ok | tree changed: yes | events within 200 ms: 1, within 500 ms: 1, first after 3.6 ms | ids: 0x8002 | covered: yes
+events-probe: calculator | at rest: 0.0 events/s over 3000 ms
+events-probe: calculator | Invoke #1 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #2 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #3 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #4 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #5 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #6 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #7 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #8 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #9 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #10 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #11 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #12 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #13 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #14 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #15 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #16 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #17 | call: ok | tree changed: no | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #18 | call: ok | tree changed: no | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #19 | call: ok | tree changed: no | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: calculator | Invoke #20 | call: ok | tree changed: no | events within 200 ms: 0, within 500 ms: 0, first after none | ids: | covered: yes
+events-probe: settings | at rest: 0.0 events/s over 3000 ms
+events-probe: settings | Invoke #1 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 292.3 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #2 | call: ok | tree changed: yes | events within 200 ms: 5, within 500 ms: 7, first after 6.6 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | Invoke #3 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 242.8 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #4 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.4 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | Invoke #5 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 241.2 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #6 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 8, first after 3.1 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 0x8001 | covered: yes
+events-probe: settings | Invoke #7 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 236.8 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #8 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.7 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | Invoke #9 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 236.4 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #10 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.3 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | Invoke #11 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 241.4 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #12 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.4 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | Invoke #13 | call: ok | tree changed: yes | events within 200 ms: 0, within 500 ms: 3, first after 244.1 ms | ids: 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #14 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.2 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | ValuePattern.SetValue #15 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.5 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | ValuePattern.SetValue #16 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.8 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | ValuePattern.SetValue #17 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 9, first after 3.7 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 0x8001 | covered: yes
+events-probe: settings | ValuePattern.SetValue #18 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.8 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | ValuePattern.SetValue #19 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.5 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: settings | ValuePattern.SetValue #20 | call: ok | tree changed: yes | events within 200 ms: 7, within 500 ms: 7, first after 3.9 ms | ids: 0x800e 0x120 0x11e 0x11f 0x8019 | covered: yes
+events-probe: explorer | at rest: 0.0 events/s over 3000 ms
+events-probe: explorer | Invoke #1 | call: ok | tree changed: yes | events within 200 ms: 170, within 500 ms: 170, first after 7.7 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #2 | call: ok | tree changed: yes | events within 200 ms: 34, within 500 ms: 34, first after 8.6 ms | ids: 0x8000 0x8004 0x800e 0x800b 0x8015 0x8005 | covered: yes
+events-probe: explorer | Invoke #3 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 6.1 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #4 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 9.5 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #5 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 4.8 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #6 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 10.0 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #7 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 5.9 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #8 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 11.0 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #9 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 5.0 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #10 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 8.6 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #11 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 6.3 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #12 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 9.0 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #13 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 4.6 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #14 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 9.3 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #15 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 5.0 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #16 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 8.6 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #17 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 168, first after 5.8 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #18 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 8.8 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: explorer | Invoke #19 | call: ok | tree changed: yes | events within 200 ms: 167, within 500 ms: 167, first after 4.9 ms | ids: 0x8004 0x8000 0x8002 0x8003 0x8001 0x800f | covered: yes
+events-probe: explorer | Expand #20 | call: ok | tree changed: yes | events within 200 ms: 8, within 500 ms: 8, first after 9.3 ms | ids: 0x8004 0x800e 0x800b 0x8015 0x800a | covered: yes
+events-probe: chrome | no web document in the tree after 8 s under the decoy
+events-probe: chrome | at rest: 0.0 events/s over 3000 ms
+events-probe: chrome | no element for Invoke, Toggle, SetValue or Expand in the target's tree: not measured
+events-probe: vscode | at rest: 0.0 events/s over 3000 ms
+events-probe: vscode | Expand #1 | call: ok | tree changed: yes | events within 200 ms: 6, within 500 ms: 6, first after 23.0 ms | ids: 0x8003 0x11e 0x8004 0x8002 0x6 | covered: yes
+events-probe: vscode | Invoke #2 | call: ok | tree changed: yes | events within 200 ms: 72, within 500 ms: 127, first after 145.8 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: vscode | Toggle #3 | call: ok | tree changed: yes | events within 200 ms: 76, within 500 ms: 101, first after 48.2 ms | ids: 0x800b 0x8003 0x11e 0x8002 0x8004 0x8009 | covered: yes
+events-probe: vscode | Expand #4 | call: ok | tree changed: yes | events within 200 ms: 3, within 500 ms: 3, first after 17.3 ms | ids: 0x11e 0x8004 0x6 | covered: yes
+events-probe: vscode | Invoke #5 | call: ok | tree changed: yes | events within 200 ms: 66, within 500 ms: 80, first after 39.4 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: vscode | Toggle #6 | call: ok | tree changed: yes | events within 200 ms: 40, within 500 ms: 40, first after 22.0 ms | ids: 0x800b 0x8003 0x11e 0x8002 0x8004 0x8009 | covered: yes
+events-probe: vscode | Expand #7 | call: ok | tree changed: yes | events within 200 ms: 3, within 500 ms: 3, first after 13.3 ms | ids: 0x11e 0x8004 0x6 | covered: yes
+events-probe: vscode | Invoke #8 | call: ok | tree changed: yes | events within 200 ms: 80, within 500 ms: 80, first after 33.2 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: vscode | Toggle #9 | call: ok | tree changed: yes | events within 200 ms: 34, within 500 ms: 34, first after 23.7 ms | ids: 0x800b 0x8003 0x11e 0x8002 0x8004 0x8009 | covered: yes
+events-probe: vscode | Expand #10 | call: ok | tree changed: yes | events within 200 ms: 3, within 500 ms: 3, first after 17.5 ms | ids: 0x11e 0x8004 0x6 | covered: yes
+events-probe: vscode | Invoke #11 | call: ok | tree changed: yes | events within 200 ms: 66, within 500 ms: 80, first after 34.9 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: vscode | Toggle #12 | call: ok | tree changed: yes | events within 200 ms: 34, within 500 ms: 34, first after 19.7 ms | ids: 0x800b 0x8003 0x11e 0x8002 0x8004 0x8009 | covered: yes
+events-probe: vscode | Expand #13 | call: ok | tree changed: yes | events within 200 ms: 3, within 500 ms: 3, first after 13.7 ms | ids: 0x11e 0x8004 0x6 | covered: yes
+events-probe: vscode | Invoke #14 | call: ok | tree changed: yes | events within 200 ms: 80, within 500 ms: 80, first after 39.1 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: vscode | Toggle #15 | call: ok | tree changed: yes | events within 200 ms: 34, within 500 ms: 34, first after 19.9 ms | ids: 0x800b 0x8003 0x11e 0x8002 0x8004 0x8009 | covered: yes
+events-probe: vscode | Expand #16 | call: ok | tree changed: yes | events within 200 ms: 3, within 500 ms: 3, first after 14.7 ms | ids: 0x11e 0x8004 0x6 | covered: yes
+events-probe: vscode | Invoke #17 | call: ok | tree changed: yes | events within 200 ms: 80, within 500 ms: 93, first after 33.4 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: vscode | Toggle #18 | call: ok | tree changed: yes | events within 200 ms: 34, within 500 ms: 34, first after 23.2 ms | ids: 0x800b 0x8003 0x11e 0x8002 0x8004 0x8009 | covered: yes
+events-probe: vscode | Expand #19 | call: ok | tree changed: yes | events within 200 ms: 3, within 500 ms: 3, first after 15.4 ms | ids: 0x11e 0x8004 0x6 | covered: yes
+events-probe: vscode | Invoke #20 | call: ok | tree changed: yes | events within 200 ms: 80, within 500 ms: 80, first after 31.6 ms | ids: 0x800b 0x8003 0x11e 0x11b 0x8004 0x8002 | covered: yes
+events-probe: summary | target | actions | tree changed | signaled within 200 ms | rate | first event median | first event p95 | events/s at rest
+events-probe: summary | window | 20 | 10 | 10 | 100 % | 0.8 ms | 1.4 ms | 0.0
+events-probe: summary | notepad | 20 | 20 | 20 | 100 % | 3.6 ms | 4.3 ms | 0.0
+events-probe: summary | calculator | 20 | 16 | 0 | 0 % | 0.0 ms | 0.0 ms | 0.0
+events-probe: A18 REFUTED for calculator: 0 % of its tree changes signaled (threshold 95 %)
+events-probe: summary | settings | 20 | 20 | 13 | 65 % | 3.8 ms | 244.1 ms | 0.0
+events-probe: A18 REFUTED for settings: 65 % of its tree changes signaled (threshold 95 %)
+events-probe: summary | explorer | 20 | 20 | 20 | 100 % | 7.7 ms | 10.0 ms | 0.0
+events-probe: summary | chrome | 0 | 0 | not measured: no action changed a readable tree (0 not readable) | 0.0
+events-probe: summary | vscode | 20 | 20 | 20 | 100 % | 23.0 ms | 48.2 ms | 0.0
+events-probe: verdict | A18 refuted on 2 of 6 target(s) measured: re-read floor of settling 250 ms

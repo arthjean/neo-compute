@@ -281,19 +281,27 @@ fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?
 
     var note: ?[]const u8 = null;
     var delta: ?[]const u8 = null;
+    // Whether this tree differs from the last one shown of the window; null
+    // when the two were not compared.
+    var changed: ?bool = null;
     if (since_last) {
         const last = ui.store.last_window;
         if (foreground and last != null and last.? != win) {
             note = "Fenêtre au premier plan changée : arbre complet de la nouvelle fenêtre.";
         } else if (ui.store.getLast(win)) |prev| {
             ctx.timings.start(ctx.io, .diff);
-            const d = uitree.diff(a, prev.nodes, shown);
+            const compared = uitree.diff(a, prev.nodes, shown);
             ctx.timings.stop(ctx.io, .diff);
-            delta = try deltaText(a, s, p, shown, try d, prev.roots);
+            const d = try compared;
+            changed = d.entries.len > 0 or d.removed.len > 0;
+            delta = try deltaText(a, s, p, shown, d, prev.roots);
         } else note = "Aucun arbre précédent de cette fenêtre : arbre complet.";
     }
     const full = try fullText(a, s, p, ids, els.len, note);
     try ui.store.putRoots(gpa, win, shown, handles);
+    // The backend learns which applications change without an event: a
+    // tree that changed while its change counter stood still.
+    if (ctx.session.background) ctx.backend.treeObserved(win, changed);
     if (delta) |d| if (d.len <= full.len) return Result.text(d);
     return Result.text(full);
 }
@@ -453,8 +461,10 @@ test "a GDI look waits 100 ms per 1920x1080 of window, a DXGI look 20 ms" {
 
 /// `ui_find`: elements of `window` matching `query`, at most 20 lines in the
 /// ui_tree format. Off-screen elements are included (scroll_into_view).
-/// With `wait_ms`, searches again until a match or the deadline (US-030).
-pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32) Result {
+/// With `wait_ms`, searches again until a match or the deadline (US-030);
+/// with `gone` as well, until nothing matches any more (US-049).
+pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32, gone: bool) Result {
+    if (gone and wait_ms == 0) return Result.err("gone demande wait_ms : la durée d'attente maximale.");
     const q = switch (uitree.Query.parse(ctx.arena, query) catch return Result.err(oom)) {
         .ok => |q| q,
         .err => |e| return Result.err(e),
@@ -463,7 +473,7 @@ pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32) Result {
         .ok => |h| h,
         .err => |e| return Result.err(e),
     };
-    if (wait_ms > 0) return findWaiting(ctx, q, query, window, wait_ms);
+    if (wait_ms > 0) return findWaiting(ctx, q, query, window, wait_ms, gone);
     const s = switch (snapshot(ctx, window, true, false)) {
         .ok => |s| s,
         .err => |e| return Result.err(e),
@@ -479,7 +489,13 @@ pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32) Result {
 /// like `wait`, and stops at its next checkpoint once cancelled. Each search
 /// gets a scratch arena reset before the next, so a 30 s wait holds one
 /// snapshot at a time.
-fn findWaiting(ctx: anytype, q: uitree.Query, query: []const u8, window: ?u64, wait_ms: u32) Result {
+///
+/// In background mode the target is covered and its pixels are the user's:
+/// a change event of the target's process calls for the next search instead
+/// (US-049), and no capture is taken. With `gone`, the wait ends when
+/// nothing matches any more, or when the window itself is closed.
+fn findWaiting(ctx: anytype, q: uitree.Query, query: []const u8, window: ?u64, wait_ms: u32, gone: bool) Result {
+    const by_events = ctx.session.background and window != null;
     const ms = std.time.ns_per_ms;
     const start = timing.now(ctx.io);
     const deadline = start + @as(i96, wait_ms) * ms;
@@ -500,27 +516,37 @@ fn findWaiting(ctx: anytype, q: uitree.Query, query: []const u8, window: ?u64, w
         const before = Watch.target(ctx, window);
         var area = before.area;
         var stamp = ctx.backend.topWindowStamp();
-        switch (Watch.look(ctx, before)) {
+        var events: ?u64 = if (by_events) ctx.backend.windowEvents(window.?) else null;
+        if (!by_events) switch (Watch.look(ctx, before)) {
             .failed => {},
             .frame => |f| {
                 poll_ms = lookMs(f);
                 _ = watch.changed(ctx, f, before.index, before.area);
             },
-        }
-        const searched = timing.now(ctx.io);
-        const s = switch (snapshot(ctx, window, true, false)) {
-            .ok => |s| s,
-            .err => |e| return Result.err(request_arena.dupe(u8, e) catch oom),
         };
+        const searched = timing.now(ctx.io);
+        const snap = snapshot(ctx, window, true, false);
         const elapsed: u64 = @intCast(@divTrunc(@max(timing.now(ctx.io) - start, 0), ms));
+        const none_left = "Plus aucun élément « {s} » après {d} ms";
+        const s = switch (snap) {
+            .ok => |s| s,
+            .err => |e| {
+                // The window went with its elements.
+                if (gone and window != null and ctx.backend.windowRef(window.?) == null) return Result.text(fmt(request_arena, none_left, .{ query, elapsed }));
+                return Result.err(request_arena.dupe(u8, e) catch oom);
+            },
+        };
         const found = findText(ctx, q, query, s, elapsed) catch return Result.err(oom);
-        if (found.matched > 0) return Result.text(request_arena.dupe(u8, found.result.blocks[0].text) catch oom);
+        if (gone) {
+            if (found.matched == 0) return Result.text(fmt(request_arena, none_left, .{ query, elapsed }));
+        } else if (found.matched > 0) return Result.text(request_arena.dupe(u8, found.result.blocks[0].text) catch oom);
         // Watch until the next search is due.
         var pending = false;
         while (true) {
             const t = timing.now(ctx.io);
             if (t >= deadline) {
                 if (pending) break;
+                if (gone) return Result.err(fmt(request_arena, "Élément « {s} » toujours présent après {d} ms", .{ query, wait_ms }));
                 return Result.err(fmt(request_arena, "Aucun élément « {s} » après {d} ms : vérifie la requête ou augmente wait_ms", .{ query, wait_ms }));
             }
             if (t - searched >= research_max_ms * ms or (pending and t - searched >= research_min_ms * ms)) break;
@@ -531,7 +557,13 @@ fn findWaiting(ctx: anytype, q: uitree.Query, query: []const u8, window: ?u64, w
             if (!sameRect(area, at.area) or now_stamp != stamp) pending = true;
             area = at.area;
             stamp = now_stamp;
-            switch (Watch.look(ctx, at)) {
+            if (by_events) {
+                // A refused hook leaves the window and the one-second
+                // searches.
+                const now_events = ctx.backend.windowEvents(window.?);
+                if (now_events != null and events != null and now_events.? != events.?) pending = true;
+                events = now_events;
+            } else switch (Watch.look(ctx, at)) {
                 // Without a capture (secure desktop), only the window and
                 // the one-second searches remain.
                 .failed => {},
@@ -739,6 +771,81 @@ pub fn settle(ctx: anytype, timeout_ms: u32, window: ?u64) Settled {
     }
 }
 
+/// What the result says when the event hook was refused and the tree
+/// re-read alone settled (US-048).
+pub const reread_note = "stabilisation par relecture";
+
+/// Hash of what the tree of `window` shows, with the menus and popups read
+/// along with it; 0 when it cannot be read. Read into `scratch`, which the
+/// next read reuses.
+fn treeStamp(ctx: anytype, scratch: *std.heap.ArenaAllocator, window: u64) u64 {
+    // A `deny` application is never read (US-017).
+    if (ctx.backend.windowRef(window)) |ref| if (policy.hidden(ctx, ref) != null) return 0;
+    const request_arena = ctx.arena;
+    _ = scratch.reset(.retain_capacity);
+    ctx.arena = scratch.allocator();
+    defer ctx.arena = request_arena;
+    const snap = switch (ctx.backend.uiSnapshot(ctx.arena, window, .{ .extra_roots = extraRoots(ctx, window) })) {
+        .ok => |snap| snap,
+        .err => return 0,
+    };
+    var h: std.hash.Wyhash = .init(snap.elements.len);
+    for (snap.elements) |e| {
+        std.hash.autoHash(&h, e.key);
+        std.hash.autoHash(&h, e.depth);
+        std.hash.autoHash(&h, e.role);
+        std.hash.autoHash(&h, e.states);
+        std.hash.autoHash(&h, e.rect);
+        std.hash.autoHash(&h, e.name.len);
+        h.update(e.name);
+        if (e.value) |v| {
+            std.hash.autoHash(&h, v.len);
+            h.update(v);
+        }
+    }
+    return h.final();
+}
+
+/// Settling of the background mode (US-048): the target is covered by what
+/// the user works on, so the screen says nothing about it. It is settled
+/// once its process raised no change event for 50 ms. A floor covers what
+/// events miss (US-047: some applications raise none): the tree is read
+/// again every `reread_ms` and two identical reads are settled, whatever
+/// the events say. Without the hook, the floor alone settles, and `reread`
+/// says so. No capture is taken.
+fn settleEvents(ctx: anytype, timeout_ms: u32, window: u64) struct { settled: Settled, reread: bool } {
+    ctx.timings.start(ctx.io, .settle);
+    defer ctx.timings.stop(ctx.io, .settle);
+    const ms = std.time.ns_per_ms;
+    const start = timing.now(ctx.io);
+    const period = @as(i96, ctx.session.reread_ms) * ms;
+    var scratch: std.heap.ArenaAllocator = .init(ctx.arena);
+    var stamp = ctx.backend.windowEvents(window);
+    const hooked = stamp != null;
+    var last_event = start;
+    var last_read: ?i96 = null;
+    var last_tree: u64 = 0;
+    while (true) {
+        const t = timing.now(ctx.io);
+        const since: u64 = @intCast(@divTrunc(t - start, ms));
+        if (hooked) {
+            const now_stamp = ctx.backend.windowEvents(window);
+            if (now_stamp != null and now_stamp.? != stamp.?) {
+                stamp = now_stamp;
+                last_event = t;
+            } else if (t - last_event >= quiet_ms * ms) return .{ .settled = .{ .settled = since }, .reread = false };
+        }
+        if (if (last_read) |r| t - r >= period else !hooked or t - start >= period) {
+            const tree_now = treeStamp(ctx, &scratch, window);
+            if (last_read != null and tree_now == last_tree) return .{ .settled = .{ .settled = since }, .reread = !hooked };
+            last_tree = tree_now;
+            last_read = t;
+        }
+        if (t - start >= @as(i96, timeout_ms) * ms) return .{ .settled = .timeout, .reread = !hooked };
+        if (!ctx.sleep(10 * ms)) return .{ .settled = .cancelled, .reread = !hooked };
+    }
+}
+
 /// Completes the result of an action tool with the requested observation
 /// (`observe`, default delta, screenshot in vision mode) once the screen has
 /// settled. A failed action, or `observe: "none"`, returns as is.
@@ -760,9 +867,19 @@ pub fn observeWith(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms
         if (ctx.backend.windowRef(t) == null) return r;
         break :blk t;
     } else named;
-    const status = switch (settle(ctx, settle_timeout_ms orelse default_settle_ms, window)) {
-        .settled => |n| fmt(ctx.arena, "settled in {d} ms", .{n}),
-        .timeout => "settle timeout",
+    const timeout = settle_timeout_ms orelse default_settle_ms;
+    var reread = false;
+    // The pixels around a covered target are the user's: background mode
+    // settles on the target's own change events.
+    const settled = if (ctx.session.background and window != null) blk: {
+        const s = settleEvents(ctx, timeout, window.?);
+        reread = s.reread;
+        break :blk s.settled;
+    } else settle(ctx, timeout, window);
+    const note = if (reread) " (" ++ reread_note ++ ")" else "";
+    const status = switch (settled) {
+        .settled => |n| fmt(ctx.arena, "settled in {d} ms{s}", .{ n, note }),
+        .timeout => fmt(ctx.arena, "settle timeout{s}", .{note}),
         .unavailable => |msg| fmt(ctx.arena, "settle indisponible ({s})", .{msg}),
         .cancelled => return r,
     };

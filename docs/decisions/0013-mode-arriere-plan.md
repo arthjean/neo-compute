@@ -1,6 +1,6 @@
 # 0013 : contrat du mode arrière-plan
 
-- Statut : décidé par Arthur le 2026-11-12
+- Statut : décidé par Arthur le 2026-11-12, amendé le 2026-11-13 (dernière section)
 - Date : 2026-11-12
 - Story : US-039 (décisions) et US-040 (sonde des primitives), PRD `tasks/prd-background-mode.md`
 
@@ -31,7 +31,7 @@ Q14 à Q16 ne relèvent pas de US-039 : elles se posent après US-063 (Q14, Q16)
 - **Décision 0011** est amendée pour le seul mode arrière-plan :
   - point 3 (cinq fenêtres par écran) : en mode arrière-plan, une seule fenêtre, la boîte du libellé, sur l'écran principal ; les quatre bandes ne sont pas affichées ;
   - points 1, 2, 4 et 5 (exclusion par `WDA_EXCLUDEFROMCAPTURE` et absence d'indicateur si elle est refusée, indicateur statique, échos retirés des dirty rects, construction en arrière-plan) : inchangés dans les trois modes.
-  - Texte du libellé en mode arrière-plan : « neo-compute agit en arrière-plan : <raccourci> met en pause » (US-046).
+  - Texte du libellé en mode arrière-plan : « neo-compute is acting in the background: <raccourci> pauses » (US-046 ; en français jusqu'à l'amendement du 2026-11-13).
 
 ## Sonde US-040
 
@@ -91,3 +91,142 @@ Avec `AutoSetFocus` coupé, l'effet est lu sur la cible 5/5 pour chaque pattern,
 4. **VS Code** : Expand de la barre de menus sans effet, Toggle sans effet lisible.
 5. **Liste déroulante Win32 ouverte** : tant qu'elle l'est, la lecture de l'arbre de la fenêtre de test échoue (`FindAllBuildCache`, `E_FAIL`). La sonde et le selftest la referment ; le cas n'est pas mesuré sur une application tierce.
 6. **`SW_HIDE` bref** : pendant la restauration décrite plus haut, la fenêtre disparaît un instant de la barre des tâches. Si le serveur était tué entre les deux appels, elle resterait masquée.
+
+## Sonde US-047
+
+Mesures du 2026-11-12 sur la machine de référence, par `neo-compute events-probe` (`src/backend/windows/events_probe.zig`). Sortie complète : `0013-events-probe-run.txt`.
+
+**À lire d'abord.** A18 est infirmée : la Calculatrice ne signale aucun de ses changements d'arbre par WinEvent, et les Paramètres en signalent 65 % dans les 200 ms. Le plancher de relecture de la stabilisation (US-048) vaut donc 250 ms.
+
+### Méthode
+
+- Même montage que la sonde US-040 : leurre d'un second processus au premier plan, cible non active et recouverte, `AutoSetFocus` coupé.
+- Écoute par `SetWinEventHook(EVENT_MIN, EVENT_MAX)` hors contexte (`WINEVENT_OUTOFCONTEXT` : Windows poste les événements au thread qui écoute, sans injecter de code dans l'application), filtrée par processus. Une fenêtre UWP est écoutée sur deux processus : son cadre (`ApplicationFrameHost.exe`) et l'application qu'il héberge. Les événements du curseur (`OBJID_CURSOR`) et ceux des fenêtres de l'indicateur sont écartés.
+- Par cible : 3 s au repos, puis 20 actions tirées de ses éléments (Invoke, Toggle, `ValuePattern.SetValue`, Expand), chacune annulée ensuite. L'arbre est haché avant l'action et 500 ms après ; une action compte quand ce hachage change. Elle est « signalée » si au moins un événement arrive dans les 200 ms.
+
+### Résultats
+
+| Cible | Actions | Arbre changé | Signalées < 200 ms | Taux | Premier événement, médiane | p95 | Événements/s au repos |
+|---|---|---|---|---|---|---|---|
+| Fenêtre de test | 20 | 10 | 10 | 100 % | 0,8 ms | 1,4 ms | 0,0 |
+| Bloc-notes | 20 | 20 | 20 | 100 % | 3,6 ms | 4,3 ms | 0,0 |
+| Calculatrice | 20 | 16 | 0 | 0 % | aucun | aucun | 0,0 |
+| Paramètres | 20 | 20 | 13 | 65 % | 3,8 ms | 244,1 ms | 0,0 |
+| Explorateur | 20 | 20 | 20 | 100 % | 7,7 ms | 10,0 ms | 0,0 |
+| Chrome | 0 | non mesuré | | | | | 0,0 |
+| VS Code | 20 | 20 | 20 | 100 % | 23,0 ms | 48,2 ms | 0,0 |
+
+- **Calculatrice** : 16 Invoke changent l'arbre, aucun événement en 500 ms. Une application XAML ne lève ses événements d'accessibilité que pour un client UIA abonné. Sans abonné, rien ne passe par les WinEvents ; avec un abonné, UI Automation en traduit une partie en WinEvents (amendement du 2026-11-13 : 90 % des changements de la Calculatrice).
+- **Paramètres** : `SetValue` est signalé en 3 à 7 ms (13 sur 13) ; Invoke l'est seulement après 236 à 292 ms (0 sur 7 dans les 200 ms).
+- **Chrome** : même limite que pour la sonde US-040. Recouvert par le leurre, il n'expose aucun document web après 8 s, donc aucun élément à actionner. Il ne compte pas dans le verdict (US-058).
+- **Fenêtre de test** : Invoke ne change pas l'arbre (10 actions hors décompte) ; Toggle et `SetValue` sont signalés en moins de 2 ms.
+- Au repos, aucune cible n'émet d'événement : le thread d'écoute ne coûte rien tant que la cible est immobile.
+
+### Verdict
+
+- **A18 : infirmée** pour la Calculatrice (0 %) et les Paramètres (65 %), validée pour la fenêtre de test, le Bloc-notes, l'Explorateur et VS Code (100 %). Seuil : 95 %.
+- **Plancher de relecture : 250 ms** (`reread_floor_ms` dans `src/core/session.zig`).
+- Conséquence pour US-048 : sur une application XAML, le silence des WinEvents ne prouve pas que la cible est stable. La règle du PRD (stable après 50 ms sans événement) est appliquée telle quelle ; le plancher ne joue que si l'attente dure. Point laissé à Arthur dans le rapport de EP-012.
+
+## Mesures de EP-012
+
+Mesures du 2026-11-12 sur la machine de référence (Windows 11, build 26300), par `neo-compute selftest --background` et `zig build bench`.
+
+### Stabilisation (US-048)
+
+- Une action sans effet se stabilise en 62,3 ms p95 sous un leurre repeint toutes les 15 ms (contrôle `bg-settle-covered`, 30 actions, budget 150 ms) ; 55,7 ms p95 au bench (`bg-settle`, référence enregistrée : 64,1 ms, la pire de cinq séries). L'étape `capture` vaut 0.
+- Un contrôle Win32 `STATIC` dont le texte change ne lève aucun WinEvent : l'arbre change, la stabilisation ne le voit pas. Même cause que pour la Calculatrice (sonde US-047). La cible « qui change sans cesse » du selftest signale donc elle-même ses changements (`NotifyWinEvent`), comme une application qui informe ses clients d'accessibilité.
+- Règle appliquée : stable après 50 ms sans événement. Le plancher (relecture de l'arbre toutes les 250 ms, stable après deux lectures identiques) joue quand les événements ne cessent pas, ou quand Windows refuse le hook ; le résultat porte alors « stabilisation par relecture » (276 ms mesurés).
+- Le thread d'écoute consomme 0,001 % d'un cœur au repos.
+
+### Garde de premier plan (US-050)
+
+Montage : une application d'un autre processus (`selftest-popup`) ouvre, sur Invoke, un dialogue qui appelle `SetForegroundWindow`. Le leurre, au premier plan, lui en donne le droit avant chaque action (`AllowSetForegroundWindow`). Le dialogue passe devant le leurre 20 fois sur 20.
+
+| Voie de restauration, sans `SendInput` | Résultat sur 20 |
+|---|---|
+| `SetForegroundWindow` seul | refusé 20 fois |
+| `AttachThreadInput` au thread du premier plan, puis `SetForegroundWindow` | attache réussie, appel refusé 20 fois |
+| `SetFocus` UI Automation sur la fenêtre de premier niveau | appel réussi, premier plan inchangé 20 fois |
+| `SetFocus` UI Automation sur le champ qui avait le focus | le premier plan revient au processus du leurre, mais Windows nomme le champ, pas la fenêtre, comme fenêtre de premier plan |
+| Le thread du serveur et celui de la fenêtre de l'utilisateur rejoignent la file d'entrée du premier plan, puis `BringWindowToTop` et `SetActiveWindow` | premier plan et focus rendus 20 fois, 7,5 ms au plus |
+
+La dernière voie est retenue (`restoreForeground` dans `window.zig`). La question du PRD (« `SetForegroundWindow` seul, puis `AttachThreadInput`, sans l'étape `SendInput` ? ») reçoit donc la réponse : non, aucune des deux ne suffit sur ce Windows. Les messages d'activation sont envoyés aux deux fenêtres ; aucune n'est touchée si son thread ne répond pas en 200 ms, et la restauration est alors dite refusée.
+
+Le contrôle `bg-guard-restore` du selftest répète la voie retenue 100 fois, comme le demande le PRD (fiabilité : au moins 95 % de 100) : premier plan rendu 100 fois sur 100, 8,8 ms au plus (revue de EP-012).
+
+Coût de la garde quand le premier plan est intact : 1,2 µs p95 sur 1 000 actions (budget 100 µs).
+
+Choix d'implémentation à confirmer par Arthur (points 1 et 2 tranchés par l'amendement du 2026-11-13) :
+
+1. **Cinquième issue d'audit, `other`.** Le PRD en nomme quatre (`intact`, `restored`, `refused`, `user`). Un premier plan qui change sans entrée de l'utilisateur et sans que le processus cible le prenne (une autre application passe devant, ou l'utilisateur était déjà dans une fenêtre du processus cible) n'est aucune des quatre : il est noté `other`, sans ligne dans le résultat et sans restauration. Il en va de même quand les hooks sont absents : rien ne distingue alors le geste de l'utilisateur de celui de l'application.
+2. **Entrée physique.** Compte comme entrée de l'utilisateur toute frappe et tout appui de bouton de souris vus par les hooks pendant l'action, stabilisation comprise. Un mouvement de souris seul ne compte pas. Conséquence : si l'utilisateur tape pendant que la cible prend le premier plan, rien n'est restauré, et le résultat porte la ligne « entrée de l'utilisateur ».
+3. **Champ `mode` de l'audit** : écrit sur chaque ligne, dans les trois modes.
+
+### Pause et indicateur (US-045, US-046)
+
+- Le raccourci met le serveur en pause en 1,0 ms et l'action en cours rend la main 25 ms après la frappe. Échap et 500 px de souris pendant une action ne déclenchent rien, et Échap n'est pas consommée.
+- Un raccourci tenu ne bascule qu'une fois : le clavier répète la touche tant qu'elle est enfoncée, et chaque répétition levait puis remettait la pause. Les répétitions sont consommées sans effet jusqu'au relâchement (défaut corrigé à la revue de EP-012, contrôle `bg-kill-chord` avec trois répétitions).
+- Le libellé du mode est en français (« neo-compute agit en arrière-plan : Ctrl+Alt+Shift+R met en pause »), comme l'écrit le PRD (US-046) ; le libellé de pause existant reste en anglais. Harmonisé en anglais par l'amendement du 2026-11-13.
+
+## Amendement du 2026-11-13
+
+Cinq points laissés à Arthur à la revue de EP-012, vérifiés à la source (`docs/research/2026-11-12-cohabitation-arriere-plan.md`), puis tranchés. Réponse d'Arthur (2026-11-13) aux cinq recommandations : « Ok vas-y ». Mesures du 2026-11-13 sur la machine de référence.
+
+### 1. Stabilisation des applications XAML : événements UI Automation
+
+**Décision.** Le serveur s'abonne aux événements UI Automation de la fenêtre cible quand elle est un cadre UWP (`ApplicationFrameWindow`), et additionne leur compteur à celui des WinEvents. La contrainte du PRD « aucun objet COM côté client » est levée pour les seuls gestionnaires d'événements de `src/backend/windows/uia_events.zig`.
+
+**Les gestionnaires.** Quatre objets COM (structure, propriétés, événements simples, notifications), statiques, jamais libérés (compteur de références constant), construits sur les vtables générées. Un gestionnaire incrémente un compteur et rend la main ; il ne fait aucun appel UIA et ne lit aucun texte porté par l'événement. L'ajout et le retrait passent par le thread UIA du serveur ; une fenêtre qui ne répond pas n'est ni abonnée ni désabonnée tant qu'elle ne répond pas.
+
+**Sonde.** `neo-compute events-probe`, étendue : même montage que US-047 (leurre au premier plan, cible recouverte), deux tours par cible, chacun avec 5 actions sans abonnement puis les mêmes actions et 5 autres avec abonnement. Sortie complète : `0013-uia-events-probe-run.txt`.
+
+| Cible | Arbre changé | Signalé par WinEvents < 200 ms | Signalé par UIA < 200 ms | L'un ou l'autre | Premier événement UIA, médiane / p95 | Ajout, retrait | Cycles de la cible par action, sans / avec (mêmes actions) |
+|---|---|---|---|---|---|---|---|
+| Fenêtre de test (Win32) | 10 | 100 % | 50 % | 100 % | 3,4 / 3,9 ms | 9,1 ms, 1,2 ms | 12,9 / 34,2 M (cible dans le processus de la sonde : compte le client) |
+| Bloc-notes | 20 | 100 % | 100 % | 100 % | 19,8 / 25,9 ms | 8,4 ms, 6,5 ms | 312 / 409 M |
+| Calculatrice | 10 | 90 % | 100 % | 100 % | 6,5 / 7,4 ms | 7,9 ms, 1,9 ms | 13,1 / 19,1 M |
+| Paramètres | 20 | 100 % | 100 % | 100 % | 9,7 / 10,5 ms | 7,6 ms, 2,3 ms | 444 / 96 M (premier bloc à froid) |
+| Explorateur | 20 | 100 % | 60 % | 100 % | 41,1 / 209,3 ms | 10,6 ms, 2,1 ms | 142 / 660 M |
+| Chrome | non mesuré | | | | | | |
+| VS Code | 20 | 100 % | 100 % | 100 % | 24,3 / 49,8 ms | 7,9 ms, 2,5 ms | 176 / 261 M |
+
+- Sans abonnement (sonde US-047), les WinEvents signalaient 0 % des changements de la Calculatrice et 65 % de ceux des Paramètres. Avec l'abonnement, les événements UIA en signalent 100 %, premier événement en moins de 11 ms. Les taux WinEvents de ce tableau pour ces deux cibles sont mesurés abonnement actif : c'est l'abonnement qui fait lever les événements que UI Automation traduit ensuite en WinEvents.
+- Au repos, aucune cible n'émet d'événement UIA.
+- Rappel Zig avec un `VARIANT` passé par valeur : 596 événements de propriété reçus, 0 avec un type inattendu.
+- **Coût pour la cible.** L'abonnement fait travailler la cible à chacun de ses événements : 4,6 fois les cycles processeur sur l'Explorateur, 1,3 à 1,5 fois sur le Bloc-notes, VS Code et la Calculatrice, pour les mêmes actions. Sur les cibles où les WinEvents signalent déjà tout, ce coût n'achète rien.
+
+**Écart avec la recommandation approuvée, puis abonnement appris.** La recommandation disait : si la sonde passe, les événements UIA deviennent la source première partout et les WinEvents le complément. La sonde passe sur le signal mais montre ce coût. L'abonnement n'est donc pas posé partout. Il l'est d'emblée sur un cadre UWP, les deux seules cibles où les WinEvents échouent, et ailleurs seulement quand l'application le demande par ce qu'elle fait : le serveur s'abonne à une application dont l'arbre a changé deux fois de suite sans qu'aucun événement ne bouge son compteur, et il retire l'abonnement pour de bon si deux changements de plus restent sans événement (`treeObserved` dans `src/backend/windows.zig`). Le cœur signale au backend chaque arbre montré en mode arrière-plan, avec « changé ou non ». La règle couvre ainsi les îlots XAML et WinUI 3 sans liste de classes de fenêtres, et ne coûte rien aux applications que leurs WinEvents décrivent déjà. Le plancher de relecture (250 ms) est inchangé. Réponse d'Arthur (2026-11-13), après relecture de l'approche d'agent-desktop : « Ok vas-y ».
+
+**Retrait des gestionnaires.** agent-desktop a mesuré un retrait de 86 s après masquage puis réaffichage de la fenêtre, contre 64 ms sans (`probes/windows/FINDINGS.md`, A8-3, Windows Server 2019, sept gestionnaires dont focus et ouverture de fenêtre). Le retrait de neo-compute passe par le thread UIA du serveur : un retrait lent bloquerait `ui_tree` et `ui_act`. Mesure par `neo-compute events-probe churn` (sortie : `0013-uia-churn-probe-run.txt`), sur la fenêtre de test, une application Win32 d'un autre processus et la Calculatrice : fenêtre laissée 1 s, masquée et réaffichée 10 fois, minimisée et restaurée 10 fois, dialogue ouvert et fermé 10 fois, fenêtre fermée pendant l'abonnement. Retrait le plus lent : 5,4 ms ; ajout : 4,7 à 21,9 ms ; l'arbre se lit normalement pendant l'abonnement. Les 86 s ne se reproduisent pas avec des gestionnaires limités au sous-arbre de la fenêtre.
+
+**Limite de l'abonnement appris.** Aucune application WinUI 3 ou à îlot XAML n'a été mesurée : le contrôle `bg-events-learn` prouve la règle sur un libellé Win32 qui change sans rien signaler (abonnement après 2 changements, retrait au cinquième, les gestionnaires ne signalant rien).
+
+**Selftest.** `bg-settle-xaml` : 10 Invoke sur un chiffre de la Calculatrice recouverte, chacun lève des événements UIA (37 en tout) et se stabilise dessus, session inchangée.
+
+**Rust Switch Gate, condition 3.** Aucun défaut de la couche COM Zig : les gestionnaires ont fonctionné au premier essai. Le compteur de la décision 0001 ne change pas.
+
+### 2. Issues d'audit de la garde
+
+`other` est remplacée par trois issues : `third_party` (une autre application passe devant d'elle-même), `same_app` (l'utilisateur était déjà dans une fenêtre du processus cible), `unknown` (hooks d'entrée absents : rien ne distingue le geste de l'utilisateur de celui de l'application). Aucune n'est restaurée ni ne porte de ligne dans le résultat.
+
+### 3. Garde de premier plan
+
+- **Geste.** Seul un geste capable de changer la fenêtre de premier plan arrête la restauration : un clic hors de la fenêtre de l'utilisateur, ou une touche avec Alt ou Win (Alt+Tab, Alt+Échap et Ctrl+Échap compris), pendant l'action ou dans les 500 ms qui la précèdent. Une frappe ordinaire ne compte plus : elle ne change aucune fenêtre de premier plan, et c'est elle qui tomberait dans le dialogue de la cible.
+- **Restauration sur l'événement.** Le thread des WinEvents écoute `EVENT_SYSTEM_FOREGROUND` et rend le premier plan pendant que l'action attend encore. Le regard en fin d'action reste le filet. Trois restaurations au plus par action ; au-delà, la cible est laissée devant et le résultat le dit.
+- **Constat.** L'événement arrive avant que `GetForegroundWindow` nomme la nouvelle fenêtre (213 événements sur 213 dans la trace du selftest). Restaurer à cet instant ne fait rien. Le thread retient la fenêtre, et un minuteur de 10 ms agit dès qu'elle est réellement devant (abandon après 250 ms).
+- **Mesures** (`bg-guard-restore`, 100 actions pendant que l'utilisateur tape) : premier plan rendu 100 fois sur 100, 100 fois depuis l'événement, avant la fin de l'action. Le dialogue reste devant 39,7 ms au plus, de son événement à la fin de la restauration (budget 200 ms) ; la restauration seule prend 18,1 ms au plus. `bg-guard-user` : après Alt+Tab ou un clic sur la barre des tâches, le dialogue est laissé devant 4 fois sur 4 ; après un clic dans la fenêtre de l'utilisateur, le premier plan est rendu 2 fois sur 2. Coût quand le premier plan est intact : 2,3 µs p95 sur 1 000 actions.
+- **Non adopté.** Le bouclier de Cua (`EnableWindow(FALSE)` sur la fenêtre de l'utilisateur pendant l'appel UIA) : il modifie la fenêtre de l'utilisateur.
+- **Garde prolongée.** Un Invoke asynchrone appelé avec `observe: "none"` rend la main en 1 ms, et son dialogue passe devant quand aucun outil ne tourne plus. La garde reste donc armée 2 s après la fin de l'action (`linger_ms` dans `src/core/guard.zig`), avec la même règle d'attribution et le même plafond. Le résultat de l'action étant déjà parti, l'appel suivant, quel qu'il soit, porte la ligne « Premier plan pris par <exe> après l'action précédente, rendu à <exe> » (ou « : Windows a refusé la restauration »), et sa ligne d'audit le champ `guard_late`. 2 s plutôt qu'une garde permanente : l'attribution à l'action s'affaiblit avec le temps. Réponse d'Arthur (2026-11-13) : « Ok vas-y ». Contrôle `bg-guard-late` : 5 dialogues tardifs sur 5 rendus, dialogue devant 41,0 ms au plus, ligne présente dans l'appel suivant.
+- **agent-desktop** n'a ni détection ni restauration du premier plan, et n'écoute aucun événement sur Windows (note `docs/research/2026-11-13-agent-desktop-cohabitation.md`).
+
+### 4. Libellé du mode
+
+« neo-compute is acting in the background: Ctrl+Alt+Shift+R pauses », en anglais comme le libellé de pause. PRD (US-046) et point « Décision 0011 » ci-dessus amendés.
+
+### 5. Chrome et Electron
+
+- Chromium ignore une fenêtre `WS_POPUP` dans son calcul d'occlusion (`ui/gfx/win/hwnd_util.cc`). Le leurre des selftests et des sondes était `WS_POPUP` : l'absence de document web sous lui (sondes US-040 et US-047) ne venait donc pas de l'occlusion. Le leurre est désormais une fenêtre à cadre (`WS_CAPTION | WS_THICKFRAME`).
+- Sous le leurre à cadre, Chrome n'expose toujours aucun document web après 8 s. La cause reste à établir par US-058 : occlusion réelle cette fois, ou accessibilité web qui ne s'active qu'à une requête UIA visant un nœud web.
+- Mesures d'agent-desktop à reprendre dans US-058 (`probes/windows/FINDINGS.md`, A1-5 et A1-6, sur Obsidian) : au premier contact l'arbre a 13 nœuds contre 172 une fois construit, sans drapeau ; recouverte par d'autres fenêtres, l'application reste à son compte du premier contact, et minimiser ces fenêtres la débloque. US-058 doit donc séparer « arbre pas encore construit » de « arbre figé par recouvrement ».
+- PRD amendé : A19 et le risque 2 séparent Chromium d'Electron (VS Code désactive `CalculateNativeWinOcclusion`) ; US-058 mesure si une action UIA force la mise à jour de l'arbre et la plus petite bande visible suffisante ; US-059 calcule l'occlusion avec les règles de Chromium. `app_launch` n'ajoute aucun drapeau par défaut.

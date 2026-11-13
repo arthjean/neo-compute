@@ -3,8 +3,19 @@
 //! and the pause that only a physical gesture lifts (FR-12). The backend's
 //! hook thread calls `trip` and `rearm`; no MCP tool can reach `rearm`.
 //! An observer (the control indicator, US-034) hears of every change.
+//!
+//! In background mode (decision 0013, point 2) the user's mouse and Escape
+//! are theirs: the hook thread calls neither `trip` nor `rearm`, and the
+//! re-arm shortcut becomes `toggle`, which pauses a running server and
+//! re-arms a paused one (US-045). FR-12 holds: only that physical shortcut
+//! lifts a pause.
 
 const std = @import("std");
+const keys = @import("keys.zig");
+
+/// The shortcut that lifts a pause, and in background mode sets it too,
+/// unless `--rearm-key` names another.
+pub const default_rearm: keys.Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
 
 pub const paused_message = "En pause par l'utilisateur : attends qu'Arthur réarme";
 
@@ -28,6 +39,11 @@ pub const Control = struct {
     /// mouse displacement count.
     epoch: std.atomic.Value(u32) = .init(0),
     observer: std.atomic.Value(?*const Observer) = .init(null),
+    /// `--mode background`, set before the hook and indicator threads
+    /// start: they read it to choose their behavior.
+    background: std.atomic.Value(bool) = .init(false),
+
+    pub const Toggled = enum { paused, rearmed };
 
     /// Installs or removes (null) the observer. Remove it before freeing it.
     pub fn observe(self: *Control, observer: ?*const Observer) void {
@@ -54,6 +70,21 @@ pub const Control = struct {
         const was = self.paused.swap(false, .acq_rel);
         if (was) self.changed();
         return was;
+    }
+
+    /// Background mode: the physical shortcut pauses the server, cancelling
+    /// the action that runs, or lifts the pause it set.
+    pub fn toggle(self: *Control) Toggled {
+        if (self.rearm()) return .rearmed;
+        self.paused.store(true, .release);
+        // An action that begins from now on reads `paused` and is refused;
+        // one that runs stops at its next checkpoint.
+        if (self.busy.load(.acquire)) {
+            self.tripped.store(true, .release);
+            self.cancel.store(true, .release);
+        }
+        self.changed();
+        return .paused;
     }
 
     pub fn isPaused(self: *const Control) bool {
@@ -101,4 +132,21 @@ test "the observer hears every change of busy and paused" {
     c.observe(null);
     c.beginAction();
     try std.testing.expectEqual(@as(u32, 4), count.n);
+}
+
+test "toggle pauses a running server, cancels the action that runs and re-arms a paused one" {
+    var c: Control = .{ .background = .init(true) };
+    // At rest: paused, nothing to cancel.
+    try std.testing.expectEqual(Control.Toggled.paused, c.toggle());
+    try std.testing.expect(c.isPaused());
+    try std.testing.expect(!c.cancel.load(.acquire));
+    try std.testing.expectEqual(Control.Toggled.rearmed, c.toggle());
+    try std.testing.expect(!c.isPaused());
+    // During an action: it is cancelled and reported as stopped by the user.
+    c.beginAction();
+    try std.testing.expectEqual(Control.Toggled.paused, c.toggle());
+    try std.testing.expect(c.cancel.load(.acquire));
+    try std.testing.expect(c.endAction());
+    try std.testing.expect(c.isPaused());
+    try std.testing.expectEqual(Control.Toggled.rearmed, c.toggle());
 }

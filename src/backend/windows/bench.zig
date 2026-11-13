@@ -20,7 +20,10 @@ const tools = @import("../../core/tools.zig");
 const Windows = @import("../windows.zig").Windows;
 const display = @import("../../core/display.zig");
 const window = @import("window.zig");
-const TestWindow = @import("test_window.zig").TestWindow;
+const test_window = @import("test_window.zig");
+const TestWindow = test_window.TestWindow;
+const fixture = @import("bg_fixture.zig");
+
 const still_window = @import("still_window.zig");
 
 const CaptureScenario = struct {
@@ -268,10 +271,79 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, name
         return outcome;
     }
     if (std.mem.eql(u8, name, "window_set")) return windowSetScenario(gpa, io, counter, &backend, iterations orelse 100);
+    if (std.mem.eql(u8, name, "bg-act")) return backgroundScenario(gpa, io, counter, &backend, false, iterations orelse 200);
+    if (std.mem.eql(u8, name, "bg-settle")) return backgroundScenario(gpa, io, counter, &backend, true, iterations orelse 60);
     if (std.mem.eql(u8, name, "apps-catalog") or std.mem.eql(u8, name, "apps")) return catalogScenario(gpa, io, counter, &backend, name, iterations);
     if (std.mem.eql(u8, name, "app_launch")) return appLaunchScenario(gpa, io, counter, &backend, iterations orelse 5);
     for (apps) |app| if (std.mem.eql(u8, name, app.name)) return appScenario(gpa, io, counter, &backend, app, iterations orelse 50);
     return unsupported(gpa, "unknown scenario", .{});
+}
+
+// ---------------------------------------------------------------- EP-012
+
+/// The background mode on the test window, covered by the decoy of another
+/// process in the foreground (US-048), through the dispatcher of a
+/// `--mode background` server. `bg-act`: `ui_act toggle` on the check box,
+/// without observation, so without settling (< 20 ms p95). `bg-settle`:
+/// `ui_act scroll_into_view` on a list item already in view, an action
+/// without effect, observed with the default delta while the decoy
+/// repaints itself every 15 ms over the target; its `settle` stage is the
+/// wait on the target's change events (< 150 ms p95).
+fn backgroundScenario(gpa: std.mem.Allocator, io: std.Io, counter: *CountingAllocator, backend: *Windows, settling: bool, iterations: usize) !bench.Outcome {
+    const name = if (settling) "bg-settle" else "bg-act";
+    const displays = backend.displays();
+    if (displays.len == 0) return unsupported(gpa, "{s}: no display enumerated", .{name});
+    const d = displays[0].rect;
+    const area: display.Rect = .{ .x = d.x + 40, .y = d.y + 40, .w = d.w - 80, .h = d.h - 160 };
+    var decoy = fixture.Decoy.start(io, area) catch |err| return unsupported(gpa, "{s}: the decoy window cannot take the foreground ({t})", .{ name, err });
+    defer decoy.stop(io);
+    var tw: TestWindow = .{ .background = true, .rect = .{ .left = area.x + 120, .top = area.y + 120, .right = area.x + 600, .bottom = area.y + 440 } };
+    tw.start() catch return unsupported(gpa, "{s}: test window cannot be created", .{name});
+    defer tw.stop();
+    w.Sleep(300);
+    _ = decoy.front();
+    decoy.tuck(tw.window());
+    w.Sleep(200);
+    if (!decoy.covers(tw.window()) or w.GetForegroundWindow() != decoy.hwnd) return unsupported(gpa, "{s}: the target is not covered by the decoy in the foreground", .{name});
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const s = try gpa.create(ToolScenario);
+    defer gpa.destroy(s);
+    s.* = .{ .server = .init(counter.allocator(), io, backend, .{ .mode = .background }), .line = "" };
+    defer s.server.deinit();
+    // The mode turned UI Automation's focus off for this process: back on
+    // for the scenarios of the other modes.
+    defer backend.uiAutoFocus(true);
+    s.sink = .init(&s.sink_buf);
+    const tree = try callTool(&s.server, arena.allocator(), "ui_tree", "{{\"window\":\"0x{x}\"}}", .{@intFromPtr(tw.window())});
+    if (tree.is_error) return unsupported(gpa, "{s}: {s}", .{ name, tree.text });
+    const needle = if (settling) test_window.list_prefix ++ "01" else test_window.checkbox_label;
+    const id = idOf(tree.text, needle) orelse return unsupported(gpa, "{s}: no element `{s}` in the target's tree", .{ name, needle });
+    s.line = try std.fmt.allocPrint(arena.allocator(), "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"ui_act\",\"arguments\":{{\"id\":\"{s}\",\"action\":\"{s}\"{s}}}}}}}", .{ id, if (settling) "scroll_into_view" else "toggle", if (settling) "" else ",\"observe\":\"none\"" });
+    if (settling) decoy.animate(true);
+    defer if (settling) decoy.animate(false);
+    for (0..10) |_| {
+        var scratch: Timings = .{};
+        try s.step(&scratch);
+    }
+    const outcome = try bench.measure(gpa, io, s, iterations, counter);
+    // A series is valid only behind the decoy: an action that took the
+    // foreground would have been timed in another regime.
+    if (w.GetForegroundWindow() != decoy.hwnd) return unsupported(gpa, "{s}: the foreground left the decoy during the series", .{name});
+    return outcome;
+}
+
+/// The id of the first line of a tree that holds `needle`.
+fn idOf(tree: []const u8, needle: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, tree, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, needle) == null) continue;
+        var it = std.mem.tokenizeScalar(u8, line, ' ');
+        const first = it.next() orelse return null;
+        return if (@import("../../core/uitree.zig").parseId(first) != null) first else null;
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------- EP-006

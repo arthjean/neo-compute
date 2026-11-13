@@ -56,6 +56,27 @@ pub fn pausedLabel(buf: []u8, rearm: keys.Combo) []const u8 {
     return w.buffered();
 }
 
+/// The label of the background mode (US-046), alone on the primary display
+/// while an action runs: "neo-compute is acting in the background:
+/// Ctrl+Alt+Shift+R pauses". In English like the two other labels
+/// (decision 0013, amendment of 2026-11-13).
+pub fn backgroundLabel(buf: []u8, rearm: keys.Combo) []const u8 {
+    const short = "neo-compute is acting in the background";
+    var w: std.Io.Writer = .fixed(buf);
+    w.writeAll(short ++ ": ") catch return short;
+    writeCombo(&w, rearm) catch return short;
+    w.writeAll(" pauses") catch return short;
+    return w.buffered();
+}
+
+test "the background label names the shortcut that pauses" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("neo-compute is acting in the background: Ctrl+Alt+Shift+R pauses", backgroundLabel(&buf, .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } }));
+    try std.testing.expectEqualStrings("neo-compute is acting in the background: Ctrl+Win+F9 pauses", backgroundLabel(&buf, .{ .mods = .{ .ctrl = true, .super = true }, .key = .{ .key = .f9 } }));
+    var small: [40]u8 = undefined;
+    try std.testing.expectEqualStrings("neo-compute is acting in the background", backgroundLabel(&small, .{ .mods = .{ .ctrl = true }, .key = .{ .char = 'r' } }));
+}
+
 /// A shortcut as Windows writes it: `Ctrl+Alt+Shift+Win+R`.
 pub fn writeCombo(w: *std.Io.Writer, combo: keys.Combo) !void {
     if (combo.mods.ctrl) try w.writeAll("Ctrl+");

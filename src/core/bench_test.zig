@@ -187,3 +187,20 @@ test "the marks budget is 8 ms over the screenshot of the same run, else over it
     with_tree.outcome.ok.total.p95_ns = 38_100 * std.time.ns_per_us;
     try testing.expectEqual(@as(usize, 1), try bench.check(a, empty, &.{ fakeResult("screenshot", .encode, 20_000), with_tree }, &sink.writer));
 }
+
+test "the background scenarios are budgeted: bg-act on its total, bg-settle on its settle stage" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, "{}", &.{fakeResult("bg-act", .accessibility, 19_000)}, &sink.writer));
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, "{}", &.{fakeResult("bg-act", .accessibility, 21_000)}, &sink.writer));
+    // The one scenario whose settling is held to a budget (US-048).
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, "{}", &.{fakeResult("bg-settle", .settle, 149_000)}, &sink.writer));
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, "{}", &.{fakeResult("bg-settle", .settle, 151_000)}, &sink.writer));
+    // A series that never settled has nothing to hold against the budget.
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, "{}", &.{fakeResult("bg-settle", .accessibility, 30_000)}, &sink.writer));
+    // Its reference still never checks the settle stage, as for the others.
+    const ref = "{\"reference_p95_us\":{\"bg-settle\":{\"settle\":1}}}";
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, ref, &.{fakeResult("bg-settle", .settle, 100_000)}, &sink.writer));
+}
