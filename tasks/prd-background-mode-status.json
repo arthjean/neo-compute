@@ -33,10 +33,10 @@
     {
       "id": "EP-014",
       "title": "Perception ciblée",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "stories_total": 4,
-      "stories_done": 0
+      "stories_done": 4
     },
     {
       "id": "EP-015",
@@ -59,6 +59,14 @@
       "title": "Sélection native des listes Win32",
       "status": "TODO",
       "priority": "P1",
+      "stories_total": 1,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-018",
+      "title": "Gel appris des applications Chromium",
+      "status": "TODO",
+      "priority": "P2",
       "stories_total": 1,
       "stories_done": 0
     }
@@ -272,49 +280,49 @@
       "id": "US-056",
       "title": "`ui_tree` par sous-arbre et profondeur",
       "epic": "EP-014",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-039", "US-042"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-057",
       "title": "`ui_find`, relecture d'un élément, valeur et total",
       "epic": "EP-014",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": ["US-039", "US-049"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-058",
       "title": "Validate assumption: l'arbre d'une fenêtre Chromium recouverte reste à jour",
       "epic": "EP-014",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": [],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-059",
       "title": "Signalement d'une fenêtre recouverte",
       "epic": "EP-014",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": ["US-042", "US-058"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-060",
@@ -372,6 +380,18 @@
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-053", "US-055"],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-065",
+      "title": "Apprendre qu'une application Chromium rend recouverte",
+      "epic": "EP-018",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "M",
+      "blocked_by": ["US-055", "US-058", "US-059"],
       "started_at": null,
       "completed_at": null,
       "reviewed_at": null
