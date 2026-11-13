@@ -17,10 +17,10 @@
     {
       "id": "EP-012",
       "title": "Cohabitation avec l'utilisateur",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 6,
-      "stories_done": 0
+      "stories_done": 6
     },
     {
       "id": "EP-013",
@@ -132,73 +132,73 @@
       "id": "US-045",
       "title": "Pause par raccourci en mode arrière-plan",
       "epic": "EP-012",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": ["US-039", "US-041"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-12",
+      "completed_at": "2026-11-12",
+      "reviewed_at": "2026-11-12"
     },
     {
       "id": "US-046",
       "title": "Indicateur réduit au libellé",
       "epic": "EP-012",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": ["US-045"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-12",
+      "completed_at": "2026-11-12",
+      "reviewed_at": "2026-11-12"
     },
     {
       "id": "US-047",
       "title": "Validate assumption: les WinEvents signalent les changements d'une fenêtre non active",
       "epic": "EP-012",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "S",
       "blocked_by": [],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-12",
+      "completed_at": "2026-11-12",
+      "reviewed_at": "2026-11-12"
     },
     {
       "id": "US-048",
       "title": "Stabilisation sans pixels",
       "epic": "EP-012",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": ["US-042", "US-047"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-12",
+      "completed_at": "2026-11-12",
+      "reviewed_at": "2026-11-12"
     },
     {
       "id": "US-049",
       "title": "Attentes sans pixels et attente de disparition",
       "epic": "EP-012",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-048"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-12",
+      "completed_at": "2026-11-12",
+      "reviewed_at": "2026-11-12"
     },
     {
       "id": "US-050",
       "title": "Garde de premier plan et restauration",
       "epic": "EP-012",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-041", "US-044"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-12",
+      "completed_at": "2026-11-12",
+      "reviewed_at": "2026-11-12"
     },
     {
       "id": "US-051",
