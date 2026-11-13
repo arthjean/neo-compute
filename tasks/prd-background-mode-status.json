@@ -41,10 +41,10 @@
     {
       "id": "EP-015",
       "title": "Passe visuelle en arrière-plan",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "stories_total": 2,
-      "stories_done": 0
+      "stories_done": 2
     },
     {
       "id": "EP-016",
@@ -328,25 +328,25 @@
       "id": "US-060",
       "title": "Validate assumption: `PrintWindow` capture une fenêtre recouverte",
       "epic": "EP-015",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "S",
       "blocked_by": [],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-061",
       "title": "Capture de la fenêtre cible",
       "epic": "EP-015",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "L",
       "blocked_by": ["US-039", "US-042", "US-060"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-062",
