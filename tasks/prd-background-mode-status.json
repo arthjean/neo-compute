@@ -25,10 +25,10 @@
     {
       "id": "EP-013",
       "title": "Actions sémantiques complètes",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 5,
-      "stories_done": 0
+      "stories_done": 5
     },
     {
       "id": "EP-014",
@@ -52,6 +52,14 @@
       "status": "TODO",
       "priority": "P1",
       "stories_total": 2,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-017",
+      "title": "Sélection native des listes Win32",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 1,
       "stories_done": 0
     }
   ],
@@ -204,61 +212,61 @@
       "id": "US-051",
       "title": "`check`, `uncheck` et chaînes de repli",
       "epic": "EP-013",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": ["US-039"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-052",
       "title": "Défilement sémantique",
       "epic": "EP-013",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": ["US-039"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-053",
       "title": "Valeurs de curseur et sélection par nom",
       "epic": "EP-013",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-039"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-054",
       "title": "Préconditions attendues et défilement automatique",
       "epic": "EP-013",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-039"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-055",
       "title": "Verdict de livraison",
       "epic": "EP-013",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-051", "US-052", "US-053"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-13",
+      "completed_at": "2026-11-13",
+      "reviewed_at": "2026-11-13"
     },
     {
       "id": "US-056",
@@ -352,6 +360,18 @@
       "priority": "P1",
       "size": "S",
       "blocked_by": ["US-062"],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-064",
+      "title": "Sélection par messages natifs",
+      "epic": "EP-017",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": ["US-053", "US-055"],
       "started_at": null,
       "completed_at": null,
       "reviewed_at": null
