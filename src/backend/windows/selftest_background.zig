@@ -38,6 +38,7 @@ const display = @import("../../core/display.zig");
 pub const Server = mcp.Server(Windows, tools.all);
 const cohabitation = @import("selftest_cohabitation.zig");
 const actions = @import("selftest_actions.zig");
+const perception = @import("selftest_perception.zig");
 const uia_events = @import("uia_events.zig");
 const core_a11y = @import("../../core/a11y.zig");
 
@@ -315,6 +316,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     // EP-013: final state of a box, default action, semantic scrolling,
     // slider values, selection by name, waited preconditions, verdict.
     if (try actions.run(&b, arena)) return lost(&report);
+
+    // EP-014: one element's subtree, one element read again, the occluded
+    // flag and what its calculation costs.
+    if (try perception.run(&b, &backend, arena)) return lost(&report);
 
     // bg-must-fail-without-effect: the verdict fails an action that changed
     // nothing in the session and did not reach the target either.

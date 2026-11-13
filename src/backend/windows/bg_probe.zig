@@ -752,9 +752,36 @@ fn tuck(p: *Probe, hwnd: w.HWND) void {
     w.Sleep(400);
 }
 
-/// Opens a reference application in a window of its own. Null: skipped,
-/// with its reason printed.
+/// Opens a reference application in a window of its own, under the decoy,
+/// and makes the first request to it. Null: skipped, with its reason
+/// printed.
 pub fn openApp(p: *Probe, a: std.mem.Allocator, app: App) ?u64 {
+    const hwnd = launchApp(p, a, app) orelse return null;
+    w.Sleep(2500);
+    tuck(p, @ptrFromInt(hwnd));
+    if (app.chromium) {
+        // The first request makes Chromium build its web tree.
+        var waited: u32 = 0;
+        const ready = while (waited < 8000) : (waited += 500) {
+            _ = p.scratch.reset(.retain_capacity);
+            if (p.snapshot(hwnd)) |els| {
+                const has_document = for (els) |e| {
+                    if (e.role == .document) break true;
+                } else false;
+                if (has_document) break true;
+            }
+            w.Sleep(500);
+        } else false;
+        if (!ready) p.print("{s} | no web document in the tree after 8 s under the decoy", .{app.name});
+    }
+    return hwnd;
+}
+
+/// Starts a reference application and returns its new window, left where
+/// it opened and never read: no UI Automation request reaches it here
+/// (`occlusion-probe` measures the first one). Null: skipped, with its
+/// reason printed.
+pub fn launchApp(p: *Probe, a: std.mem.Allocator, app: App) ?u64 {
     const before = handlesOf(p, a);
     const listed = p.backend.listWindows(a, true) catch &.{};
     // An application that reuses its window would hand the probe a window
@@ -775,28 +802,10 @@ pub fn openApp(p: *Probe, a: std.mem.Allocator, app: App) ?u64 {
         p.print("{s} | skipped: {s} cannot be started ({t})", .{ app.name, app.argv[0], err });
         return null;
     };
-    const hwnd = newWindow(p, a, app, before) orelse {
+    return newWindow(p, a, app, before) orelse {
         p.print("{s} | skipped: no new window within 15 s (application absent, or it reused a window)", .{app.name});
         return null;
     };
-    w.Sleep(2500);
-    tuck(p, @ptrFromInt(hwnd));
-    if (app.chromium) {
-        // The first request makes Chromium build its web tree.
-        var waited: u32 = 0;
-        const ready = while (waited < 8000) : (waited += 500) {
-            _ = p.scratch.reset(.retain_capacity);
-            if (p.snapshot(hwnd)) |els| {
-                const has_document = for (els) |e| {
-                    if (e.role == .document) break true;
-                } else false;
-                if (has_document) break true;
-            }
-            w.Sleep(500);
-        } else false;
-        if (!ready) p.print("{s} | no web document in the tree after 8 s under the decoy", .{app.name});
-    }
-    return hwnd;
 }
 
 fn textRole(r: uitree.Role) bool {

@@ -94,3 +94,58 @@ application already runs (Zed on the reference machine). On a desktop where
 it ran, the document window and Calculator were placed on the left half of
 display 0 with a DWM frame of exactly `0,0,640,720` screenshot pixels, then
 closed by `window_set`.
+
+## Covered windows (US-058) and targeted perception (EP-014)
+
+Measured on 2026-11-13 with `neo-compute occlusion-probe` (Debug build), full
+output in `docs/decisions/0013-occlusion-probe-run.txt`. Each launch starts a
+new process, places its 1100x800 window in one situation before any UI
+Automation request, then runs a cold and a warm `ui_act toggle` through a
+`--mode background` server while a framed decoy window of another process
+holds the foreground. An action counts when its effect shows in the tree in
+under 1 s. Chrome's target is a check box of `bench/pages/reference.html`,
+VS Code's is its "Toggle Panel" button. 10 launches per situation.
+
+| Target | Situation | Nodes at first contact | Nodes once built | Tree built in place | Actions with effect < 1 s | Delay median / p95 |
+|---|---|---|---|---|---|---|
+| chrome | visible, inactive | 37 | 150 | 10 of 10 (308 ms) | 20 of 20 (100 %) | 79 / 89 ms |
+| chrome | entirely covered | 37 | 150 | 0 of 10 | 0 of 20 (0 %) | none shown |
+| chrome | covered but a 16 px strip | 37 | 150 | 10 of 10 (321 ms) | 20 of 20 (100 %) | 79 / 82 ms |
+| chrome | other display | 37 | 150 | 10 of 10 (321 ms) | 20 of 20 (100 %) | 80 / 82 ms |
+| chrome | minimized | 37 | 150 | 0 of 10 | 0 of 20 (0 %) | none shown |
+| vscode | visible, inactive | 14 | 147 | 10 of 10 (308 ms) | 19 of 20 (95 %) | 145 / 288 ms |
+| vscode | entirely covered | 14 | 147 | 10 of 10 (309 ms) | 19 of 20 (95 %) | 193 / 289 ms |
+| vscode | covered but a 16 px strip | 14 | 147 | 10 of 10 (309 ms) | 20 of 20 (100 %) | 193 / 291 ms |
+| vscode | other display | 14 | 147 | 10 of 10 (320 ms) | 20 of 20 (100 %) | 198 / 286 ms |
+| vscode | minimized | 14 | 147 | 0 of 10 | 0 of 20 (0 %) | none shown |
+
+Chrome refutes A19: entirely covered or minimized, it never builds its web
+tree and no action shows its effect, although all 20 were delivered (each
+effect showed once the window was back in view; uncovering builds the tree in
+290 ms, restoring in 25 ms). The cheapest situation that reaches 95 % is the
+16 px strip; 1 px was enough on 4 actions of 4. VS Code validates A19: it
+turns Chromium's occlusion calculation off and keeps its tree current while
+covered. Its two missed actions, one visible and one covered, were lost by
+VS Code itself (no effect once in view either), and one launch on the other
+display started with the decoy not in front. Minimized, VS Code freezes like
+Chrome. A `<select>` of the Chrome page lists no entry while closed and does
+not open through ExpandCollapse, visible or covered. The WPF window shows its
+own 11 nodes at the first read, 0 ms after the window exists (first read 90
+to 103 ms, then 8 to 11 ms), on 3 launches of 3.
+
+The same probe with the EP-014 tools on each window (one launch per
+situation): `ui_tree` heads a covered Chrome window with `{occluded}` and
+ends with the frozen-tree line, a covered VS Code window gets the flag
+without the line, and neither appears with the 16 px strip in view.
+`ui_tree` with `depth: 2` gives 19 lines for Chrome and 8 for VS Code; the
+container that stands for the most descendants, read with `root`, gives 45
+lines (1,809 characters) for Chrome and 70 lines (3,674 characters) for
+VS Code. `ui_find` with `id:` reads one element again in 0.56 to 0.71 ms
+median, 0.69 to 0.92 ms p95, on both.
+
+On the test window (`selftest --background`, Debug build, provider in the
+same process): `root` on the window's own element 30.9 ms p95 against 31.5 ms
+for the whole tree, `ui_find id:` 0.87 ms p95, reading the z-order and the
+occlusion calculation 0.14 ms p95 with 51 windows above the target (62 in
+the z-order). `window_list` with the flag (ReleaseFast bench): `dispatch`
+0.43 to 0.61 ms p95 against a 0.61 ms reference.

@@ -130,11 +130,26 @@ pub fn rect(hwnd: w.HWND) ?display.Rect {
 /// taskbar button; cloaked ones (other virtual desktops, suspended apps)
 /// only with `include_hidden`.
 pub fn list(arena: std.mem.Allocator, include_hidden: bool) ![]const display.WindowInfo {
+    return listWith(arena, include_hidden, null);
+}
+
+/// `list`, and with `stack` the layers of the z-order (`layers`) from the
+/// same enumeration: window_list needs both (US-059), and a second
+/// EnumWindows costs as much as reading the layers.
+pub fn listWith(arena: std.mem.Allocator, include_hidden: bool, stack: ?*[]const display.Layer) ![]const display.WindowInfo {
     var c: Collect = .{};
     _ = w.EnumWindows(Collect.callback, @bitCast(@intFromPtr(&c)));
     var out: std.ArrayList(display.WindowInfo) = .empty;
     var processes: std.ArrayList(ProcessInfo) = .empty;
+    var reader: LayerReader = .{};
+    defer reader.deinit();
+    var stacked: std.ArrayList(display.Layer) = .empty;
+    if (stack != null) try stacked.ensureTotalCapacity(arena, c.len);
+    defer if (stack) |to| {
+        to.* = stacked.items;
+    };
     for (c.hwnds[0..c.len]) |hwnd| {
+        if (stack != null) if (reader.read(hwnd)) |layer| stacked.appendAssumeCapacity(layer);
         var title: [512:0]u16 = undefined;
         const tlen = w.GetWindowTextW(hwnd, &title, title.len);
         if (tlen <= 0) continue;
@@ -251,6 +266,88 @@ pub fn restoreForeground(handle: u64) bool {
     if (lent) _ = w.AttachThreadInput(owner, holder, 0);
     if (joined) _ = w.AttachThreadInput(me, holder, 0);
     return inFront(hwnd, restore_wait_ms);
+}
+
+// ---------------------------------------------------------------- stacking (US-059)
+
+fn exStyle(hwnd: w.HWND) u32 {
+    return @truncate(@as(usize, @bitCast(w.GetWindowLongPtrW(hwnd, w.GWL_EXSTYLE))));
+}
+
+/// A layered window that hides what lies under it: opaque, without a color
+/// key. One painted through UpdateLayeredWindow has no such attributes and
+/// counts as transparent, as Chromium counts it.
+fn opaqueLayered(hwnd: w.HWND) bool {
+    var alpha: u8 = 0;
+    var flags: w.LAYERED_WINDOW_ATTRIBUTES_FLAGS = 0;
+    if (w.GetLayeredWindowAttributes(hwnd, null, &alpha, &flags) == 0) return false;
+    if (flags & w.LWA_COLORKEY != 0) return false;
+    return flags & w.LWA_ALPHA == 0 or alpha == 255;
+}
+
+fn rectOf(r: w.RECT) display.Rect {
+    return .{ .x = r.left, .y = r.top, .w = r.right - r.left, .h = r.bottom - r.top };
+}
+
+/// What `layers` reads of each window, with the one region its tests share.
+const LayerReader = struct {
+    region: w.HRGN = null,
+
+    fn deinit(self: *LayerReader) void {
+        if (self.region != null) _ = w.DeleteObject(self.region);
+    }
+
+    /// `hwnd` as a layer of the z-order. Null for a window that neither
+    /// covers nor shows: empty, or cloaked. Seven calls at most, nine for
+    /// a layered window or one with a resize border.
+    fn read(self: *LayerReader, hwnd: w.HWND) ?display.Layer {
+        const L = std.unicode.utf8ToUtf16LeStringLiteral;
+        var r: w.RECT = undefined;
+        if (w.GetWindowRect(hwnd, &r) == 0) return null;
+        const o = rectOf(r);
+        var cbuf: [64:0]u16 = undefined;
+        const class = className(hwnd, &cbuf);
+        const chromium = std.mem.startsWith(u16, class, L("Chrome_WidgetWin_"));
+        if (w.IsIconic(hwnd) != 0) return .{ .handle = @intFromPtr(hwnd), .rect = o, .outer = o, .minimized = true, .solid = false, .counted = false, .chromium = chromium };
+        if (o.w <= 0 or o.h <= 0 or isCloaked(hwnd)) return null;
+        const ex = exStyle(hwnd);
+        var solid = ex & w.WS_EX_TRANSPARENT == 0 and (ex & w.WS_EX_LAYERED == 0 or opaqueLayered(hwnd));
+        if (solid) {
+            if (self.region == null) self.region = w.CreateRectRgn(0, 0, 0, 0);
+            if (self.region != null and w.GetWindowRgn(hwnd, self.region) == w.COMPLEXREGION) solid = false;
+        }
+        const tray = std.mem.eql(u16, class, L("Shell_TrayWnd"));
+        const tool = ex & w.WS_EX_TOOLWINDOW != 0 and !tray;
+        const st = style(hwnd);
+        const popup = st & w.WS_POPUP != 0 and !tray and !chromium;
+        // Only a resize border is invisible: without one the visible frame
+        // is the window rectangle.
+        var frame = o;
+        if (st & w.WS_THICKFRAME != 0) {
+            var f: w.RECT = undefined;
+            if (w.DwmGetWindowAttribute(hwnd, @intCast(w.DWMWA_EXTENDED_FRAME_BOUNDS), &f, @sizeOf(w.RECT)) >= 0) frame = rectOf(f);
+        }
+        return .{ .handle = @intFromPtr(hwnd), .rect = frame, .outer = o, .solid = solid, .counted = !tool and !popup, .chromium = chromium };
+    }
+};
+
+/// The visible top-level windows in the z-order, top first (US-059), with
+/// what tells which of them hide a window below. `solid`: it hides what
+/// lies under it, so it is not click-through, not a translucent or
+/// color-keyed layered window, not shaped by a region. `counted`: Chromium's
+/// occlusion tracker counts it too; it leaves out tool windows and popups,
+/// the taskbar and Chromium's own popups aside. Cloaked windows and the
+/// control indicator's are not listed; a minimized one is, as a target
+/// only.
+pub fn layers(arena: std.mem.Allocator) []const display.Layer {
+    var c: Collect = .{};
+    _ = w.EnumWindows(Collect.callback, @bitCast(@intFromPtr(&c)));
+    var out: std.ArrayList(display.Layer) = .empty;
+    out.ensureTotalCapacity(arena, c.len) catch return &.{};
+    var reader: LayerReader = .{};
+    defer reader.deinit();
+    for (c.hwnds[0..c.len]) |hwnd| if (reader.read(hwnd)) |layer| out.appendAssumeCapacity(layer);
+    return out.items;
 }
 
 // ---------------------------------------------------------------- snapshot roots

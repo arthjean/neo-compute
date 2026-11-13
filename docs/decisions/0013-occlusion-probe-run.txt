@@ -1,0 +1,520 @@
+# neo-compute occlusion-probe chrome (2026-11-13, 10 launches per situation)
+occlusion-probe: decoy 0xf20822 of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | visible | launch 1 | process 14384 new | first contact: 37 nodes in 30 ms, web document absent | element to act on: after re-reads, 307 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #1 | ui_act returned in 58 ms: toggle e1 : vérifié (décoché) | effect in the tree: after 82 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #1 | ui_act returned in 54 ms: toggle e1 : vérifié (coché) | effect in the tree: after 76 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 2 | process 18676 new | first contact: 37 nodes in 22 ms, web document absent | element to act on: after re-reads, 306 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #2 | ui_act returned in 56 ms: toggle e2 : vérifié (décoché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #2 | ui_act returned in 67 ms: toggle e2 : vérifié (coché) | effect in the tree: after 89 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 3 | process 54444 new | first contact: 37 nodes in 21 ms, web document absent | element to act on: after re-reads, 306 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #3 | ui_act returned in 55 ms: toggle e3 : vérifié (décoché) | effect in the tree: after 76 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #3 | ui_act returned in 61 ms: toggle e3 : vérifié (coché) | effect in the tree: after 82 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 4 | process 68068 new | first contact: 37 nodes in 23 ms, web document absent | element to act on: after re-reads, 308 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #4 | ui_act returned in 55 ms: toggle e4 : vérifié (décoché) | effect in the tree: after 77 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #4 | ui_act returned in 58 ms: toggle e4 : vérifié (coché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 5 | process 32292 new | first contact: 37 nodes in 36 ms, web document absent | element to act on: after re-reads, 323 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #5 | ui_act returned in 58 ms: toggle e5 : vérifié (décoché) | effect in the tree: after 81 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #5 | ui_act returned in 56 ms: toggle e5 : vérifié (coché) | effect in the tree: after 79 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 6 | process 39976 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 322 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #6 | ui_act returned in 55 ms: toggle e6 : vérifié (décoché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #6 | ui_act returned in 56 ms: toggle e6 : vérifié (coché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 7 | process 27772 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: after re-reads, 308 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #7 | ui_act returned in 59 ms: toggle e7 : vérifié (décoché) | effect in the tree: after 81 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #7 | ui_act returned in 58 ms: toggle e7 : vérifié (coché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 8 | process 30892 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 326 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #8 | ui_act returned in 55 ms: toggle e8 : vérifié (décoché) | effect in the tree: after 79 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #8 | ui_act returned in 52 ms: toggle e8 : vérifié (coché) | effect in the tree: after 76 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 9 | process 41384 new | first contact: 37 nodes in 36 ms, web document absent | element to act on: after re-reads, 323 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #9 | ui_act returned in 55 ms: toggle e9 : vérifié (décoché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #9 | ui_act returned in 59 ms: toggle e9 : vérifié (coché) | effect in the tree: after 82 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 10 | process 45376 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 324 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | cold action #10 | ui_act returned in 67 ms: toggle ea : vérifié (décoché) | effect in the tree: after 91 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #10 | ui_act returned in 56 ms: toggle ea : vérifié (coché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | covered | launch 1 | process 62140 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #1 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 1 | moved into view: element in the tree after 289 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #1 | ui_act returned in 409 ms: toggle eb : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 93 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 2 | process 73120 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #2 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 2 | moved into view: element in the tree after 290 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #2 | ui_act returned in 412 ms: toggle ec : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 94 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 3 | process 30280 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #3 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 3 | moved into view: element in the tree after 291 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #3 | ui_act returned in 407 ms: toggle ed : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 93 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 4 | process 56508 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #4 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 4 | moved into view: element in the tree after 292 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #4 | ui_act returned in 412 ms: toggle ee : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 91 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 5 | process 72860 new | first contact: 37 nodes in 31 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #5 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 5 | moved into view: element in the tree after 292 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #5 | ui_act returned in 409 ms: toggle ef : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 95 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 6 | process 70236 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #6 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 6 | moved into view: element in the tree after 291 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #6 | ui_act returned in 414 ms: toggle eg : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 91 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 7 | process 60424 new | first contact: 37 nodes in 31 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #7 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 7 | moved into view: element in the tree after 290 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #7 | ui_act returned in 405 ms: toggle eh : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 94 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 8 | process 25948 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #8 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 8 | moved into view: element in the tree after 296 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #8 | ui_act returned in 408 ms: toggle ei : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 94 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 9 | process 69576 new | first contact: 37 nodes in 31 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #9 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 9 | moved into view: element in the tree after 290 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #9 | ui_act returned in 404 ms: toggle ej : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 94 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | covered | launch 10 | process 29948 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | cold action #10 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 10 | moved into view: element in the tree after 290 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #10 | ui_act returned in 405 ms: toggle ek : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 92 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | strip | launch 1 | process 51908 new | first contact: 37 nodes in 33 ms, web document absent | element to act on: after re-reads, 325 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #1 | ui_act returned in 55 ms: toggle el : vérifié (décoché) | effect in the tree: after 78 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #1 | ui_act returned in 58 ms: toggle el : vérifié (coché) | effect in the tree: after 80 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 2 | process 11380 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 319 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #2 | ui_act returned in 54 ms: toggle em : vérifié (décoché) | effect in the tree: after 78 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #2 | ui_act returned in 57 ms: toggle em : vérifié (coché) | effect in the tree: after 78 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 3 | process 12236 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 323 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #3 | ui_act returned in 58 ms: toggle en : vérifié (décoché) | effect in the tree: after 80 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #3 | ui_act returned in 59 ms: toggle en : vérifié (coché) | effect in the tree: after 81 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 4 | process 47156 new | first contact: 37 nodes in 37 ms, web document absent | element to act on: after re-reads, 320 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #4 | ui_act returned in 55 ms: toggle eo : vérifié (décoché) | effect in the tree: after 76 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #4 | ui_act returned in 58 ms: toggle eo : vérifié (coché) | effect in the tree: after 82 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 5 | process 58668 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 321 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #5 | ui_act returned in 67 ms: toggle ep : vérifié (décoché) | effect in the tree: after 90 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #5 | ui_act returned in 57 ms: toggle ep : vérifié (coché) | effect in the tree: after 80 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 6 | process 36612 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 322 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #6 | ui_act returned in 54 ms: toggle eq : vérifié (décoché) | effect in the tree: after 77 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #6 | ui_act returned in 55 ms: toggle eq : vérifié (coché) | effect in the tree: after 77 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 7 | process 64928 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 313 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #7 | ui_act returned in 55 ms: toggle er : vérifié (décoché) | effect in the tree: after 78 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #7 | ui_act returned in 58 ms: toggle er : vérifié (coché) | effect in the tree: after 80 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 8 | process 57076 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 321 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #8 | ui_act returned in 57 ms: toggle es : vérifié (décoché) | effect in the tree: after 79 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #8 | ui_act returned in 58 ms: toggle es : vérifié (coché) | effect in the tree: after 82 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 9 | process 56012 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 322 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #9 | ui_act returned in 55 ms: toggle et : vérifié (décoché) | effect in the tree: after 78 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #9 | ui_act returned in 56 ms: toggle et : vérifié (coché) | effect in the tree: after 79 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 10 | process 58016 new | first contact: 37 nodes in 36 ms, web document absent | element to act on: after re-reads, 322 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | cold action #10 | ui_act returned in 59 ms: toggle eu : vérifié (décoché) | effect in the tree: after 81 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #10 | ui_act returned in 58 ms: toggle eu : vérifié (coché) | effect in the tree: after 81 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | other_display | launch 1 | process 33740 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 323 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #1 | ui_act returned in 57 ms: toggle ev : vérifié (décoché) | effect in the tree: after 82 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #1 | ui_act returned in 56 ms: toggle ev : vérifié (coché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 2 | process 36584 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 321 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #2 | ui_act returned in 56 ms: toggle ew : vérifié (décoché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #2 | ui_act returned in 58 ms: toggle ew : vérifié (coché) | effect in the tree: after 81 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 3 | process 54324 new | first contact: 37 nodes in 39 ms, web document absent | element to act on: after re-reads, 320 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #3 | ui_act returned in 54 ms: toggle ex : vérifié (décoché) | effect in the tree: after 76 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #3 | ui_act returned in 57 ms: toggle ex : vérifié (coché) | effect in the tree: after 81 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 4 | process 71256 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 320 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #4 | ui_act returned in 55 ms: toggle ey : vérifié (décoché) | effect in the tree: after 79 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #4 | ui_act returned in 56 ms: toggle ey : vérifié (coché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 5 | process 44288 new | first contact: 37 nodes in 37 ms, web document absent | element to act on: after re-reads, 324 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #5 | ui_act returned in 56 ms: toggle ez : vérifié (décoché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #5 | ui_act returned in 58 ms: toggle ez : vérifié (coché) | effect in the tree: after 82 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 6 | process 72524 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 322 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #6 | ui_act returned in 57 ms: toggle e10 : vérifié (décoché) | effect in the tree: after 81 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #6 | ui_act returned in 58 ms: toggle e10 : vérifié (coché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 7 | process 21640 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 320 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #7 | ui_act returned in 59 ms: toggle e11 : vérifié (décoché) | effect in the tree: after 82 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #7 | ui_act returned in 56 ms: toggle e11 : vérifié (coché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 8 | process 12848 new | first contact: 37 nodes in 35 ms, web document absent | element to act on: after re-reads, 323 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #8 | ui_act returned in 57 ms: toggle e12 : vérifié (décoché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #8 | ui_act returned in 54 ms: toggle e12 : vérifié (coché) | effect in the tree: after 77 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 9 | process 56780 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 322 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #9 | ui_act returned in 59 ms: toggle e13 : vérifié (décoché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #9 | ui_act returned in 59 ms: toggle e13 : vérifié (coché) | effect in the tree: after 80 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 10 | process 18440 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: after re-reads, 320 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | cold action #10 | ui_act returned in 54 ms: toggle e14 : vérifié (décoché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #10 | ui_act returned in 55 ms: toggle e14 : vérifié (coché) | effect in the tree: after 77 ms | whole window in view, decoy in front
+occlusion-probe: chrome | minimized | launch 1 | process 27920 new | first contact: 37 nodes in 31 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #1 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 1 | moved into view: element in the tree after 25 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #1 | ui_act returned in 409 ms: toggle e15 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 26 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 2 | process 60280 new | first contact: 37 nodes in 33 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #2 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 2 | moved into view: element in the tree after 25 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #2 | ui_act returned in 406 ms: toggle e16 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 24 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 3 | process 17780 new | first contact: 37 nodes in 33 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #3 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 3 | moved into view: element in the tree after 25 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #3 | ui_act returned in 407 ms: toggle e17 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 23 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 4 | process 52088 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #4 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 4 | moved into view: element in the tree after 26 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #4 | ui_act returned in 410 ms: toggle e18 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 27 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 5 | process 28064 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #5 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 5 | moved into view: element in the tree after 27 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #5 | ui_act returned in 409 ms: toggle e19 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 26 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 6 | process 44472 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #6 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 6 | moved into view: element in the tree after 30 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #6 | ui_act returned in 408 ms: toggle e1a : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 25 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 7 | process 28120 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #7 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 7 | moved into view: element in the tree after 33 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #7 | ui_act returned in 406 ms: toggle e1b : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 23 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 8 | process 64352 new | first contact: 37 nodes in 32 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #8 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 8 | moved into view: element in the tree after 25 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #8 | ui_act returned in 411 ms: toggle e1c : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 26 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 9 | process 20736 new | first contact: 37 nodes in 31 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #9 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 9 | moved into view: element in the tree after 30 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #9 | ui_act returned in 408 ms: toggle e1d : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 26 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | minimized | launch 10 | process 57768 new | first contact: 37 nodes in 30 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | cold action #10 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 10 | moved into view: element in the tree after 24 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #10 | ui_act returned in 413 ms: toggle e1e : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 25 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | select | visible | 0 selectable entries listed while closed | expand: expand e1f : contredit, état lu replié. L'action est partie : ne la rejoue pas sans relire l'arbre. | whole window in view, decoy in front
+occlusion-probe: chrome | select | visible | select with a name: e1f n'a aucune entrée sélectionnable : select avec value vise une liste, une liste déroulante, des onglets ou un arbre. Aucune action exécutée.
+occlusion-probe: chrome | select | visible | collapse: UI Automation a échoué (action, hr=0x80131509) : réessaie, ou utilise screenshot et les coordonnées.
+occlusion-probe: chrome | select | covered | 0 selectable entries listed while closed | expand: expand e1f : contredit, état lu replié. L'action est partie : ne la rejoue pas sans relire l'arbre. | nothing in view, decoy in front
+occlusion-probe: chrome | select | covered | select with a name: e1f n'a aucune entrée sélectionnable : select avec value vise une liste, une liste déroulante, des onglets ou un arbre. Aucune action exécutée.
+occlusion-probe: chrome | select | covered | collapse: UI Automation a échoué (action, hr=0x80131509) : réessaie, ou utilise screenshot et les coordonnées.
+occlusion-probe: chrome | strip 1 px | effect in under 1000 ms: 4 of 4, slowest 92 ms | 1 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 4 px | effect in under 1000 ms: 4 of 4, slowest 89 ms | 4 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 8 px | effect in under 1000 ms: 4 of 4, slowest 89 ms | 8 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 16 px | effect in under 1000 ms: 4 of 4, slowest 96 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 32 px | effect in under 1000 ms: 4 of 4, slowest 88 ms | 32 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 64 px | effect in under 1000 ms: 4 of 4, slowest 88 ms | 64 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | narrowest strip in view that kept the tree current on 4 actions of 4: 1 px
+occlusion-probe: summary | target | situation | launches (first contacts) | nodes at first contact, median (min..max) | nodes once built, median | element in the tree in place: at the first read, in all, median ms | moved into view: built, median ms | cold actions with the effect in under 1000 ms | warm actions | delay of the effects shown, median / p95 | share of the actions | effects not shown in place that showed once the window was in view
+occlusion-probe: summary | chrome | visible | 10 (10) | 37 (37..37) | 150 | 0, 10 of 10, 308 ms | 0 of 0, 0 ms | 10 of 10 | 10 of 10 | 79 / 89 ms | 100 % | 0 of 0
+occlusion-probe: summary | chrome | covered | 10 (10) | 37 (37..37) | 150 | 0, 0 of 10, 0 ms | 10 of 10, 290 ms | 0 of 10 | 0 of 10 | none shown | 0 % | 10 of 10
+occlusion-probe: summary | chrome | strip | 10 (10) | 37 (37..37) | 150 | 0, 10 of 10, 321 ms | 0 of 0, 0 ms | 10 of 10 | 10 of 10 | 79 / 82 ms | 100 % | 0 of 0
+occlusion-probe: summary | chrome | other_display | 10 (10) | 37 (37..37) | 150 | 0, 10 of 10, 321 ms | 0 of 0, 0 ms | 10 of 10 | 10 of 10 | 80 / 82 ms | 100 % | 0 of 0
+occlusion-probe: summary | chrome | minimized | 10 (10) | 37 (37..37) | 150 | 0, 0 of 10, 0 ms | 10 of 10, 25 ms | 0 of 10 | 0 of 10 | none shown | 0 % | 10 of 10
+occlusion-probe: verdict | chrome | A19 REFUTED: 0 % of the actions on the entirely covered window showed their effect in under 1000 ms (threshold 95 %); cheapest situation that reaches it: strip (under the decoy but for 16 px, 100 %)
+
+# neo-compute occlusion-probe vscode (2026-11-13, 10 launches per situation)
+occlusion-probe: decoy 0x3008be of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: vscode | visible | launch 1 | process 45968 new | first contact: 14 nodes in 26 ms, web document absent | element to act on: after re-reads, 306 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #1 | ui_act returned in 115 ms: toggle e1 : vérifié (indéterminé) | effect in the tree: after 142 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #1 | ui_act returned in 215 ms: toggle e2 : vérifié (indéterminé) | effect in the tree: after 235 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 2 | process 3216 new | first contact: 14 nodes in 16 ms, web document absent | element to act on: after re-reads, 292 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #2 | ui_act returned in 66 ms: toggle e3 : vérifié (indéterminé) | effect in the tree: after 94 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #2 | ui_act returned in 60 ms: toggle e4 : vérifié (indéterminé) | effect in the tree: NOT within 3000 ms | whole window in view, decoy in front
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | visible | launch 3 | process 74916 new | first contact: 14 nodes in 16 ms, web document absent | element to act on: after re-reads, 305 ms (142 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #3 | ui_act returned in 119 ms: toggle e5 : vérifié (indéterminé) | effect in the tree: after 141 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #3 | ui_act returned in 267 ms: toggle e6 : vérifié (indéterminé) | effect in the tree: after 288 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 4 | process 58044 new | first contact: 14 nodes in 17 ms, web document absent | element to act on: after re-reads, 306 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #4 | ui_act returned in 116 ms: toggle e7 : vérifié (indéterminé) | effect in the tree: after 143 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #4 | ui_act returned in 267 ms: toggle e8 : vérifié (indéterminé) | effect in the tree: after 288 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 5 | process 57700 new | first contact: 14 nodes in 31 ms, web document absent | element to act on: after re-reads, 308 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #5 | ui_act returned in 119 ms: toggle e9 : vérifié (indéterminé) | effect in the tree: after 144 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #5 | ui_act returned in 264 ms: toggle ea : vérifié (indéterminé) | effect in the tree: after 285 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 6 | process 43260 new | first contact: 14 nodes in 36 ms, web document absent | element to act on: after re-reads, 321 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #6 | ui_act returned in 115 ms: toggle eb : vérifié (indéterminé) | effect in the tree: after 141 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #6 | ui_act returned in 264 ms: toggle ec : vérifié (indéterminé) | effect in the tree: after 285 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 7 | process 26160 new | first contact: 14 nodes in 30 ms, web document absent | element to act on: after re-reads, 308 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #7 | ui_act returned in 114 ms: toggle ed : vérifié (indéterminé) | effect in the tree: after 143 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #7 | ui_act returned in 261 ms: toggle ee : vérifié (indéterminé) | effect in the tree: after 282 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 8 | process 72268 new | first contact: 14 nodes in 34 ms, web document absent | element to act on: after re-reads, 326 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #8 | ui_act returned in 116 ms: toggle ef : vérifié (indéterminé) | effect in the tree: after 145 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #8 | ui_act returned in 268 ms: toggle eg : vérifié (indéterminé) | effect in the tree: after 288 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 9 | process 49748 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: after re-reads, 310 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #9 | ui_act returned in 115 ms: toggle eh : vérifié (indéterminé) | effect in the tree: after 142 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #9 | ui_act returned in 264 ms: toggle ei : vérifié (indéterminé) | effect in the tree: after 285 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 10 | process 66760 new | first contact: 14 nodes in 32 ms, web document absent | element to act on: after re-reads, 320 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | cold action #10 | ui_act returned in 112 ms: toggle ej : vérifié (indéterminé) | effect in the tree: after 139 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #10 | ui_act returned in 263 ms: toggle ek : vérifié (indéterminé) | effect in the tree: after 284 ms | whole window in view, decoy in front
+occlusion-probe: vscode | covered | launch 1 | process 48808 new | first contact: 14 nodes in 34 ms, web document absent | element to act on: after re-reads, 323 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #1 | ui_act returned in 119 ms: toggle el : vérifié (indéterminé) | effect in the tree: after 143 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #1 | ui_act returned in 267 ms: toggle em : vérifié (indéterminé) | effect in the tree: after 289 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 2 | process 72032 new | first contact: 14 nodes in 35 ms, web document absent | element to act on: after re-reads, 321 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #2 | ui_act returned in 115 ms: toggle en : vérifié (indéterminé) | effect in the tree: after 143 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #2 | ui_act returned in 264 ms: toggle eo : vérifié (indéterminé) | effect in the tree: after 285 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 3 | process 27772 new | first contact: 14 nodes in 31 ms, web document absent | element to act on: after re-reads, 306 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #3 | ui_act returned in 64 ms: toggle ep : vérifié (indéterminé) | effect in the tree: after 90 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #3 | ui_act returned in 65 ms: toggle eq : vérifié (indéterminé) | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | window moved into view: still no effect after 3000 ms: the action was lost
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | covered | launch 4 | process 67028 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 305 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #4 | ui_act returned in 115 ms: toggle er : vérifié (indéterminé) | effect in the tree: after 139 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #4 | ui_act returned in 257 ms: toggle es : vérifié (indéterminé) | effect in the tree: after 278 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 5 | process 61936 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 307 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #5 | ui_act returned in 117 ms: toggle et : vérifié (indéterminé) | effect in the tree: after 143 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #5 | ui_act returned in 263 ms: toggle eu : vérifié (indéterminé) | effect in the tree: after 285 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 6 | process 17076 new | first contact: 14 nodes in 35 ms, web document absent | element to act on: after re-reads, 320 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #6 | ui_act returned in 116 ms: toggle ev : vérifié (indéterminé) | effect in the tree: after 141 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #6 | ui_act returned in 264 ms: toggle ew : vérifié (indéterminé) | effect in the tree: after 284 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 7 | process 32144 new | first contact: 14 nodes in 34 ms, web document absent | element to act on: after re-reads, 320 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #7 | ui_act returned in 119 ms: toggle ex : vérifié (indéterminé) | effect in the tree: after 148 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #7 | ui_act returned in 260 ms: toggle ey : vérifié (indéterminé) | effect in the tree: after 281 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 8 | process 69696 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 307 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #8 | ui_act returned in 115 ms: toggle ez : vérifié (indéterminé) | effect in the tree: after 142 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #8 | ui_act returned in 215 ms: toggle e10 : vérifié (indéterminé) | effect in the tree: after 236 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 9 | process 45636 new | first contact: 14 nodes in 32 ms, web document absent | element to act on: after re-reads, 320 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #9 | ui_act returned in 168 ms: toggle e11 : vérifié (indéterminé) | effect in the tree: after 193 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #9 | ui_act returned in 220 ms: toggle e12 : vérifié (indéterminé) | effect in the tree: after 240 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 10 | process 50752 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: after re-reads, 309 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | cold action #10 | ui_act returned in 163 ms: toggle e13 : vérifié (indéterminé) | effect in the tree: after 189 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #10 | ui_act returned in 219 ms: toggle e14 : vérifié (indéterminé) | effect in the tree: after 239 ms | nothing in view, decoy in front
+occlusion-probe: vscode | strip | launch 1 | process 53264 new | first contact: 14 nodes in 30 ms, web document absent | element to act on: after re-reads, 308 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #1 | ui_act returned in 112 ms: toggle e15 : vérifié (indéterminé) | effect in the tree: after 139 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #1 | ui_act returned in 267 ms: toggle e16 : vérifié (indéterminé) | effect in the tree: after 287 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 2 | process 32532 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: after re-reads, 309 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #2 | ui_act returned in 119 ms: toggle e17 : vérifié (indéterminé) | effect in the tree: after 144 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #2 | ui_act returned in 268 ms: toggle e18 : vérifié (indéterminé) | effect in the tree: after 289 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 3 | process 6456 new | first contact: 14 nodes in 31 ms, web document absent | element to act on: after re-reads, 309 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #3 | ui_act returned in 111 ms: toggle e19 : vérifié (indéterminé) | effect in the tree: after 137 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #3 | ui_act returned in 269 ms: toggle e1a : vérifié (indéterminé) | effect in the tree: after 289 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 4 | process 40480 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 310 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #4 | ui_act returned in 114 ms: toggle e1b : vérifié (indéterminé) | effect in the tree: after 139 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #4 | ui_act returned in 267 ms: toggle e1c : vérifié (indéterminé) | effect in the tree: after 290 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 5 | process 34204 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 308 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #5 | ui_act returned in 118 ms: toggle e1d : vérifié (indéterminé) | effect in the tree: after 143 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #5 | ui_act returned in 268 ms: toggle e1e : vérifié (indéterminé) | effect in the tree: after 288 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 6 | process 26084 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 319 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #6 | ui_act returned in 114 ms: toggle e1f : vérifié (indéterminé) | effect in the tree: after 141 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #6 | ui_act returned in 265 ms: toggle e1g : vérifié (indéterminé) | effect in the tree: after 286 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 7 | process 23116 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: after re-reads, 308 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #7 | ui_act returned in 104 ms: toggle e1h : vérifié (indéterminé) | effect in the tree: after 127 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #7 | ui_act returned in 269 ms: toggle e1i : vérifié (indéterminé) | effect in the tree: after 291 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 8 | process 65464 new | first contact: 14 nodes in 35 ms, web document absent | element to act on: after re-reads, 323 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #8 | ui_act returned in 166 ms: toggle e1j : vérifié (indéterminé) | effect in the tree: after 193 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #8 | ui_act returned in 213 ms: toggle e1k : vérifié (indéterminé) | effect in the tree: after 234 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 9 | process 21396 new | first contact: 14 nodes in 28 ms, web document absent | element to act on: after re-reads, 310 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #9 | ui_act returned in 116 ms: toggle e1l : vérifié (indéterminé) | effect in the tree: after 142 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #9 | ui_act returned in 316 ms: toggle e1m : vérifié (indéterminé) | effect in the tree: after 337 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 10 | process 59460 new | first contact: 14 nodes in 35 ms, web document absent | element to act on: after re-reads, 320 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | cold action #10 | ui_act returned in 114 ms: toggle e1n : vérifié (indéterminé) | effect in the tree: after 141 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #10 | ui_act returned in 262 ms: toggle e1o : vérifié (indéterminé) | effect in the tree: after 282 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | other_display | launch 1 | process 61736 new | first contact: 14 nodes in 33 ms, web document absent | element to act on: after re-reads, 325 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #1 | ui_act returned in 115 ms: toggle e1p : vérifié (indéterminé) | effect in the tree: after 139 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #1 | ui_act returned in 254 ms: toggle e1q : vérifié (indéterminé) | effect in the tree: after 276 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 2 | process 24372 new | first contact: 14 nodes in 34 ms, web document absent | element to act on: after re-reads, 324 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #2 | ui_act returned in 115 ms: toggle e1r : vérifié (indéterminé) | effect in the tree: after 147 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #2 | ui_act returned in 261 ms: toggle e1s : vérifié (indéterminé) | effect in the tree: after 281 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 3 | process 29260 new | first contact: 14 nodes in 35 ms, web document absent | element to act on: after re-reads, 323 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #3 | ui_act returned in 118 ms: toggle e1t : vérifié (indéterminé) | effect in the tree: after 147 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #3 | ui_act returned in 266 ms: toggle e1u : vérifié (indéterminé) | effect in the tree: after 286 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 4 | process 27512 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: after re-reads, 305 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #4 | ui_act returned in 116 ms: toggle e1v : vérifié (indéterminé) | effect in the tree: after 144 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #4 | ui_act returned in 268 ms: toggle e1w : vérifié (indéterminé) | effect in the tree: after 289 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 5 | process 63844 new | first contact: 14 nodes in 36 ms, web document absent | element to act on: after re-reads, 317 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #5 | ui_act returned in 162 ms: toggle e1x : vérifié (indéterminé) | effect in the tree: after 186 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #5 | ui_act returned in 218 ms: toggle e1y : vérifié (indéterminé) | effect in the tree: after 237 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 6 | process 52992 new | first contact: 14 nodes in 31 ms, web document absent | element to act on: after re-reads, 319 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #6 | ui_act returned in 117 ms: toggle e1z : vérifié (indéterminé) | effect in the tree: after 145 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #6 | ui_act returned in 265 ms: toggle e20 : vérifié (indéterminé) | effect in the tree: after 285 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 7 | process 72600 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: after re-reads, 306 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #7 | ui_act returned in 160 ms: toggle e21 : vérifié (indéterminé) | effect in the tree: after 185 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #7 | ui_act returned in 217 ms: toggle e22 : vérifié (indéterminé) | effect in the tree: after 238 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 8 | process 51104 new | first contact: 14 nodes in 33 ms, web document absent | element to act on: after re-reads, 321 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #8 | ui_act returned in 116 ms: toggle e23 : vérifié (indéterminé) | effect in the tree: after 141 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #8 | ui_act returned in 264 ms: toggle e24 : vérifié (indéterminé) | effect in the tree: after 285 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 9 | process 32792 new | first contact: 14 nodes in 34 ms, web document absent | element to act on: after re-reads, 321 ms (147 nodes) | whole window in view, DECOY NOT IN FRONT
+occlusion-probe: vscode | other_display | cold action #9 | ui_act returned in 170 ms: toggle e25 : vérifié (indéterminé) | effect in the tree: after 198 ms | whole window in view, DECOY NOT IN FRONT
+occlusion-probe: vscode | other_display | warm action #9 | ui_act returned in 213 ms: toggle e26 : vérifié (indéterminé) | effect in the tree: after 239 ms | whole window in view, DECOY NOT IN FRONT
+occlusion-probe: vscode | other_display | launch 10 | process 22148 new | first contact: 14 nodes in 33 ms, web document absent | element to act on: after re-reads, 320 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | cold action #10 | ui_act returned in 164 ms: toggle e27 : vérifié (indéterminé) | effect in the tree: after 189 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #10 | ui_act returned in 207 ms: toggle e28 : vérifié (indéterminé) | effect in the tree: after 226 ms | whole window in view, decoy in front
+occlusion-probe: vscode | minimized | launch 1 | process 44488 new | first contact: 14 nodes in 27 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #1 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 1 | moved into view: element in the tree after 297 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #1 | ui_act returned in 405 ms: toggle e29 : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 99 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 2 | process 75676 new | first contact: 14 nodes in 26 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #2 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 2 | moved into view: element in the tree after 299 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #2 | ui_act returned in 407 ms: toggle e2a : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 94 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 3 | process 34480 new | first contact: 14 nodes in 27 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #3 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 3 | moved into view: element in the tree after 298 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #3 | ui_act returned in 405 ms: toggle e2b : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 95 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 4 | process 20468 new | first contact: 14 nodes in 27 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #4 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 4 | moved into view: element in the tree after 297 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #4 | ui_act returned in 406 ms: toggle e2c : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 99 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 5 | process 68864 new | first contact: 14 nodes in 30 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #5 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 5 | moved into view: element in the tree after 293 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #5 | ui_act returned in 417 ms: toggle e2d : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 96 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 6 | process 66200 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #6 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 6 | moved into view: element in the tree after 294 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #6 | ui_act returned in 405 ms: toggle e2e : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 95 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 7 | process 70780 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #7 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 7 | moved into view: element in the tree after 295 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #7 | ui_act returned in 407 ms: toggle e2f : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 96 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 8 | process 47492 new | first contact: 14 nodes in 53 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #8 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 8 | moved into view: element in the tree after 297 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #8 | ui_act returned in 406 ms: toggle e2g : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 99 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 9 | process 24808 new | first contact: 14 nodes in 29 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #9 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 9 | moved into view: element in the tree after 294 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #9 | ui_act returned in 408 ms: toggle e2h : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 96 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | minimized | launch 10 | process 71516 new | first contact: 14 nodes in 30 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | cold action #10 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 10 | moved into view: element in the tree after 295 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #10 | ui_act returned in 406 ms: toggle e2i : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 96 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | select | visible | no combo box in the window's tree: not measured
+occlusion-probe: vscode | select | covered | no combo box in the window's tree: not measured
+occlusion-probe: vscode | strip widths not searched: the tree stays current entirely covered
+occlusion-probe: summary | target | situation | launches (first contacts) | nodes at first contact, median (min..max) | nodes once built, median | element in the tree in place: at the first read, in all, median ms | moved into view: built, median ms | cold actions with the effect in under 1000 ms | warm actions | delay of the effects shown, median / p95 | share of the actions | effects not shown in place that showed once the window was in view
+occlusion-probe: summary | vscode | visible | 10 (10) | 14 (14..14) | 147 | 0, 10 of 10, 308 ms | 0 of 0, 0 ms | 10 of 10 | 9 of 10 | 145 / 288 ms | 95 % | 0 of 0
+occlusion-probe: summary | vscode | covered | 10 (10) | 14 (14..14) | 147 | 0, 10 of 10, 309 ms | 0 of 0, 0 ms | 10 of 10 | 9 of 10 | 193 / 289 ms | 95 % | 0 of 1
+occlusion-probe: summary | vscode | strip | 10 (10) | 14 (14..14) | 147 | 0, 10 of 10, 309 ms | 0 of 0, 0 ms | 10 of 10 | 10 of 10 | 193 / 291 ms | 100 % | 0 of 0
+occlusion-probe: summary | vscode | other_display | 10 (10) | 14 (14..14) | 147 | 0, 10 of 10, 320 ms | 0 of 0, 0 ms | 10 of 10 | 10 of 10 | 198 / 286 ms | 100 % | 0 of 0
+occlusion-probe: summary | vscode | minimized | 10 (10) | 14 (14..14) | 147 | 0, 0 of 10, 0 ms | 10 of 10, 295 ms | 0 of 10 | 0 of 10 | none shown | 0 % | 10 of 10
+occlusion-probe: verdict | vscode | A19 VALIDATED: 95 % of the actions on the entirely covered window showed their effect in under 1000 ms (threshold 95 %)
+
+# neo-compute occlusion-probe wpf (2026-11-13)
+occlusion-probe: decoy 0x40066e of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: wpf | launch 1 | read 0 ms after the window exists, in 90 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 1 | read 110 ms after the window exists, in 8 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 1 | read 252 ms after the window exists, in 9 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 1 | read 505 ms after the window exists, in 9 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 1 | read 1006 ms after the window exists, in 11 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 1 | read 2011 ms after the window exists, in 8 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 2 | read 0 ms after the window exists, in 98 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 2 | read 108 ms after the window exists, in 10 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 2 | read 265 ms after the window exists, in 9 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 2 | read 514 ms after the window exists, in 9 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 2 | read 1005 ms after the window exists, in 9 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 2 | read 2011 ms after the window exists, in 8 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 3 | read 0 ms after the window exists, in 103 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 3 | read 104 ms after the window exists, in 9 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 3 | read 251 ms after the window exists, in 8 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 3 | read 503 ms after the window exists, in 8 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 3 | read 1000 ms after the window exists, in 10 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+occlusion-probe: wpf | launch 3 | read 2004 ms after the window exists, in 10 ms: read, 11 nodes, 5 buttons and check boxes, the window's own controls present
+
+# neo-compute occlusion-probe chrome vscode reps=1 (2026-11-13, with the EP-014 perception lines: ui_tree header, frozen-tree line, depth, root, ui_find id:)
+occlusion-probe: decoy 0xbe028c of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 1 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | visible | launch 1 | process 70968 new | first contact: 37 nodes in 30 ms, web document absent | element to act on: after re-reads, 307 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | visible | launch 1 | ui_tree: `display=0 scale=2 window=0x708c0`, 2953 characters, 62 lines; frozen-tree line absent
+occlusion-probe: chrome | visible | launch 1 | depth 2: 19 lines; root ee (42 descendants at depth 2): read, 1809 characters, 45 lines, some nodes pruned; ui_find id:ee: read, median 673 us, p95 918 us
+occlusion-probe: chrome | visible | cold action #1 | ui_act returned in 66 ms: toggle es : vérifié (décoché) | effect in the tree: after 88 ms | whole window in view, decoy in front
+occlusion-probe: chrome | visible | warm action #1 | ui_act returned in 59 ms: toggle es : vérifié (coché) | effect in the tree: after 81 ms | whole window in view, decoy in front
+occlusion-probe: chrome | covered | launch 1 | process 43016 new | first contact: 37 nodes in 21 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 1 | ui_tree: `display=0 scale=2 window=0xb08d8 {occluded}`, 1277 characters, 20 lines; frozen-tree line present
+occlusion-probe: chrome | covered | launch 1 | depth 2: 19 lines; root e23 (1 descendants at depth 2): read, 422 characters, 4 lines, no node pruned; ui_find id:e23: read, median 556 us, p95 690 us
+occlusion-probe: chrome | covered | cold action #1 | not run: element not in the tree | nothing in view, decoy in front
+occlusion-probe: chrome | covered | launch 1 | moved into view: element in the tree after 293 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | covered | warm action #1 | ui_act returned in 411 ms: toggle e26 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | nothing in view, decoy in front
+occlusion-probe: chrome | covered | window moved into view: the effect shows after 94 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | strip | launch 1 | process 68892 new | first contact: 37 nodes in 23 ms, web document absent | element to act on: after re-reads, 304 ms (150 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | launch 1 | ui_tree: `display=0 scale=2 window=0x1d80056`, 2984 characters, 62 lines; frozen-tree line absent
+occlusion-probe: chrome | strip | launch 1 | depth 2: 19 lines; root e2k (42 descendants at depth 2): read, 1833 characters, 45 lines, some nodes pruned; ui_find id:e2k: read, median 702 us, p95 853 us
+occlusion-probe: chrome | strip | cold action #1 | ui_act returned in 68 ms: toggle e2y : vérifié (décoché) | effect in the tree: after 90 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip | warm action #1 | ui_act returned in 58 ms: toggle e2y : vérifié (coché) | effect in the tree: after 81 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | other_display | launch 1 | process 33204 new | first contact: 37 nodes in 23 ms, web document absent | element to act on: after re-reads, 308 ms (150 nodes) | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | launch 1 | ui_tree: `display=1 scale=2 window=0x16d06de`, 2943 characters, 62 lines; frozen-tree line absent
+occlusion-probe: chrome | other_display | launch 1 | depth 2: 19 lines; root e48 (42 descendants at depth 2): read, 1799 characters, 45 lines, some nodes pruned; ui_find id:e48: read, median 713 us, p95 915 us
+occlusion-probe: chrome | other_display | cold action #1 | ui_act returned in 66 ms: toggle e4m : vérifié (décoché) | effect in the tree: after 90 ms | whole window in view, decoy in front
+occlusion-probe: chrome | other_display | warm action #1 | ui_act returned in 55 ms: toggle e4m : vérifié (coché) | effect in the tree: after 78 ms | whole window in view, decoy in front
+occlusion-probe: chrome | minimized | launch 1 | process 25800 new | first contact: 37 nodes in 34 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (37 nodes) | minimized
+occlusion-probe: chrome | minimized | launch 1 | ui_tree: `display=0 scale=2 window=0x23f03e6`, 277 characters, 4 lines; frozen-tree line present
+occlusion-probe: chrome | minimized | launch 1 | depth 2 folds nothing: 4 lines
+occlusion-probe: chrome | minimized | cold action #1 | not run: element not in the tree | minimized
+occlusion-probe: chrome | minimized | launch 1 | moved into view: element in the tree after 26 ms (150 nodes): the covering held the tree back
+occlusion-probe: chrome | minimized | warm action #1 | ui_act returned in 415 ms: toggle e5k : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: chrome | minimized | window moved into view: the effect shows after 25 ms: the action was delivered, the tree was not current
+occlusion-probe: chrome | select | visible | 0 selectable entries listed while closed | expand: expand e5l : contredit, état lu replié. L'action est partie : ne la rejoue pas sans relire l'arbre. | whole window in view, decoy in front
+occlusion-probe: chrome | select | visible | select with a name: e5l n'a aucune entrée sélectionnable : select avec value vise une liste, une liste déroulante, des onglets ou un arbre. Aucune action exécutée.
+occlusion-probe: chrome | select | visible | collapse: UI Automation a échoué (action, hr=0x80131509) : réessaie, ou utilise screenshot et les coordonnées.
+occlusion-probe: chrome | select | covered | 0 selectable entries listed while closed | expand: expand e5l : contredit, état lu replié. L'action est partie : ne la rejoue pas sans relire l'arbre. | nothing in view, decoy in front
+occlusion-probe: chrome | select | covered | select with a name: e5l n'a aucune entrée sélectionnable : select avec value vise une liste, une liste déroulante, des onglets ou un arbre. Aucune action exécutée.
+occlusion-probe: chrome | select | covered | collapse: UI Automation a échoué (action, hr=0x80131509) : réessaie, ou utilise screenshot et les coordonnées.
+occlusion-probe: chrome | strip 1 px | effect in under 1000 ms: 4 of 4, slowest 92 ms | 1 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 4 px | effect in under 1000 ms: 4 of 4, slowest 89 ms | 4 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 8 px | effect in under 1000 ms: 4 of 4, slowest 92 ms | 8 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 16 px | effect in under 1000 ms: 4 of 4, slowest 88 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 32 px | effect in under 1000 ms: 4 of 4, slowest 89 ms | 32 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | strip 64 px | effect in under 1000 ms: 4 of 4, slowest 86 ms | 64 px in view beside the decoy, decoy in front
+occlusion-probe: chrome | narrowest strip in view that kept the tree current on 4 actions of 4: 1 px
+occlusion-probe: summary | target | situation | launches (first contacts) | nodes at first contact, median (min..max) | nodes once built, median | element in the tree in place: at the first read, in all, median ms | moved into view: built, median ms | cold actions with the effect in under 1000 ms | warm actions | delay of the effects shown, median / p95 | share of the actions | effects not shown in place that showed once the window was in view
+occlusion-probe: summary | chrome | visible | 1 (1) | 37 (37..37) | 150 | 0, 1 of 1, 307 ms | 0 of 0, 0 ms | 1 of 1 | 1 of 1 | 81 / 88 ms | 100 % | 0 of 0
+occlusion-probe: summary | chrome | covered | 1 (1) | 37 (37..37) | 150 | 0, 0 of 1, 0 ms | 1 of 1, 293 ms | 0 of 1 | 0 of 1 | none shown | 0 % | 1 of 1
+occlusion-probe: summary | chrome | strip | 1 (1) | 37 (37..37) | 150 | 0, 1 of 1, 304 ms | 0 of 0, 0 ms | 1 of 1 | 1 of 1 | 81 / 90 ms | 100 % | 0 of 0
+occlusion-probe: summary | chrome | other_display | 1 (1) | 37 (37..37) | 150 | 0, 1 of 1, 308 ms | 0 of 0, 0 ms | 1 of 1 | 1 of 1 | 78 / 90 ms | 100 % | 0 of 0
+occlusion-probe: summary | chrome | minimized | 1 (1) | 37 (37..37) | 150 | 0, 0 of 1, 0 ms | 1 of 1, 26 ms | 0 of 1 | 0 of 1 | none shown | 0 % | 1 of 1
+occlusion-probe: verdict | chrome | A19 REFUTED: 0 % of the actions on the entirely covered window showed their effect in under 1000 ms (threshold 95 %); cheapest situation that reaches it: strip (under the decoy but for 16 px, 100 %)
+occlusion-probe: vscode | visible | launch 1 | process 68676 new | first contact: 14 nodes in 44 ms, web document absent | element to act on: after re-reads, 322 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | visible | launch 1 | ui_tree: `display=0 scale=2 window=0xe090e`, 4196 characters, 75 lines; frozen-tree line absent
+occlusion-probe: vscode | visible | launch 1 | depth 2: 8 lines; root e5s (67 descendants at depth 2): read, 3674 characters, 70 lines, some nodes pruned; ui_find id:e5s: read, median 638 us, p95 745 us
+occlusion-probe: vscode | visible | cold action #1 | ui_act returned in 69 ms: toggle e6a : vérifié (indéterminé) | effect in the tree: after 99 ms | whole window in view, decoy in front
+occlusion-probe: vscode | visible | warm action #1 | ui_act returned in 2007 ms: Précondition non remplie : e7o est resté désactivé 2000 ms. Aucune action exécutée. | effect in the tree: NOT within 3000 ms | whole window in view, decoy in front
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | covered | launch 1 | process 53236 new | first contact: 14 nodes in 30 ms, web document absent | element to act on: after re-reads, 311 ms (147 nodes) | nothing in view, decoy in front
+occlusion-probe: vscode | covered | launch 1 | ui_tree: `display=0 scale=2 window=0x1dd0056 {occluded}`, 4175 characters, 75 lines; frozen-tree line absent
+occlusion-probe: vscode | covered | launch 1 | depth 2: 8 lines; root e7u (67 descendants at depth 2): read, 3658 characters, 70 lines, some nodes pruned; ui_find id:e7u: read, median 618 us, p95 854 us
+occlusion-probe: vscode | covered | cold action #1 | ui_act returned in 168 ms: toggle e8c : vérifié (indéterminé) | effect in the tree: after 190 ms | nothing in view, decoy in front
+occlusion-probe: vscode | covered | warm action #1 | ui_act returned in 207 ms: toggle e9q : vérifié (indéterminé) | effect in the tree: after 229 ms | nothing in view, decoy in front
+occlusion-probe: vscode | strip | launch 1 | process 70408 new | first contact: 14 nodes in 31 ms, web document absent | element to act on: after re-reads, 322 ms (147 nodes) | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | launch 1 | ui_tree: `display=0 scale=2 window=0x152097a`, 4189 characters, 75 lines; frozen-tree line absent
+occlusion-probe: vscode | strip | launch 1 | depth 2: 8 lines; root e9w (67 descendants at depth 2): read, 3670 characters, 70 lines, some nodes pruned; ui_find id:e9w: read, median 599 us, p95 749 us
+occlusion-probe: vscode | strip | cold action #1 | ui_act returned in 156 ms: toggle eae : vérifié (indéterminé) | effect in the tree: after 181 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | strip | warm action #1 | ui_act returned in 219 ms: toggle ebs : vérifié (indéterminé) | effect in the tree: after 239 ms | 16 px in view beside the decoy, decoy in front
+occlusion-probe: vscode | other_display | launch 1 | process 61728 new | first contact: 14 nodes in 33 ms, web document absent | element to act on: after re-reads, 312 ms (147 nodes) | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | launch 1 | ui_tree: `display=1 scale=2 window=0x8807a6`, 4163 characters, 75 lines; frozen-tree line absent
+occlusion-probe: vscode | other_display | launch 1 | depth 2: 8 lines; root eby (67 descendants at depth 2): read, 3646 characters, 70 lines, some nodes pruned; ui_find id:eby: read, median 614 us, p95 849 us
+occlusion-probe: vscode | other_display | cold action #1 | ui_act returned in 109 ms: toggle ecg : vérifié (indéterminé) | effect in the tree: after 133 ms | whole window in view, decoy in front
+occlusion-probe: vscode | other_display | warm action #1 | ui_act returned in 263 ms: toggle edu : vérifié (indéterminé) | effect in the tree: after 283 ms | whole window in view, decoy in front
+occlusion-probe: vscode | minimized | launch 1 | process 41932 new | first contact: 14 nodes in 31 ms, web document absent | element to act on: NOT in place within 4000 ms of re-reads (14 nodes) | minimized
+occlusion-probe: vscode | minimized | launch 1 | ui_tree: `display=0 scale=2 window=0x1e00056`, 247 characters, 4 lines; frozen-tree line absent
+occlusion-probe: vscode | minimized | launch 1 | depth 2 folds nothing: 4 lines
+occlusion-probe: vscode | minimized | cold action #1 | not run: element not in the tree | minimized
+occlusion-probe: vscode | minimized | launch 1 | moved into view: element in the tree after 292 ms (147 nodes): the covering held the tree back
+occlusion-probe: vscode | minimized | warm action #1 | ui_act returned in 418 ms: toggle edw : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3000 ms | minimized
+occlusion-probe: vscode | minimized | window moved into view: the effect shows after 96 ms: the action was delivered, the tree was not current
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode | select | visible | no combo box in the window's tree: not measured
+occlusion-probe: vscode | select | covered | no combo box in the window's tree: not measured
+occlusion-probe: vscode | strip widths not searched: the tree stays current entirely covered
+occlusion-probe: summary | target | situation | launches (first contacts) | nodes at first contact, median (min..max) | nodes once built, median | element in the tree in place: at the first read, in all, median ms | moved into view: built, median ms | cold actions with the effect in under 1000 ms | warm actions | delay of the effects shown, median / p95 | share of the actions | effects not shown in place that showed once the window was in view
+occlusion-probe: summary | vscode | visible | 1 (1) | 14 (14..14) | 147 | 0, 1 of 1, 322 ms | 0 of 0, 0 ms | 1 of 1 | 0 of 1 | 99 / 99 ms | 50 % | 0 of 0
+occlusion-probe: summary | vscode | covered | 1 (1) | 14 (14..14) | 147 | 0, 1 of 1, 311 ms | 0 of 0, 0 ms | 1 of 1 | 1 of 1 | 190 / 229 ms | 100 % | 0 of 0
+occlusion-probe: summary | vscode | strip | 1 (1) | 14 (14..14) | 147 | 0, 1 of 1, 322 ms | 0 of 0, 0 ms | 1 of 1 | 1 of 1 | 181 / 239 ms | 100 % | 0 of 0
+occlusion-probe: summary | vscode | other_display | 1 (1) | 14 (14..14) | 147 | 0, 1 of 1, 312 ms | 0 of 0, 0 ms | 1 of 1 | 1 of 1 | 133 / 283 ms | 100 % | 0 of 0
+occlusion-probe: summary | vscode | minimized | 1 (1) | 14 (14..14) | 147 | 0, 0 of 1, 0 ms | 1 of 1, 292 ms | 0 of 1 | 0 of 1 | none shown | 0 % | 1 of 1
+occlusion-probe: verdict | vscode | A19 VALIDATED: 100 % of the actions on the entirely covered window showed their effect in under 1000 ms (threshold 95 %)

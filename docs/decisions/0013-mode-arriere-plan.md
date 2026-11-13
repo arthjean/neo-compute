@@ -306,3 +306,75 @@ Trois corrections, sans changement de contrat :
 Inventaire de la recherche revu : les 11 actions sans interférence d'agent-desktop ont leur équivalent dans `ui_act` (click : `invoke` et son repli `DoDefaultAction` ; set-value et clear : `set_value`, valeur vide comprise ; toggle, check, uncheck, expand, collapse, select, scroll ; scroll-to : `scroll_into_view`).
 
 Mesures de la revue : `bg-act` 2 355 µs (référence 2 545 µs), `bg-settle` 65 217 µs (référence 64 061 µs), `bg-verdict` 1 290 µs au p95.
+
+## Sonde US-058 et mesures de EP-014
+
+Mesures du 2026-11-13 sur la machine de référence, par `neo-compute occlusion-probe` (sortie complète : `0013-occlusion-probe-run.txt`, tableau dans `bench/apps.md`), `neo-compute selftest --background` et les tests du cœur. Les extensions de contrat appliquées sont celles du point 4 : `root` et `depth` sur `ui_tree`, les termes `id:` et `value:` de `ui_find`. Aucune autre modification de contrat.
+
+### Méthode
+
+Chaque lancement démarre un processus neuf (profil isolé pour Chrome), place sa fenêtre de 1100x800 dans une situation avant toute requête UI Automation, puis envoie un `ui_act toggle` à froid et un à chaud par un serveur `--mode background`, pendant qu'une fenêtre leurre encadrée d'un autre processus tient le premier plan (Chromium ignore une fenêtre `WS_POPUP` dans son calcul d'occlusion). Une action compte quand son effet se lit dans l'arbre en moins de 1 s. 10 lancements par situation, 5 situations, soit 20 actions par cellule.
+
+### Résultats
+
+| Cible | Visible inactive | Entièrement recouverte | Recouverte sauf 16 px | Autre écran | Minimisée |
+|---|---|---|---|---|---|
+| Chrome 156 | 100 %, p95 89 ms | 0 % | 100 %, p95 82 ms | 100 %, p95 82 ms | 0 % |
+| VS Code | 95 %, p95 288 ms | 95 %, p95 289 ms | 100 %, p95 291 ms | 100 %, p95 286 ms | 0 % |
+
+- **Chrome recouvert ou minimisé ne construit pas son arbre web.** Premier contact : 37 nœuds, le cadre seul ; 150 une fois construit. Recouvert, l'élément visé n'entre jamais dans l'arbre en 4 s de relectures (0 lancement sur 10). Ce n'est donc pas « pas encore construit » : rappeler `ui_tree` ne construit rien.
+- **L'action part quand même.** Les 20 actions envoyées à un Chrome recouvert ou minimisé, sur un arbre construit puis recouvert, ont toutes été délivrées : leur effet s'est lu dès la fenêtre revenue en vue. `ui_act` répond « contredit » parce que l'arbre relu n'est plus à jour, pas parce que l'action a échoué. Une action UI Automation ne force pas la mise à jour.
+- **Découvrir débloque.** Remise en vue, la fenêtre construit son arbre en 290 ms (médiane) ; restaurée depuis l'état minimisé, en 25 ms.
+- **Une bande suffit.** Avec 16 px en vue, 20 actions sur 20 ; la plus petite bande essayée, 1 px, a tenu sur 4 actions de 4. La recommandation reste 16 px : une marge sur les bordures invisibles et l'arrondi des angles.
+- **VS Code ne se fige pas recouvert.** Il désactive le calcul d'occlusion de Chromium. Ses deux actions manquées, une visible et une recouverte, sont perdues par VS Code lui-même (aucun effet une fois en vue) : le taux est le même dans les deux situations. Minimisé, il se fige comme Chrome.
+- **`<select>` de Chrome.** Fermé, il ne liste aucune entrée ; `expand` est contredit (il reste replié), visible comme recouvert ; `collapse` échoue (`hr=0x80131509`). VS Code n'a pas de liste déroulante dans sa fenêtre : non mesuré.
+- **WPF.** La fenêtre montre ses 11 nœuds, contrôles compris, dès la première lecture, 0 ms après son apparition (première lecture 90 à 103 ms), sur 3 lancements de 3 : pas d'arbre vide du provider générique à attendre.
+
+### Verdict
+
+**A19 est réfutée pour Chrome** (0 % recouvert, seuil 95 %) et **validée pour VS Code** (95 %). La situation la moins coûteuse qui atteint 95 % pour Chrome est la bande visible de 16 px (100 %), devant l'autre écran (100 %) ; c'est celle que US-059 recommande.
+
+### Signalement (US-059)
+
+- `{occluded}` sur l'en-tête d'une racine, dans `ui_tree` et `ui_find`, et dans les drapeaux de `window_list`, quand plus rien de la fenêtre ne se voit sous les fenêtres au-dessus. Sont ignorées : les fenêtres minimisées, masquées (cloaked), traversées par les clics (`WS_EX_TRANSPARENT`), translucides ou à couleur clé, à région complexe, et celles de l'indicateur.
+- Une cible `Chrome_WidgetWin_*` est jugée comme Chromium se juge : sur les rectangles de fenêtre (bordures invisibles comprises) et sans les fenêtres que son calcul ignore (popups et fenêtres outils, hors barre des tâches et popups de Chromium). Une autre fenêtre est jugée sur les cadres visibles, toute fenêtre opaque comptée.
+- Cible Chromium recouverte : `ui_tree` termine par « Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. Déplace-la avec window_set pour qu'une bande d'au moins 16 px reste visible (window_list donne les rectangles des fenêtres au-dessus), ou sur un autre écran. » La ligne remplace le conseil « rappelle ui_tree dans 1 s », suit un delta, et s'ajoute au résultat d'un `ui_act` contredit.
+- `Code.exe` reçoit le drapeau sans la ligne : la liste des applications Electron mesurées sans gel tient dans `a11y.zig` (`renders_covered`).
+- Constat sur les vraies fenêtres : Chrome recouvert par le leurre porte le drapeau et la ligne ; avec 16 px en vue, ni l'un ni l'autre, comme Chromium le calcule ; VS Code recouvert porte le drapeau seul.
+
+### Coûts
+
+| Mesure | Résultat | Budget |
+|---|---|---|
+| `ui_tree` avec `root` sur l'élément fenêtre de la fenêtre de test, p95 | 30,9 ms (arbre entier : 31,5 ms) | 50 ms, p95 de l'arbre entier |
+| `ui_find id:<id>` sur la fenêtre de test, p95 | 0,87 ms, CPU du processus 0,78 ms | 10 ms |
+| `ui_find id:<id>` sur Chrome et VS Code, p95 | 0,69 à 0,92 ms | 10 ms |
+| Lecture de l'empilement et calcul d'occlusion, 51 fenêtres au-dessus de la cible (62 dans l'empilement), p95 | 0,14 ms | 1 ms |
+| `window_list` au bench (ReleaseFast), `dispatch` p95, drapeau compris | 0,43 à 0,61 ms | 110 % de la référence de 0,61 ms |
+| Définitions `alwaysLoad` | environ 1 305 tokens | 1 500 |
+| `tools/list` | environ 3 961 tokens | 4 500 |
+
+Mesures en build Debug sauf le bench, provider de la fenêtre de test dans le même processus. `window_list` lit l'empilement dans l'énumération de sa propre liste : un calcul par fenêtre listée le portait à 3,4 ms, une seconde énumération à 0,81 ms.
+
+### Points soumis à Arthur
+
+1. **Fenêtre Chromium minimisée.** Elle n'est pas « recouverte » et ne porte pas `{occluded}`, mais elle se fige de la même façon (0 %). `ui_tree` ajoute pour elle « Fenêtre minimisée : Chromium suspend son rendu, l'arbre peut être figé. Restaure-la avec window_set state normal, une bande d'au moins 16 px visible. » Le PRD ne demande que le cas recouvert : ligne à garder ou à retirer. **Décidé (2026-11-13) : gardée**, pour toute fenêtre Chromium minimisée, VS Code compris (PRD 1.4, US-059).
+2. **Terme entre guillemets de `ui_find`.** Le nom entier doit être égal, sans tenir compte de la casse ni des accents, comme les mots. Avant, un terme entre guillemets était une sous-chaîne à plusieurs mots. **Accepté (2026-11-13)** : c'est le critère de US-057, et ni les évals ni les instructions ne dépendaient de l'ancien sens.
+3. **Plus de 20 correspondances.** La première ligne « <n> correspondances, 20 affichées » remplace la dernière ligne « … <n> autres résultats : précise la requête. ».
+4. **`<select>` de Chrome** : sans effet par ExpandCollapse même visible. À verser à Q18. **Décidé (2026-11-13)** : dans la tâche d'éval de US-062, la liste déroulante devient une liste Win32 et la case d'une page Chrome reste ; le `<select>` d'une page Chromium fenêtre non active est une limite connue (PRD 1.4, Non-Goals).
+
+## Revue de EP-014 (2026-11-13)
+
+Une correction, sans changement de contrat :
+
+- **Fenêtre VS Code minimisée.** La sonde la mesure figée comme Chrome (0 action sur 20, arbre jamais construit en place), mais seule une cible soumise au calcul d'occlusion recevait la ligne « Fenêtre minimisée ». Toute fenêtre `Chrome_WidgetWin_*` minimisée la reçoit désormais, `Code.exe` compris ; recouverte, VS Code garde le drapeau sans ligne.
+
+Sonde relancée après la correction (`occlusion-probe chrome vscode reps=1`) : Chrome recouvert ou minimisé 0 %, bande de 16 px et autre écran 100 %, A19 réfutée ; VS Code recouvert 100 %, A19 validée ; VS Code minimisé 0 %, ligne présente. `ui_tree` avec `root` sur le plus grand conteneur de VS Code : 70 lignes, 3 675 caractères, sous le plafond de 8 000.
+
+Mesures de la revue : `bg-tree-root` 32,0 ms au p95 (arbre entier 33,1 ms), `bg-reread` 0,99 ms, `bg-occlusion-cost` 0,18 ms avec 51 fenêtres au-dessus ; au bench, `window_list` 507 µs (référence 601 µs), `ui_tree` 31 426 µs (référence 29 926 µs), `bg-act` 2 765 µs (référence 2 549 µs), `bg-settle` 54 242 µs sur `settle` (référence 64 061 µs).
+
+Limite connue, non corrigée : `renders_covered` ne nomme que `Code.exe`. Une autre application Electron qui désactive le calcul d'occlusion (VS Code Insiders, Cursor) recevrait à tort la ligne « Fenêtre recouverte ».
+
+### Décisions d'Arthur après la revue (2026-11-13)
+
+Réponse d'Arthur aux quatre recommandations de la revue : « Ok vas-y ». Les points 1, 2 et 4 ci-dessus portent leur décision. La limite de `renders_covered` ne se règle pas en allongeant la liste : une action lue « vérifié » sur une fenêtre recouverte prouve que l'application rend recouverte, et l'avertissement cesse alors pour elle pendant la session, comme l'abonnement UI Automation s'apprend par observation (US-048). C'est une idée de conception, pas une mesure : la story US-065 (EP-018, PRD 1.4) commence par la sonde de l'hypothèse A23 (aucune action lue « vérifié » sur un Chrome recouvert, élément du document web) et s'arrête si elle est infirmée.

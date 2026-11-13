@@ -132,6 +132,8 @@ const Job = union(enum) {
     op: struct { arena: std.mem.Allocator, window: u64, key: u64, op: uitree.Op, out: uitree.OpResult = undefined },
     scroll_host: struct { arena: std.mem.Allocator, window: u64, key: u64, out: ?u64 = null },
     entries: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.EntriesResult = undefined },
+    subtree: struct { arena: std.mem.Allocator, window: u64, key: u64, request: uitree.Request, out: uitree.SubtreeResult = undefined },
+    element: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.ElementResult = undefined },
     /// Rectangles of the visible password fields of the foreground window,
     /// into `Worker.secret_buf` (no arena: the dispatcher keeps using its
     /// own while the scan runs).
@@ -216,6 +218,22 @@ pub const Worker = struct {
         self.job = .{ .entries = .{ .arena = arena, .window = window, .key = key } };
         self.run();
         return self.job.entries.out;
+    }
+
+    /// The subtree below element `key`: see `Session.readSubtree`.
+    pub fn subtree(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64, request: uitree.Request) uitree.SubtreeResult {
+        if (self.start()) |msg| return .{ .failed = msg };
+        self.job = .{ .subtree = .{ .arena = arena, .window = window, .key = key, .request = request } };
+        self.run();
+        return self.job.subtree.out;
+    }
+
+    /// Element `key` alone: see `Session.readElement`.
+    pub fn element(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64) uitree.ElementResult {
+        if (self.start()) |msg| return .{ .failed = msg };
+        self.job = .{ .element = .{ .arena = arena, .window = window, .key = key } };
+        self.run();
+        return self.job.element.out;
     }
 
     /// Subscribes to the UI Automation events of `hwnd` (`uia_events.zig`)
@@ -318,6 +336,12 @@ pub const Worker = struct {
                 .op => |*j| j.out = session.?.runOp(j.arena, j.window, j.key, j.op),
                 .scroll_host => |*j| j.out = session.?.scrollHost(j.arena, j.window, j.key),
                 .entries => |*j| j.out = session.?.listEntries(j.arena, j.window, j.key),
+                .subtree => |*j| {
+                    session.?.extras_ns = 0;
+                    j.out = session.?.readSubtree(j.arena, j.window, j.key, j.request);
+                    self.extras_ns = session.?.extras_ns;
+                },
+                .element => |*j| j.out = session.?.readElement(j.arena, j.window, j.key),
                 .secrets => self.secret_len = session.?.secrets(&self.secret_buf),
                 .watch => |*j| j.out = session.?.watchWindow(j.hwnd),
             }
@@ -406,6 +430,14 @@ const Session = struct {
     extras_ns: u64 = 0,
     retained: [4]Retained = @splat(.{}),
     clock: u64 = 0,
+    /// Element references of the last subtree read (US-056). A slot of its
+    /// own: a subtree never evicts the snapshot of its window, whose other
+    /// elements keep their ids.
+    sub: Retained = .{},
+    /// The main properties, the patterns and the positions of one element,
+    /// for a single read (US-057); the second adds MSAA's role and state.
+    single_cache: ?*w.IUIAutomationCacheRequest = null,
+    single_msaa_cache: ?*w.IUIAutomationCacheRequest = null,
     /// The event handlers registered on the watched window, and those of a
     /// window that did not answer when they had to be removed.
     watched: ?uia_events.Subscription = null,
@@ -487,6 +519,9 @@ const Session = struct {
         _ = self.watchWindow(0);
         if (self.stale) |sub| release(sub.element);
         for (&self.retained) |*r| r.deinit(self.gpa);
+        self.sub.deinit(self.gpa);
+        if (self.single_cache) |c| release(c);
+        if (self.single_msaa_cache) |c| release(c);
         if (self.element_cache) |c| release(c);
         if (self.password_condition) |c| release(c);
         if (self.secret_cache) |c| release(c);
@@ -698,17 +733,7 @@ const Session = struct {
         }
         for (items, keep) |*e, k| {
             if (!k or e.role != .edit) continue;
-            const el = slot.find(e.key) orelse continue;
-            const msaa_role: u32 = @bitCast(cachedInt(el, w.UIA_LegacyIAccessibleRolePropertyId) orelse continue);
-            const state: u32 = @bitCast(cachedInt(el, w.UIA_LegacyIAccessibleStatePropertyId) orelse continue);
-            if (state & w.STATE_SYSTEM_PROTECTED != 0) {
-                e.password = true;
-                e.value = null;
-            } else if (msaa_role == w.ROLE_SYSTEM_TEXT and state & w.STATE_SYSTEM_FOCUSABLE == 0) {
-                e.role = .text;
-                e.actions.value = false;
-                e.value = null;
-            }
+            fixMsaaEdit(e, slot.find(e.key) orelse continue);
         }
         // Compaction: kept elements in order, positions remapped.
         const gone = std.math.maxInt(u32);
@@ -732,10 +757,27 @@ const Session = struct {
         positioned.items.len = kept;
     }
 
-    /// Whether `window`'s retained tree came through the MSAA proxy.
+    /// What MSAA's role and state, cached with `el`, say of an `edit` the
+    /// proxy reports: a protected field is a password, a text leaf that
+    /// takes no focus is a label.
+    fn fixMsaaEdit(e: *uitree.Element, el: *w.IUIAutomationElement) void {
+        const msaa_role: u32 = @bitCast(cachedInt(el, w.UIA_LegacyIAccessibleRolePropertyId) orelse return);
+        const state: u32 = @bitCast(cachedInt(el, w.UIA_LegacyIAccessibleStatePropertyId) orelse return);
+        if (state & w.STATE_SYSTEM_PROTECTED != 0) {
+            e.password = true;
+            e.value = null;
+        } else if (msaa_role == w.ROLE_SYSTEM_TEXT and state & w.STATE_SYSTEM_FOCUSABLE == 0) {
+            e.role = .text;
+            e.actions.value = false;
+            e.value = null;
+        }
+    }
+
+    /// Whether `window`'s retained tree, or the last subtree read in it,
+    /// came through the MSAA proxy.
     fn msaaWindow(self: *const Session, window: u64) bool {
         for (&self.retained) |*r| if (r.used != 0 and r.hwnd == window) return r.msaa_proxy;
-        return false;
+        return self.sub.used != 0 and self.sub.hwnd == window and self.sub.msaa_proxy;
     }
 
     /// Chrome, Edge, Electron and Firefox top-level windows.
@@ -953,29 +995,34 @@ const Session = struct {
         };
         const focused = found orelse return;
         if (focused.password) return;
-        const el = slot.find(focused.key) orelse return;
+        if (selectionOf(arena, slot.find(focused.key) orelse return)) |sel| focused.selection = sel;
+    }
+
+    /// The text selected in `el`, through TextPattern; null without the
+    /// pattern or a selection.
+    fn selectionOf(arena: std.mem.Allocator, el: *w.IUIAutomationElement) ?[]const u8 {
         var raw: ?*anyopaque = null;
         // Cached with the subtree; a Win32 proxy serves it live only.
         if (el.vtable.GetCachedPatternAs(el, w.UIA_TextPatternId, &w.IUIAutomationTextPattern.iid, &raw) < 0 or raw == null)
-            if (el.vtable.GetCurrentPatternAs(el, w.UIA_TextPatternId, &w.IUIAutomationTextPattern.iid, &raw) < 0) return;
-        const tp: *w.IUIAutomationTextPattern = @ptrCast(@alignCast(raw orelse return));
+            if (el.vtable.GetCurrentPatternAs(el, w.UIA_TextPatternId, &w.IUIAutomationTextPattern.iid, &raw) < 0) return null;
+        const tp: *w.IUIAutomationTextPattern = @ptrCast(@alignCast(raw orelse return null));
         defer release(tp);
         var ranges: ?*w.IUIAutomationTextRangeArray = null;
-        if (tp.vtable.GetSelection(tp, &ranges) < 0) return;
-        const arr = ranges orelse return;
+        if (tp.vtable.GetSelection(tp, &ranges) < 0) return null;
+        const arr = ranges orelse return null;
         defer release(arr);
         var len: i32 = 0;
-        if (arr.vtable.get_Length(arr, &len) < 0 or len == 0) return;
+        if (arr.vtable.get_Length(arr, &len) < 0 or len == 0) return null;
         var range: ?*w.IUIAutomationTextRange = null;
-        if (arr.vtable.GetElement(arr, 0, &range) < 0) return;
-        const r = range orelse return;
+        if (arr.vtable.GetElement(arr, 0, &range) < 0) return null;
+        const r = range orelse return null;
         defer release(r);
         var text: w.BSTR = null;
         // One unit more than shown, so the formatter marks a cut.
-        if (r.vtable.GetText(r, uitree.max_selection_chars + 1, &text) < 0) return;
+        if (r.vtable.GetText(r, uitree.max_selection_chars + 1, &text) < 0) return null;
         defer w.SysFreeString(text);
-        const sel = bstrText(arena, text, uitree.max_selection_chars + 1) catch return;
-        if (sel.len > 0) focused.selection = sel;
+        const sel = bstrText(arena, text, uitree.max_selection_chars + 1) catch return null;
+        return if (sel.len > 0) sel else null;
     }
 
     const ReadError = error{ ElementNotAvailable, Timeout, ComCallFailed };
@@ -1021,6 +1068,152 @@ const Session = struct {
         var root: ?*w.IUIAutomationElement = null;
         check(array.vtable.GetElement(array, 0, &root)) catch |e| return classify(e);
         return root.?;
+    }
+
+    /// `el` with its control-view subtree cached, in one round trip from
+    /// that element (US-056). When the provider times out, the element
+    /// alone (a partial tree).
+    fn readFrom(self: *Session, el: *w.IUIAutomationElement, cache: *w.IUIAutomationCacheRequest, partial: *bool) ReadError!*w.IUIAutomationElement {
+        var arr: ?*w.IUIAutomationElementArray = null;
+        check(el.vtable.FindAllBuildCache(el, w.TreeScope_Element, self.control_view, cache, &arr)) catch |e| {
+            const c = classify(e);
+            if (c != error.Timeout) return c;
+            partial.* = true;
+            var alone: ?*w.IUIAutomationElement = null;
+            check(el.vtable.BuildUpdatedCache(el, self.elementCache() catch return error.Timeout, &alone)) catch return error.Timeout;
+            return alone orelse error.Timeout;
+        };
+        const array = arr orelse return error.ElementNotAvailable;
+        defer release(array);
+        var len: i32 = 0;
+        check(array.vtable.get_Length(array, &len)) catch |e| return classify(e);
+        var root: ?*w.IUIAutomationElement = null;
+        if (len == 0) {
+            // The element is outside the control view (a scroll host, an
+            // entry kept by `adopt`): cache from it directly.
+            check(el.vtable.BuildUpdatedCache(el, cache, &root)) catch |e| return classify(e);
+            return root orelse error.ElementNotAvailable;
+        }
+        check(array.vtable.GetElement(array, 0, &root)) catch |e| return classify(e);
+        return root orelse error.ElementNotAvailable;
+    }
+
+    /// The control-view subtree of element `key` (US-056), read from that
+    /// element down: the rest of its window is not read. Element 0 is the
+    /// element, at depth 0. The references go to `sub`, which the next
+    /// subtree replaces; the snapshot of the window stays retained.
+    fn readSubtree(self: *Session, arena: std.mem.Allocator, window: u64, key: u64, request: uitree.Request) uitree.SubtreeResult {
+        const found = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            .gone => return .gone,
+            .failed => |m| return .{ .failed = m },
+        };
+        // It may be held by `sub` alone, which this read clears.
+        _ = found.vtable.AddRef(found);
+        defer release(found);
+        const hwnd: w.HWND = @ptrFromInt(window);
+        // As a snapshot does: a Firefox served by the MSAA proxy is read
+        // with MSAA's role and state, which mark its password fields.
+        const msaa = isFirefox(hwnd) and self.windowProxied(hwnd);
+        const cache = if (msaa) self.msaaCache() catch self.subtree else self.subtree;
+        var partial = false;
+        const root = self.readFrom(found, cache, &partial) catch |err| return switch (err) {
+            error.ElementNotAvailable => .gone,
+            error.Timeout => .{ .failed = hung_message },
+            else => .{ .failed = fail(arena, "lecture du sous-arbre") },
+        };
+        defer release(root);
+        const slot = &self.sub;
+        slot.clear();
+        slot.hwnd = window;
+        slot.used = 1;
+        var out: std.ArrayList(uitree.Element) = .empty;
+        var positioned: std.ArrayList(Positioned) = .empty;
+        var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        const oom: uitree.SubtreeResult = .{ .failed = "Mémoire insuffisante : réessaie." };
+        self.walk(arena, root, slot, &out, &positioned, &seen) catch return oom;
+        if (out.items.len == 0) return .gone;
+        var web_text: uitree.WebText = .not_requested;
+        var page: ?uitree.Page = null;
+        if (request.text) {
+            // The web document of the subtree; a subtree inside a page is
+            // read in the content view from its own element.
+            const doc: ?usize = if (isBrowser(hwnd)) for (out.items, 0..) |e, i| {
+                if (e.role == .document) break i;
+            } else 0 else null;
+            if (doc) |d| {
+                page = self.readWebText(arena, slot, &out, &positioned, &seen, d) catch return oom;
+                web_text = .read;
+            } else web_text = .no_document;
+        }
+        if (msaa) {
+            slot.msaa_proxy = true;
+            fixMsaa(arena, slot, &out, &positioned) catch return oom;
+        }
+        const roots = [_]uitree.Root{.{ .start = 0, .handle = window }};
+        self.readPositions(positioned.items, out.items, &roots, &partial);
+        if (!partial) self.readSelection(arena, slot, out.items);
+        return .{ .ok = .{ .window = window, .elements = out.items, .partial = partial, .web_text = web_text, .page = page } };
+    }
+
+    /// Element `key` as a snapshot reads it (US-057): its properties, its
+    /// patterns and its range or scroll position in one cached round trip
+    /// to the element. The window's tree is not read. The selection of a
+    /// focused element costs one more, as in a snapshot.
+    fn readElement(self: *Session, arena: std.mem.Allocator, window: u64, key: u64) uitree.ElementResult {
+        const el = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            .gone => return .gone,
+            .failed => |m| return .{ .failed = m },
+        };
+        const failed = "lecture de l'élément";
+        const msaa = self.msaaWindow(window);
+        const cache = self.singleCache(msaa) catch return .{ .failed = fail(arena, failed) };
+        var updated: ?*w.IUIAutomationElement = null;
+        check(el.vtable.BuildUpdatedCache(el, cache, &updated)) catch |err|
+            return if (err == error.ElementNotAvailable) .gone else .{ .failed = fail(arena, failed) };
+        const now = updated orelse return .gone;
+        defer release(now);
+        var e = read(arena, now, 0, max_name_units) catch |err|
+            return if (err == error.ElementNotAvailable) .gone else .{ .failed = fail(arena, failed) };
+        if (hasCachedPattern(now, w.UIA_RangeValuePatternId)) {
+            const value = cachedDouble(now, w.UIA_RangeValueValuePropertyId);
+            const min = cachedDouble(now, w.UIA_RangeValueMinimumPropertyId);
+            const max = cachedDouble(now, w.UIA_RangeValueMaximumPropertyId);
+            if (value != null and min != null and max != null)
+                e.range = .{ .value = value.?, .min = min.?, .max = max.?, .read_only = cachedFlag(now, w.UIA_RangeValueIsReadOnlyPropertyId) };
+        }
+        if (hasCachedPattern(now, w.UIA_ScrollPatternId)) {
+            const sc: uitree.Scroll = .{
+                .v = scrollPercent(cachedDouble(now, w.UIA_ScrollVerticalScrollPercentPropertyId)),
+                .h = scrollPercent(cachedDouble(now, w.UIA_ScrollHorizontalScrollPercentPropertyId)),
+            };
+            if (sc.any()) e.scroll = sc;
+        }
+        if (msaa and e.role == .edit) fixMsaaEdit(&e, now);
+        // FR-09: never for a password field.
+        if (e.states.focused and !e.password) e.selection = selectionOf(arena, now);
+        return .{ .ok = e };
+    }
+
+    /// The cache of a single read: what the main cache holds of an element
+    /// plus its range and scroll position, without its subtree.
+    fn singleCache(self: *Session, msaa: bool) com.Error!*w.IUIAutomationCacheRequest {
+        const kept = if (msaa) &self.single_msaa_cache else &self.single_cache;
+        if (kept.*) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        for (properties) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        for ([_]w.UIA_PROPERTY_ID{
+            w.UIA_RangeValueValuePropertyId,      w.UIA_RangeValueMinimumPropertyId,           w.UIA_RangeValueMaximumPropertyId,
+            w.UIA_RangeValueIsReadOnlyPropertyId, w.UIA_ScrollVerticalScrollPercentPropertyId, w.UIA_ScrollHorizontalScrollPercentPropertyId,
+        }) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        if (msaa) for (msaa_properties) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
+        for (patterns) |p| try check(cache.?.vtable.AddPattern(cache.?, p.id));
+        for (position_patterns) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
+        kept.* = cache;
+        return cache.?;
     }
 
     /// Rectangles of the on-screen IsPassword elements of the foreground
@@ -1460,7 +1653,7 @@ const Session = struct {
     fn adopt(self: *Session, near: u64, key: u64, el: *w.IUIAutomationElement) void {
         const slot = for (&self.retained) |*r| {
             if (r.used != 0 and r.find(near) != null) break r;
-        } else return;
+        } else if (self.sub.find(near) != null) &self.sub else return;
         if (slot.find(key) != null) return;
         slot.keys.append(self.gpa, key) catch return;
         slot.elements.append(self.gpa, el) catch {
@@ -1477,7 +1670,7 @@ const Session = struct {
         for (&self.retained) |*r| if (r.used != 0) {
             for (r.keys.items, 0..) |k, i| if (k == key) return r.elements.items[i];
         };
-        return null;
+        return self.sub.find(key);
     }
 };
 

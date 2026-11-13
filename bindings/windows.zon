@@ -157,6 +157,10 @@
         "SWP_SHOWWINDOW",                             "SW_HIDE",                                   "WM_DISPLAYCHANGE",                           "FW_SEMIBOLD",                               "CLEARTYPE_QUALITY",
         "TRANSPARENT",                                "WM_DPICHANGED",
 
+        // Occlusion (US-059): which windows above a target hide it
+                                    "GetLayeredWindowAttributes",                 "LWA_COLORKEY",                              "GetWindowRgn",
+        "CreateRectRgn",                              "COMPLEXREGION",
+
         // clipboard (US-035): a message-only owner window on its own thread
                                     "OpenClipboard",                              "CloseClipboard",                            "EmptyClipboard",
         "GetClipboardData",                           "SetClipboardData",                          "IsClipboardFormatAvailable",                 "EnumClipboardFormats",                      "GetClipboardFormatNameW",

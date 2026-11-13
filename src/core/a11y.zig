@@ -33,6 +33,10 @@ const Snap = struct {
     roots: []const uitree.Root,
     maps: []const display.Mapping,
     viewports: []const display.Rect,
+    /// The subtree of one element (US-056), not a whole window.
+    sub: bool = false,
+    /// What to do when the tree may be frozen (US-059): see `occlusion`.
+    frozen: ?[]const u8 = null,
 
     /// Root index of element `index`.
     fn rootOf(s: *const Snap, index: u32) usize {
@@ -43,6 +47,67 @@ const Snap = struct {
 };
 
 const intersection = display.intersection;
+
+/// US-058 (decision 0013): Chrome stops rendering a page nobody can see, and
+/// its tree then stays as it was: no action on an entirely covered or
+/// minimized window showed its effect (0 of 20 each), though every one was
+/// delivered. With a strip of 16 px in view, 20 of 20 showed it.
+pub const frozen_covered = "Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. Déplace-la avec window_set pour qu'une bande d'au moins 16 px reste visible (window_list donne les rectangles des fenêtres au-dessus), ou sur un autre écran.";
+pub const frozen_minimized = "Fenêtre minimisée : Chromium suspend son rendu, l'arbre peut être figé. Restaure-la avec window_set state normal, une bande d'au moins 16 px visible.";
+
+/// Electron applications measured to keep rendering while covered: they
+/// turn Chromium's occlusion calculation off (VS Code, US-058). Minimized,
+/// they stop like any Chromium window.
+const renders_covered = [_][]const u8{"Code.exe"};
+
+pub const Occlusion = struct {
+    /// Nothing of the window shows under the windows above it.
+    occluded: bool = false,
+    /// The line to add when its tree may be frozen.
+    frozen: ?[]const u8 = null,
+};
+
+/// Whether `window` is entirely covered (US-059), and what to say when its
+/// tree may be frozen for it. A Chromium window is judged as Chromium
+/// judges itself: on window rectangles, and without the popups and tool
+/// windows its occlusion tracker ignores. Any other window is judged on
+/// what shows: visible frames, every opaque window above.
+pub fn occlusion(ctx: anytype, window: u64) Occlusion {
+    return occlusionIn(ctx, ctx.backend.windowLayers(ctx.arena), window);
+}
+
+/// `occlusion` among `layers`, read once for several windows: the desktop's
+/// z-order costs one enumeration, whatever the number of windows judged.
+pub fn occlusionIn(ctx: anytype, layers: []const display.Layer, window: u64) Occlusion {
+    const at = for (layers, 0..) |l, i| {
+        if (l.handle == window) break i;
+    } else return .{};
+    const target = layers[at];
+    // Minimized, every Chromium window stops rendering, those that turn the
+    // occlusion calculation off too: VS Code showed 0 effect of 20 (US-058).
+    if (target.minimized) return .{ .frozen = if (target.chromium) frozen_minimized else null };
+    // An Electron application may turn the calculation off: it is then a
+    // window like any other, covered or not, whose tree stays current.
+    const tracks = target.chromium and blk: {
+        const ref = ctx.backend.windowRef(window) orelse break :blk true;
+        const exe = policy.resolve(ctx, ref).exe();
+        for (renders_covered) |name| if (std.ascii.eqlIgnoreCase(exe, name)) break :blk false;
+        break :blk true;
+    };
+    const area = if (tracks) target.outer else target.rect;
+    const covers = ctx.arena.alloc(display.Rect, at) catch return .{};
+    var n: usize = 0;
+    for (layers[0..at]) |l| {
+        if (l.minimized or !l.solid or (tracks and !l.counted)) continue;
+        const r = if (tracks) l.outer else l.rect;
+        if (!r.intersects(area)) continue;
+        covers[n] = r;
+        n += 1;
+    }
+    if (n == 0) return .{};
+    const occluded = display.hidden(ctx.arena, area, ctx.backend.displays(), covers[0..n]);
+    return .{ .occluded = occluded, .frozen = if (occluded and tracks) frozen_covered else null };
+}
 
 pub const target_missing = "Aucune fenêtre cible : passe window (handle de window_list) ou lance l'application avec app_launch.";
 pub const target_closed = "Fenêtre cible fermée : rappelle window_list";
@@ -114,11 +179,19 @@ fn snapshot(ctx: anytype, window: ?u64, record: bool, text: bool) union(enum) { 
     if (snap.elements.len == 0) return .{ .err = "Arbre d'accessibilité vide : utilise screenshot pour cette fenêtre." };
     const displays = ctx.backend.displays();
     if (displays.len == 0) return .{ .err = "Aucun écran détecté : vérifie qu'un écran est allumé, puis réessaie." };
-    const roots = if (snap.roots.len > 0) snap.roots else blk: {
+    const roots = if (snap.roots.len > 0) ctx.arena.dupe(uitree.Root, snap.roots) catch return .{ .err = oom } else blk: {
         const one = ctx.arena.alloc(uitree.Root, 1) catch return .{ .err = oom };
         one[0] = .{ .start = 0, .handle = snap.window };
         break :blk one;
     };
+    // Which roots lie entirely under other windows (US-059).
+    var frozen: ?[]const u8 = null;
+    const layers: []const display.Layer = if (snap.desktop) &.{} else ctx.backend.windowLayers(ctx.arena);
+    for (roots) |*root| {
+        const o = occlusionIn(ctx, layers, root.handle);
+        root.occluded = o.occluded;
+        if (frozen == null) frozen = o.frozen;
+    }
     const maps = ctx.arena.alloc(display.Mapping, roots.len) catch return .{ .err = oom };
     const viewports = ctx.arena.alloc(display.Rect, roots.len) catch return .{ .err = oom };
     for (roots, maps, viewports) |root, *m, *vp| {
@@ -133,7 +206,7 @@ fn snapshot(ctx: anytype, window: ?u64, record: bool, text: bool) union(enum) { 
         for (maps[1..]) |m| ctx.session.shots[m.display] = m;
         ctx.session.recordShot(maps[0]);
     }
-    return .{ .ok = .{ .snap = snap, .roots = roots, .maps = maps, .viewports = viewports } };
+    return .{ .ok = .{ .snap = snap, .roots = roots, .maps = maps, .viewports = viewports, .frozen = frozen } };
 }
 
 /// The windows read along with `window` (US-023): what the backend lists,
@@ -160,31 +233,103 @@ fn extraRoots(ctx: anytype, window: ?u64) []const uitree.RootWindow {
 
 // ---------------------------------------------------------------- ui_tree
 
-/// `ui_tree`: the pruned tree of `window`, or with `since_last` only what
-/// changed since the last tree of that window. With `text`, a web page's
-/// visible text nodes too (US-024); with `with_marks`, the screenshot of the
-/// root's display with each actionable element's id drawn on it (US-031).
-pub fn tree(ctx: anytype, named: ?u64, since_last: bool, text: bool, with_marks: bool) Result {
+/// What `ui_tree` reads and shows.
+pub const TreeOptions = struct {
+    /// Only what changed since the last tree of the window.
+    since_last: bool = false,
+    /// A web page's visible text nodes too (US-024).
+    text: bool = false,
+    /// The screenshot of the root's display with each actionable element's
+    /// id drawn on it (US-031).
+    marks: bool = false,
+    /// The id of the element whose subtree alone is read (US-056).
+    root: ?[]const u8 = null,
+    /// Levels shown below each root (US-056); the elements at the last one
+    /// say how many descendants they hide.
+    depth: ?u16 = null,
+};
+
+const root_with_since = "root et since ne se combinent pas : lis le sous-arbre, puis le delta de la fenêtre.";
+
+/// `ui_tree`: the pruned tree of `window`, of one element's subtree with
+/// `root`, or with `since_last` only what changed since the last tree of
+/// that window.
+pub fn tree(ctx: anytype, named: ?u64, o: TreeOptions) Result {
+    if (o.root) |id_text| return if (o.since_last) Result.err(root_with_since) else subtree(ctx, id_text, o);
     const window = switch (resolveWindow(ctx, named)) {
         .ok => |h| h,
         .err => |e| return Result.err(e),
     };
-    if (!with_marks) return treeOf(ctx, window, since_last, true, text);
-    const s = switch (snapshot(ctx, window, true, text)) {
+    if (!o.marks) return treeOf(ctx, window, o.since_last, true, o.text, o.depth);
+    const s = switch (snapshot(ctx, window, true, o.text)) {
         .ok => |s| s,
         .err => |e| return Result.err(e),
     };
     var labels: std.ArrayList(marks.Label) = .empty;
-    const r = treeText(ctx, s, window == null, since_last, &labels) catch return Result.err(oom);
+    const r = treeText(ctx, s, window == null, o.since_last, &labels, o.depth) catch return Result.err(oom);
     return markedTree(ctx, s, r, labels.items) catch Result.err(oom);
 }
 
-fn treeOf(ctx: anytype, window: ?u64, since_last: bool, record: bool, text: bool) Result {
+fn treeOf(ctx: anytype, window: ?u64, since_last: bool, record: bool, text: bool, depth: ?u16) Result {
     const s = switch (snapshot(ctx, window, record, text)) {
         .ok => |s| s,
         .err => |e| return Result.err(e),
     };
-    return treeText(ctx, s, window == null, since_last, null) catch Result.err(oom);
+    return treeText(ctx, s, window == null, since_last, null, depth) catch Result.err(oom);
+}
+
+fn goneText(ctx: anytype, name: []const u8) []const u8 {
+    return fmt(ctx.arena, "Élément {s} introuvable : rappelle ui_tree", .{name});
+}
+
+/// The mapping of the display `window` sits on, and the part of the window
+/// on it. Null when the window is gone or no display is on.
+fn windowSpace(ctx: anytype, window: u64) ?struct { map: display.Mapping, viewport: display.Rect } {
+    const displays = ctx.backend.displays();
+    if (displays.len == 0) return null;
+    const frame = ctx.backend.windowRect(window) orelse return null;
+    const index = @min(display.displayAt(displays, frame.x + @divTrunc(frame.w, 2), frame.y + @divTrunc(frame.h, 2)) orelse 0, display.max_displays - 1, displays.len - 1);
+    return .{ .map = display.Mapping.of(index, displays[index].rect, ctx.session.long_side), .viewport = intersection(frame, displays[index].rect) orelse frame };
+}
+
+/// `ui_tree` with `root` (US-056): the subtree of one element, read from
+/// that element down, with the output limit for it alone. Its elements keep
+/// the ids the whole tree gives them (FR-05). The window's last tree, which
+/// the next delta compares with, is left as it is.
+fn subtree(ctx: anytype, id_text: []const u8, o: TreeOptions) Result {
+    const name = std.mem.trim(u8, id_text, " ");
+    const id = uitree.parseId(id_text) orelse
+        return Result.err(fmt(ctx.arena, "Identifiant `{s}` invalide : root prend un id de ui_tree ou ui_find (ex. e1k).", .{id_text}));
+    const owner = ctx.session.ui.ids.owner(id) orelse return Result.err(goneText(ctx, name));
+    // A `deny` application is never read (US-017).
+    if (policy.requireWindow(ctx, owner.window, .observe)) |r| return r;
+    ctx.timings.start(ctx.io, .accessibility);
+    const res = ctx.backend.uiSubtree(ctx.arena, owner.window, owner.key, .{ .text = o.text });
+    ctx.timings.stop(ctx.io, .accessibility);
+    var snap = switch (res) {
+        .ok => |sn| sn,
+        .gone => return Result.err(goneText(ctx, name)),
+        .failed => |m| return Result.err(m),
+    };
+    if (snap.elements.len == 0) return Result.err(goneText(ctx, name));
+    // The display and the viewport are the window's, as in its whole tree.
+    const space = windowSpace(ctx, owner.window) orelse return Result.err(goneText(ctx, name));
+    const roots = ctx.arena.alloc(uitree.Root, 1) catch return Result.err(oom);
+    const maps = ctx.arena.alloc(display.Mapping, 1) catch return Result.err(oom);
+    const viewports = ctx.arena.alloc(display.Rect, 1) catch return Result.err(oom);
+    const covered = occlusion(ctx, owner.window);
+    roots[0] = .{ .start = 0, .handle = owner.window, .occluded = covered.occluded };
+    maps[0] = space.map;
+    viewports[0] = space.viewport;
+    ctx.session.recordShot(maps[0]);
+    // The ids keep the window whose tree listed the element.
+    snap.window = owner.tree;
+    snap.roots = &.{};
+    const s: Snap = .{ .snap = snap, .roots = roots, .maps = maps, .viewports = viewports, .sub = true, .frozen = covered.frozen };
+    if (!o.marks) return treeText(ctx, s, false, false, null, o.depth) catch Result.err(oom);
+    var labels: std.ArrayList(marks.Label) = .empty;
+    const r = treeText(ctx, s, false, false, &labels, o.depth) catch return Result.err(oom);
+    return markedTree(ctx, s, r, labels.items) catch Result.err(oom);
 }
 
 /// An element worth a label: one with an action `ui_act` runs. ScrollItem
@@ -205,7 +350,7 @@ fn markedTree(ctx: anytype, s: Snap, r: Result, labels: []const marks.Label) !Re
     // A complete snapshot of the foreground window already lists its
     // password fields: the scan would read them a second time.
     const fg = ctx.backend.windowAt(null);
-    const scan = s.snap.partial or s.snap.web_pending or fg == null or fg.?.handle != s.snap.window;
+    const scan = s.sub or s.snap.partial or s.snap.web_pending or fg == null or fg.?.handle != s.snap.window;
     const shot = switch (screen.marked(ctx, s.maps[0], labels, secrets.items, scan)) {
         .ok => |o| o,
         .err => |e| return Result.text(try std.fmt.allocPrint(ctx.arena, "{s}\nImage indisponible : {s}", .{ text, e })),
@@ -254,8 +399,10 @@ fn pruneRoots(a: std.mem.Allocator, s: Snap) !Pruned {
 }
 
 /// The tree's text; `labels`, when given, receives one label per actionable
-/// element shown on the root's display, in tree order.
-fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?*std.ArrayList(marks.Label)) !Result {
+/// element shown on the root's display, in tree order. With `depth`, the
+/// full text stops that many levels below each root (US-056); the delta and
+/// the tree kept for the next one are those of every level.
+fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?*std.ArrayList(marks.Label), depth: ?u16) !Result {
     const a = ctx.arena;
     const gpa = ctx.session.gpa;
     const ui = &ctx.session.ui;
@@ -275,9 +422,14 @@ fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?
         for (p.kept, p.root_of, ids) |k, ri, id| {
             const e = els[k.index];
             if (!markable(e) or e.states.offscreen or s.maps[ri].display != on.display or !e.rect.intersects(on.rect)) continue;
+            if (depth) |limit| if (k.depth > limit) continue;
             try out.append(a, marks.Label.of(id, on.rectToScreenshot(e.rect)));
         }
     }
+
+    // A subtree is not the window's tree: the next delta still compares
+    // with the last whole one.
+    if (s.sub) return Result.text(try fullText(a, s, p, ids, els.len, null, depth));
 
     var note: ?[]const u8 = null;
     var delta: ?[]const u8 = null;
@@ -297,7 +449,7 @@ fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?
             delta = try deltaText(a, s, p, shown, d, prev.roots);
         } else note = "Aucun arbre précédent de cette fenêtre : arbre complet.";
     }
-    const full = try fullText(a, s, p, ids, els.len, note);
+    const full = try fullText(a, s, p, ids, els.len, note, depth);
     try ui.store.putRoots(gpa, win, shown, handles);
     // The backend learns which applications change without an event: a
     // tree that changed while its change counter stood still.
@@ -311,16 +463,25 @@ fn writeFlags(w: *std.Io.Writer, snap: uitree.Snapshot) !void {
     if (snap.desktop) try w.writeAll("Aucune fenêtre active : arbre du bureau renvoyé\n");
 }
 
-fn fullText(a: std.mem.Allocator, s: Snap, p: Pruned, ids: []const u32, total: usize, note: ?[]const u8) ![]const u8 {
+/// With `depth`, an element at that level says how many kept descendants
+/// its line stands for (`… <n> descendants`): `ui_tree` with its id as
+/// `root` shows them.
+fn fullText(a: std.mem.Allocator, s: Snap, p: Pruned, ids: []const u32, total: usize, note: ?[]const u8, depth: ?u16) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(a);
     const w = &out.writer;
     try writeFlags(w, s.snap);
     if (note) |n| try w.print("{s}\n", .{n});
     var shown: usize = 0;
+    // Elements below the depth limit that a shown line stands for: they
+    // are not pruned.
+    var folded: usize = 0;
+    // The first element the output limit cut.
+    var cut_at: ?usize = null;
     var current: ?u16 = null;
     const text = s.snap.web_text == .read;
     var page_shown = false;
-    for (p.kept, p.root_of, ids) |k, ri, id| {
+    for (p.kept, p.root_of, ids, 0..) |k, ri, id, i| {
+        if (depth) |limit| if (k.depth > limit) continue;
         const mark = out.written().len;
         // Each root opens with its header (US-023).
         if (current != ri) {
@@ -335,25 +496,45 @@ fn fullText(a: std.mem.Allocator, s: Snap, p: Pruned, ids: []const u32, total: u
         const page = if (text and !page_shown and e.role == .document) s.snap.page else null;
         if (page != null) page_shown = true;
         try uitree.writeLineMax(w, k.depth, id, e, s.maps[ri], name_max, page);
+        var below: usize = 0;
+        if (depth) |limit| if (k.depth == limit) {
+            for (p.kept[i + 1 ..], p.root_of[i + 1 ..]) |d, dri| {
+                if (dri != ri or d.depth <= limit) break;
+                below += 1;
+            }
+            if (below > 0) {
+                // On the element's own line, before its newline.
+                out.shrinkRetainingCapacity(out.written().len - 1);
+                try w.print(" … {d} descendants\n", .{below});
+            }
+        };
         if (out.written().len > max_text_output - 160) {
             out.shrinkRetainingCapacity(mark);
+            cut_at = i;
             break;
         }
         shown += 1;
+        folded += below;
     }
-    if (total > shown) try w.print("… {d} nœuds élagués\n", .{total - shown});
-    if (text and shown < p.kept.len) {
+    if (total > shown + folded) try w.print("… {d} nœuds élagués\n", .{total - shown - folded});
+    if (text) if (cut_at) |cut| {
         var omitted: usize = 0;
-        for (p.kept[shown..]) |k| omitted += @intFromBool(uitree.textLine(s.snap.elements[k.index]));
+        for (p.kept[cut..]) |k| {
+            if (depth) |limit| if (k.depth > limit) continue;
+            omitted += @intFromBool(uitree.textLine(s.snap.elements[k.index]));
+        }
         if (omitted > 0) try w.print("… {d} lignes de texte omises : fais défiler puis rappelle ui_tree\n", .{omitted});
-    }
-    if (s.snap.firefox_no_tree) {
+    };
+    if (s.frozen) |line| {
+        // A covered Chromium window: reading again builds nothing.
+        try w.print("{s}\n", .{line});
+    } else if (s.snap.firefox_no_tree) {
         try w.writeAll("Firefox n'expose pas son arbre d'accessibilité : vérifie accessibility.force_disabled ou utilise screenshot\n");
     } else if (s.snap.web_pending) {
         try w.writeAll("Contenu web pas encore exposé (Chromium le construit à la première lecture) : rappelle ui_tree dans 1 s, ou utilise screenshot.\n");
     } else if (s.snap.web_text == .no_document) {
         try w.writeAll("Aucun document web dans cette fenêtre : texte non disponible\n");
-    } else if (p.kept.len <= 2) {
+    } else if (p.kept.len <= 2 and !s.sub) {
         // Electron apps without accessibility expose a bare window.
         try w.writeAll("Arbre presque vide (fréquent avec Electron) : utilise screenshot pour voir cette fenêtre.\n");
     }
@@ -382,6 +563,8 @@ fn deltaText(a: std.mem.Allocator, s: Snap, p: Pruned, shown: []const uitree.Sho
     }
     if (d.entries.len == 0 and d.removed.len == 0 and !roots_changed) {
         try w.writeAll(" delta: aucun changement");
+        // No change may only mean a tree that is not current (US-059).
+        if (s.frozen) |line| try w.print("\n{s}", .{line});
         return out.written();
     }
     var added: usize = 0;
@@ -417,6 +600,7 @@ fn deltaText(a: std.mem.Allocator, s: Snap, p: Pruned, shown: []const uitree.Sho
         try uitree.writeId(w, r.id);
         try w.print(" {t}\n", .{r.role});
     }
+    if (s.frozen) |line| try w.print("{s}\n", .{line});
     return std.mem.trimEnd(u8, out.written(), "\n");
 }
 
@@ -469,6 +653,10 @@ pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32, gone: bo
         .ok => |q| q,
         .err => |e| return Result.err(e),
     };
+    if (q.id) |id| {
+        if (wait_ms > 0) return Result.err("id:<id> relit un élément tout de suite : retire wait_ms et gone.");
+        return rereadElement(ctx, id, q.id_text);
+    }
     const window = switch (resolveWindow(ctx, named)) {
         .ok => |h| h,
         .err => |e| return Result.err(e),
@@ -480,6 +668,33 @@ pub fn find(ctx: anytype, query: []const u8, named: ?u64, wait_ms: u32, gone: bo
     };
     const found = findText(ctx, q, query, s, null) catch return Result.err(oom);
     return found.result;
+}
+
+/// `ui_find` with `id:<id>` (US-057): the element's line as it is now, in
+/// the ui_tree format, read from the element alone: one round trip, the
+/// window's tree is not read. Its window need not be the one a search
+/// would read.
+fn rereadElement(ctx: anytype, id: u32, id_text: []const u8) Result {
+    const name = std.mem.trim(u8, id_text, " ");
+    const owner = ctx.session.ui.ids.owner(id) orelse return Result.err(goneText(ctx, name));
+    // A `deny` application is never read (US-017).
+    if (policy.requireWindow(ctx, owner.window, .observe)) |r| return r;
+    ctx.timings.start(ctx.io, .accessibility);
+    const res = ctx.backend.uiElement(ctx.arena, owner.window, owner.key);
+    ctx.timings.stop(ctx.io, .accessibility);
+    const e = switch (res) {
+        .ok => |el| el,
+        .gone => return Result.err(goneText(ctx, name)),
+        .failed => |m| return Result.err(m),
+    };
+    const space = windowSpace(ctx, owner.window) orelse return Result.err(goneText(ctx, name));
+    ctx.session.recordShot(space.map);
+    var out: std.Io.Writer.Allocating = .init(ctx.arena);
+    const w = &out.writer;
+    uitree.writeRootHeader(w, space.map, .{ .start = 0, .handle = owner.window, .occluded = occlusion(ctx, owner.window).occluded }) catch return Result.err(oom);
+    w.writeByte('\n') catch return Result.err(oom);
+    uitree.writeLine(w, 0, id, e, space.map) catch return Result.err(oom);
+    return Result.text(std.mem.trimEnd(u8, out.written(), "\n"));
 }
 
 /// Searches at once, then again after a change near the target window (a
@@ -584,12 +799,10 @@ fn sameRect(a: ?display.Rect, b: ?display.Rect) bool {
 const Found = struct { result: Result, matched: usize };
 
 /// The matching lines; with `found_after` (a wait), headed by
-/// `found after <n> ms`.
+/// `found after <n> ms`. Past 20 matches, the count comes first (US-057).
 fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap, found_after: ?u64) !Found {
-    var out: std.Io.Writer.Allocating = .init(ctx.arena);
-    const w = &out.writer;
-    if (found_after) |n| try w.print("found after {d} ms\n", .{n});
-    try writeFlags(w, s.snap);
+    var lines: std.Io.Writer.Allocating = .init(ctx.arena);
+    const w = &lines.writer;
     try uitree.writeRootHeader(w, s.maps[0], s.roots[0]);
     try w.writeByte('\n');
     var matched: usize = 0;
@@ -608,7 +821,11 @@ fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap, found_aft
         try uitree.writeLine(w, 0, id, e, s.maps[ri]);
     }
     if (matched == 0) try w.print("Aucun élément ne correspond à `{s}` : essaie un autre nom, role:<rôle>, state:<état> ou ui_tree.\n", .{query});
-    if (matched > max_find_lines) try w.print("… {d} autres résultats : précise la requête.\n", .{matched - max_find_lines});
+    var out: std.Io.Writer.Allocating = .init(ctx.arena);
+    if (found_after) |n| try out.writer.print("found after {d} ms\n", .{n});
+    if (matched > max_find_lines) try out.writer.print("{d} correspondances, {d} affichées\n", .{ matched, max_find_lines });
+    try writeFlags(&out.writer, s.snap);
+    try out.writer.writeAll(lines.written());
     return .{ .result = Result.text(std.mem.trimEnd(u8, out.written(), "\n")), .matched = matched };
 }
 
@@ -697,7 +914,12 @@ const Outcome = struct {
         ctx.audit_detail.verdict = @tagName(o.verdict);
         var out: std.Io.Writer.Allocating = .init(ctx.arena);
         o.write(&out.writer, t, action) catch return Result.err(oom);
-        return if (o.verdict == .contradicted) Result.err(out.written()) else Result.text(out.written());
+        if (o.verdict != .contradicted) return Result.text(out.written());
+        // The state read back may come from a tree that is not current: on
+        // a covered Chrome every action was delivered and none showed
+        // (US-058).
+        if (occlusion(ctx, t.window).frozen) |line| out.writer.print("\n{s}", .{line}) catch return Result.err(oom);
+        return Result.err(out.written());
     }
 
     fn write(self: *const Outcome, w: *std.Io.Writer, t: Elem, action: uitree.Action) !void {
@@ -1619,7 +1841,7 @@ pub fn observeWith(ctx: anytype, r: Result, observe: ?Observe, settle_timeout_ms
     switch (mode) {
         .none => unreachable,
         .delta => {
-            const obs = treeOf(ctx, window, !full, false, false);
+            const obs = treeOf(ctx, window, !full, false, false, null);
             const body = obs.blocks[0].text;
             if (obs.is_error) return Result.text(fmt(ctx.arena, "{s} ; {s}\nObservation indisponible : {s}", .{ done, status, body }));
             return Result.text(fmt(ctx.arena, "{s} ; {s}\n{s}", .{ done, status, body }));

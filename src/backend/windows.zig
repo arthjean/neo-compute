@@ -542,6 +542,16 @@ pub const Windows = struct {
         return self.ui.entries(arena, hwnd, key);
     }
 
+    /// The subtree below one element (US-056), read from that element.
+    pub fn uiSubtree(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, request: uitree.Request) uitree.SubtreeResult {
+        return self.ui.subtree(arena, hwnd, key, request);
+    }
+
+    /// One element as a snapshot reads it, in one round trip (US-057).
+    pub fn uiElement(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64) uitree.ElementResult {
+        return self.ui.element(arena, hwnd, key);
+    }
+
     /// Whether a control pattern call first gives the focus to its target
     /// (UI Automation's default). Off in background mode: that focus brings
     /// the target's window to the foreground.
@@ -701,11 +711,24 @@ pub const Windows = struct {
         return window.rect(if (hwnd) |h| @ptrFromInt(h) else w.GetForegroundWindow());
     }
 
+    /// The visible top-level windows in the z-order, top first (US-059):
+    /// their rectangles and which of them hide what lies under them.
+    pub fn windowLayers(self: *Windows, arena: std.mem.Allocator) []const display.Layer {
+        _ = self;
+        return window.layers(arena);
+    }
+
     /// With `include_hidden`, a cloaked window on another virtual desktop
     /// is flagged `other_desktop` instead (US-026); without
     /// IVirtualDesktopManager it stays `cloaked`.
     pub fn listWindows(self: *Windows, arena: std.mem.Allocator, include_hidden: bool) error{OutOfMemory}![]const display.WindowInfo {
-        const wins = try window.list(arena, include_hidden);
+        return self.listWindowsLayered(arena, include_hidden, null);
+    }
+
+    /// `listWindows`, and with `stack` what `windowLayers` gives, from one
+    /// enumeration of the desktop (US-059).
+    pub fn listWindowsLayered(self: *Windows, arena: std.mem.Allocator, include_hidden: bool, stack: ?*[]const display.Layer) error{OutOfMemory}![]const display.WindowInfo {
+        const wins = try window.listWith(arena, include_hidden, stack);
         if (!include_hidden) return wins;
         var cloaked: std.ArrayList(u64) = .empty;
         for (wins) |win| if (win.cloaked) try cloaked.append(arena, win.handle);
@@ -963,6 +986,8 @@ pub const Windows = struct {
     pub const bgProbe = @import("windows/bg_probe.zig").run;
     /// `events-probe`: do WinEvents report the changes of a covered window (US-047).
     pub const eventsProbe = @import("windows/events_probe.zig").run;
+    /// `occlusion-probe`: does the tree of a covered Chromium window stay current (US-058).
+    pub const occlusionProbe = @import("windows/occlusion_probe.zig").run;
     /// `clipboard-probe`: formats and owner of each new clipboard content (A11).
     pub const clipboardProbe = @import("windows/clipboard_probe.zig").run;
 

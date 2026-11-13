@@ -137,8 +137,10 @@ test "a11y and vision leave UI Automation's focus behavior alone" {
     }
 }
 
-// The lists as they were before the background mode, plus the one optional
-// parameter decision 0013 (point 4) approved since: `gone` on ui_find (US-049).
+// The lists as they were before the background mode, plus the optional
+// parameters decision 0013 (point 4) approved since: `gone` on ui_find
+// (US-049), `root` and `depth` on ui_tree (US-056), and the `id:`, `value:`
+// and quoted terms ui_find's description names (US-057).
 test "tools/list of a11y and vision changes only by the optional parameters decision 0013 approved" {
     try testing.expectEqualStrings(@embedFile("tools_list_a11y"), Server.Reg.list_result);
     try testing.expectEqualStrings(@embedFile("tools_list_vision"), Server.VisionReg.list_result);

@@ -141,6 +141,9 @@ pub const Root = struct {
     handle: u64,
     /// WindowPattern.IsModal, or an owner window that is disabled.
     modal: bool = false,
+    /// Nothing of the window shows under the windows above it (US-059);
+    /// filled by the core.
+    occluded: bool = false,
 };
 
 /// What a snapshot reads beyond the target window's tree.
@@ -196,6 +199,13 @@ pub const Snapshot = struct {
 };
 
 pub const SnapshotResult = union(enum) { ok: Snapshot, err: []const u8 };
+
+/// The subtree below one element (US-056): a snapshot whose element 0 is
+/// that element, at depth 0, and whose only root is its window.
+pub const SubtreeResult = union(enum) { ok: Snapshot, gone, failed: []const u8 };
+
+/// One element read alone, as a snapshot would read it (US-057).
+pub const ElementResult = union(enum) { ok: Element, gone, failed: []const u8 };
 
 /// What `ui_act` does to an element. `check`, `uncheck` and `scroll` came
 /// with EP-013 (decision 0013).
@@ -601,10 +611,12 @@ pub fn writeHeader(w: *std.Io.Writer, m: Mapping, window: u64) !void {
     try w.print("display={d} scale={s} window=0x{x}", .{ m.display, display.scaleText(&sbuf, m.scale), window });
 }
 
-/// The header of a root, ` {modal}` after it for a modal one (US-023).
+/// The header of a root, ` {modal}` after it for a modal one (US-023) and
+/// ` {occluded}` for one entirely covered (US-059).
 pub fn writeRootHeader(w: *std.Io.Writer, m: Mapping, root: Root) !void {
     try writeHeader(w, m, root.handle);
     if (root.modal) try w.writeAll(" {modal}");
+    if (root.occluded) try w.writeAll(" {occluded}");
 }
 
 // ---------------------------------------------------------------- ids
@@ -858,35 +870,63 @@ comptime {
     std.debug.assert(latin_ext_a.len == 128);
 }
 
-/// A parsed ui_find query: `role:<role>`, `state:<state>` and name words
-/// (quoted phrases allowed), all required.
+/// A parsed ui_find query: `role:<role>`, `state:<state>`, `value:<text>`,
+/// name words and quoted names, all required; or `id:<id>` alone, which
+/// reads one element again (US-057).
 pub const Query = struct {
     role: ?Role = null,
     states: States = .{},
+    /// Folded words the name must contain.
     words: []const []const u8 = &.{},
+    /// Folded quoted terms: the whole name must be one of each.
+    exact: []const []const u8 = &.{},
+    /// Folded text the value must contain.
+    value: ?[]const u8 = null,
+    /// `id:<id>`: the element to read again, and its id as written.
+    id: ?u32 = null,
+    id_text: []const u8 = "",
 
     pub const Parsed = union(enum) { ok: Query, err: []const u8 };
+
+    /// End of the quoted text that starts at `from`, and where the scan
+    /// goes on.
+    fn quoted(text: []const u8, from: usize) struct { end: usize, next: usize } {
+        const end = std.mem.indexOfScalarPos(u8, text, from, '"') orelse text.len;
+        return .{ .end = end, .next = @min(end + 1, text.len) };
+    }
 
     pub fn parse(arena: std.mem.Allocator, text: []const u8) !Parsed {
         var q: Query = .{};
         var words: std.ArrayList([]const u8) = .empty;
+        var exact: std.ArrayList([]const u8) = .empty;
+        var terms: usize = 0;
         var i: usize = 0;
         while (i < text.len) {
             if (text[i] == ' ') {
                 i += 1;
                 continue;
             }
-            var term: []const u8 = undefined;
             if (text[i] == '"') {
-                const end = std.mem.indexOfScalarPos(u8, text, i + 1, '"') orelse text.len;
-                term = text[i + 1 .. end];
-                i = end + 1;
-                if (term.len > 0) try words.append(arena, try fold(arena, term));
+                const span = quoted(text, i + 1);
+                const term = std.mem.trim(u8, text[i + 1 .. span.end], " ");
+                i = span.next;
+                if (term.len == 0) continue;
+                try exact.append(arena, try fold(arena, term));
+                terms += 1;
+                continue;
+            }
+            // `value:"two words"`: the quotes hold the spaces.
+            if (std.mem.startsWith(u8, text[i..], "value:\"")) {
+                const span = quoted(text, i + 7);
+                q.value = try fold(arena, text[i + 7 .. span.end]);
+                i = span.next;
+                terms += 1;
                 continue;
             }
             const end = std.mem.indexOfScalarPos(u8, text, i, ' ') orelse text.len;
-            term = text[i..end];
+            const term = text[i..end];
             i = end;
+            terms += 1;
             if (std.mem.startsWith(u8, term, "role:")) {
                 q.role = std.meta.stringToEnum(Role, term[5..]) orelse
                     return .{ .err = try std.fmt.allocPrint(arena, "Rôle `{s}` inconnu : rôles valides {s}.", .{ term[5..], role_names }) };
@@ -897,20 +937,44 @@ pub const Query = struct {
                     found = true;
                 };
                 if (!found) return .{ .err = try std.fmt.allocPrint(arena, "État `{s}` inconnu : états valides {s}.", .{ term[6..], state_names }) };
+            } else if (std.mem.startsWith(u8, term, "value:")) {
+                q.value = try fold(arena, term[6..]);
+            } else if (std.mem.startsWith(u8, term, "id:")) {
+                q.id_text = term[3..];
+                q.id = parseId(term[3..]) orelse
+                    return .{ .err = try std.fmt.allocPrint(arena, "Identifiant `{s}` invalide : id:<id> prend un id de ui_tree ou ui_find (ex. id:e1k).", .{term[3..]}) };
             } else try words.append(arena, try fold(arena, term));
         }
         q.words = words.items;
-        if (q.role == null and q.states.bits() == 0 and q.words.len == 0)
+        q.exact = exact.items;
+        if (q.value) |v| if (v.len == 0) return .{ .err = "value: demande un texte : value:<texte>, ou value:\"deux mots\"." };
+        if (terms == 0)
             return .{ .err = "Requête vide : donne un nom, role:<rôle> ou state:<état>, par exemple role:button enregistrer." };
+        if (q.id != null and terms > 1)
+            return .{ .err = "id:<id> s'utilise seul : il relit un élément. Retire les autres termes, ou cherche sans id:." };
         return .{ .ok = q };
     }
 
+    /// Whether `e` matches every term. A password field never matches
+    /// `value:` (FR-09): a match would tell what it holds.
     pub fn matches(q: Query, arena: std.mem.Allocator, e: Element) !bool {
         if (q.role) |r| if (e.role != r) return false;
         if (e.states.bits() & q.states.bits() != q.states.bits()) return false;
-        if (q.words.len == 0) return true;
+        if (q.value) |want| {
+            if (e.password) return false;
+            var buf: [48]u8 = undefined;
+            var number: std.Io.Writer = .fixed(&buf);
+            // A slider's value is its number, as its line shows it.
+            const shown: []const u8 = if (e.range) |r| blk: {
+                writeNumber(&number, r.value) catch {};
+                break :blk number.buffered();
+            } else e.value orelse return false;
+            if (std.mem.indexOf(u8, try fold(arena, shown), want) == null) return false;
+        }
+        if (q.words.len == 0 and q.exact.len == 0) return true;
         const name = try fold(arena, e.name);
         for (q.words) |word| if (std.mem.indexOf(u8, name, word) == null) return false;
+        for (q.exact) |whole| if (!std.mem.eql(u8, std.mem.trim(u8, name, " "), whole)) return false;
         return true;
     }
 };

@@ -49,7 +49,7 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010). `bg-act` and `bg-settle` run the background mode behind the decoy; `bg-settle` is budgeted on its `settle` stage, which every other scenario only reports |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
-| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned). Complete semantic actions (EP-013): `bg-check`, `bg-uncheck`, `bg-legacy`, `bg-scroll`, `bg-scroll-ancestor`, `bg-range`, `bg-select-name`, `bg-wait-enabled`, `bg-auto-scroll` each require the effect read from Win32, the verdict on the first line of the result and an unchanged session; `bg-verdict` budgets the read-back (< 10 ms p95) |
+| `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned). Complete semantic actions (EP-013): `bg-check`, `bg-uncheck`, `bg-legacy`, `bg-scroll`, `bg-scroll-ancestor`, `bg-range`, `bg-select-name`, `bg-wait-enabled`, `bg-auto-scroll` each require the effect read from Win32, the verdict on the first line of the result and an unchanged session; `bg-verdict` budgets the read-back (< 10 ms p95). Targeted perception (EP-014): `bg-tree-root` (a subtree with the whole tree's ids, `depth`, `root` within the whole tree's p95), `bg-reread` (`ui_find id:` against the state Win32 gives, < 10 ms p95), `bg-occluded` (the flag under the decoy, gone with a 16 px strip that Win32 hit-tests), `bg-occlusion-cost` (< 1 ms p95 with 50 more windows above the target) |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
 | `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 and US-037 tasks (`-Suite existing` or `parity`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity prompt names a tool. `-Solve` also plays each parity task's scripted solution, which its check must accept. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
 
@@ -66,10 +66,13 @@ lost); `selftest --background` puts a large decoy window of a second
 neo-compute process in the foreground for about a minute (it presses F15
 there), shows the mode's label at the top of the primary display, opens a
 second window of a neo-compute process whose dialog takes the foreground about
-110 times and a topmost still window for 5 s, opens Calculator, presses one of
+110 times and a topmost still window for 5 s, moves the test window so 16 px
+of it show beside the decoy, opens Calculator, presses one of
 its digits 11 times and closes it (skipped when one is already open) and
 ends with one real click on the decoy; `neo-compute bg-probe` (US-040) does the
 same with the six reference applications, which it opens and closes, as does
+`neo-compute occlusion-probe` (US-058: Chrome, VS Code and a WPF window,
+about 30 min for the 10 launches per situation, `reps=1` for one) and
 `neo-compute events-probe` (US-047, and the UI Automation events of
 decision 0013's amendment; `events-probe churn` hides, minimizes and closes
 the test window, a popup application and Calculator; a run that panics
@@ -185,6 +188,24 @@ windows and overwrites the clipboard the same way. Run them one at a time.
   controls of the test window are opt-in (`TestWindow.actions`): the bench
   and the probes measure the window their references were taken on, and
   those controls alone cost `bg-act` 25 %.
+- Targeted perception (EP-014, measures in decision 0013). Chrome stops
+  rendering a window nothing of which shows: covered or minimized, it never
+  builds its web tree, and an action sent to it is delivered while the tree
+  read back stays as it was, so `ui_act` answers "contredit" for an action
+  that worked. A strip of 16 px in view keeps it current; VS Code turns that
+  calculation off (`renders_covered` in `a11y.zig`) but stops like Chrome
+  once minimized. The core decides what
+  is occluded (`occlusion` in `a11y.zig`, `hidden` in `display.zig`) from
+  one backend primitive, `windowLayers` (the z-order, read once per call;
+  `window_list` takes it from the enumeration of its own list, a second
+  `EnumWindows` cost it 30 % at p95): a Chromium target is judged as
+  Chromium judges itself, on window rectangles and without the popups and
+  tool windows its tracker ignores, any other window on visible frames.
+  `ui_tree` with `root` and `ui_find` with `id:` read from the element the
+  session kept (`uiSubtree`, `uiElement`), never the window: a subtree has a
+  slot of its own (`Session.sub`) and leaves the tree the next delta
+  compares with alone. A subtree's viewport is its window's frame: a fake
+  fixture whose root element and window rectangle differ prunes it wrongly.
 
 - A window with `WDA_EXCLUDEFROMCAPTURE` is absent from DXGI and GDI frames,
   but each change of it still produces DXGI dirty rects, and DWM dirties a

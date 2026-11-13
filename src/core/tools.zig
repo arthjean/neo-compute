@@ -241,6 +241,13 @@ pub const ui_tree = struct {
         /// US-031: also the screenshot with each actionable element's id
         /// drawn on it (explained in the instructions).
         marks: bool = false,
+        /// US-056: the subtree of one element, and the levels shown.
+        root: ?[]const u8 = null,
+        depth: ?u16 = null,
+        pub const field_info = .{
+            .root = .{ .description = "Element id: its subtree only" },
+            .depth = .{ .description = "Levels shown", .minimum = 1, .maximum = 25 },
+        };
         pub const intrusive = .{ .marks = .{ .true = "marks dessinerait les ids sur une capture de l'écran de l'utilisateur, pas de ta fenêtre cible. Aucune action exécutée. Utilise ui_tree sans marks." } };
     };
     pub fn run(ctx: anytype, args: Args) Result {
@@ -248,13 +255,13 @@ pub const ui_tree = struct {
             .ok => |h| h,
             .err => |r| return r,
         };
-        return a11y.tree(ctx, handle, args.since != null, args.text, args.marks);
+        return a11y.tree(ctx, handle, .{ .since_last = args.since != null, .text = args.text, .marks = args.marks, .root = args.root, .depth = args.depth });
     }
 };
 
 pub const ui_find = struct {
     pub const name = "ui_find";
-    pub const description = "Find elements: name words, role:<role>, state:<state>; at most 20 lines.";
+    pub const description = "Find elements: name words, \"exact name\", role:<role>, state:<state>, value:<text>; at most 20 lines. id:<id> alone reads that element again.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -459,14 +466,22 @@ const max_title_chars = 80;
 /// One line per display (US-026), then one per window, top of the z-order
 /// first: `<handle> "<title>" <exe> pid=<n> display=<n> @x,y,w,h z=<n>
 /// {flags}`, the rectangle in screenshot pixels of the window's display.
+/// `occluded`: nothing of the window shows under those above it (US-059).
 fn windowList(ctx: anytype, include_hidden: bool) Result {
     ctx.timings.start(ctx.io, .windows);
-    const listed = ctx.backend.listWindows(ctx.arena, include_hidden);
+    // US-059: the z-order with the list, from one reading of the desktop.
+    var layers: []const display.Layer = &.{};
+    const listed = ctx.backend.listWindowsLayered(ctx.arena, include_hidden, &layers);
     ctx.timings.stop(ctx.io, .windows);
     const all_wins = listed catch return Result.err("Mémoire insuffisante : réessaie.");
     // `deny` applications are absent from the list (US-017).
     var kept: std.ArrayList(display.WindowInfo) = .empty;
-    for (all_wins) |win| if (ctx.session.policy.levelOf(win.exe) != .deny) kept.append(ctx.arena, win) catch return Result.err("Mémoire insuffisante : réessaie.");
+    for (all_wins) |item| if (ctx.session.policy.levelOf(item.exe) != .deny) {
+        var win = item;
+        // What its tree says in its header too.
+        if (!win.minimized and !win.cloaked and !win.other_desktop) win.occluded = a11y.occlusionIn(ctx, layers, win.handle).occluded;
+        kept.append(ctx.arena, win) catch return Result.err("Mémoire insuffisante : réessaie.");
+    };
     const wins = kept.items;
     const displays = ctx.backend.displays();
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
@@ -512,10 +527,10 @@ fn writeWindow(w: *std.Io.Writer, win: display.WindowInfo, z: usize, displays: [
         try w.print(" display={d} @{d},{d},{d},{d}", .{ d, r.x, r.y, r.w, r.h });
     }
     try w.print(" z={d}", .{z});
-    if (win.elevated or win.minimized or win.cloaked or win.other_desktop) {
+    if (win.elevated or win.minimized or win.cloaked or win.other_desktop or win.occluded) {
         try w.writeAll(" {");
         var first = true;
-        inline for (.{ .{ "elevated", "elevated" }, .{ "minimized", "minimized" }, .{ "cloaked", "cloaked" }, .{ "other_desktop", "other-desktop" } }) |flag| if (@field(win, flag[0])) {
+        inline for (.{ .{ "elevated", "elevated" }, .{ "minimized", "minimized" }, .{ "cloaked", "cloaked" }, .{ "other_desktop", "other-desktop" }, .{ "occluded", "occluded" } }) |flag| if (@field(win, flag[0])) {
             if (!first) try w.writeByte(',');
             try w.writeAll(flag[1]);
             first = false;

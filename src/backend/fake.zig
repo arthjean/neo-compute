@@ -215,6 +215,9 @@ pub const Fake = struct {
     ui_last_op: ?struct { key: u64, op: std.meta.Tag(uitree.Op), value_len: usize } = null,
     ui_ops: [64]struct { key: u64, op: std.meta.Tag(uitree.Op) } = undefined,
     ui_op_len: usize = 0,
+    /// Subtrees (US-056) and single elements (US-057) read so far.
+    ui_subtree_reads: u32 = 0,
+    ui_element_reads: u32 = 0,
     /// Elements as the pattern calls left them (EP-013): read by `uiLive`
     /// and served by the next snapshot.
     ui_changed: [32]Changed = undefined,
@@ -256,6 +259,11 @@ pub const Fake = struct {
 
     /// Top-level windows, top of the z-order first; tests replace them.
     windows: []const display.WindowInfo = &windows_fixture,
+    /// Windows of class `Chrome_WidgetWin_*`, and those Chromium's
+    /// occlusion tracker ignores (popups, tool windows) (US-059).
+    chromium_windows: []const u64 = &.{},
+    popup_windows: []const u64 = &.{},
+    layer_reads: u32 = 0,
     /// IVirtualDesktopManager answers (false: Explorer restarted, US-026).
     virtual_desktops: bool = true,
 
@@ -641,6 +649,30 @@ pub const Fake = struct {
         return null;
     }
 
+    /// `listWindows`, and with `stack` what `windowLayers` gives (US-059).
+    pub fn listWindowsLayered(self: *Fake, arena: std.mem.Allocator, include_hidden: bool, stack: ?*[]const display.Layer) error{OutOfMemory}![]const display.WindowInfo {
+        if (stack) |to| to.* = self.windowLayers(arena);
+        return self.listWindows(arena, include_hidden);
+    }
+
+    /// The windows of `windows` that show, top first (US-059).
+    pub fn windowLayers(self: *Fake, arena: std.mem.Allocator) []const display.Layer {
+        self.layer_reads += 1;
+        var out: std.ArrayList(display.Layer) = .empty;
+        for (self.windows) |win| {
+            if (win.cloaked or win.other_desktop or self.live(win.handle) == null) continue;
+            out.append(arena, .{
+                .handle = win.handle,
+                .rect = win.rect,
+                .outer = win.rect,
+                .minimized = win.minimized,
+                .counted = std.mem.indexOfScalar(u64, self.popup_windows, win.handle) == null,
+                .chromium = std.mem.indexOfScalar(u64, self.chromium_windows, win.handle) != null,
+            }) catch return &.{};
+        }
+        return out.items;
+    }
+
     pub fn visibleWindows(self: *Fake, arena: std.mem.Allocator) error{OutOfMemory}![]const display.VisibleWindow {
         var out: std.ArrayList(display.VisibleWindow) = .empty;
         for (self.windows) |win| if (!win.cloaked and !win.minimized)
@@ -725,6 +757,52 @@ pub const Fake = struct {
 
     pub fn uiAutoFocus(self: *Fake, enabled: bool) void {
         self.auto_focus = enabled;
+    }
+
+    /// The subtree of element `key` (US-056): the element at depth 0, then
+    /// its descendants, from the tree its window serves.
+    pub fn uiSubtree(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, request: uitree.Request) uitree.SubtreeResult {
+        if (std.mem.indexOfScalar(u64, self.gone_buf[0..self.gone_len], window) != null) return .gone;
+        self.ui_subtree_reads += 1;
+        const web: ?[]const uitree.Element = if (request.text) self.ui_web else null;
+        var lists: [18][]const uitree.Element = undefined;
+        var n: usize = 0;
+        if (web) |els| {
+            lists[n] = els;
+            n += 1;
+        }
+        lists[n] = self.ui_elements;
+        n += 1;
+        for (self.ui_extra) |x| if (n < lists.len) {
+            lists[n] = x.elements;
+            n += 1;
+        };
+        for (lists[0..n]) |els| for (els, 0..) |root, i| {
+            if (root.key != key) continue;
+            var end = i + 1;
+            while (end < els.len and els[end].depth > root.depth) end += 1;
+            const out = arena.dupe(uitree.Element, self.withChanges(arena, els[i..end])) catch return .{ .failed = "Mémoire insuffisante : réessaie." };
+            for (out) |*e| e.depth -= root.depth;
+            return .{ .ok = .{
+                .window = self.ui_window,
+                .elements = out,
+                .partial = self.ui_partial,
+                .web_text = if (!request.text) .not_requested else if (web != null) .read else .no_document,
+                .page = if (web != null) self.ui_page else null,
+            } };
+        };
+        return .gone;
+    }
+
+    /// Element `key` as it is now (US-057), read alone.
+    pub fn uiElement(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64) uitree.ElementResult {
+        _ = arena;
+        if (std.mem.indexOfScalar(u64, self.gone_buf[0..self.gone_len], window) != null) return .gone;
+        self.ui_element_reads += 1;
+        var e = self.liveElement(key) orelse return .gone;
+        if (self.unrevealed(key)) e.states.offscreen = true;
+        e.depth = 0;
+        return .{ .ok = e };
     }
 
     /// The element `key` as the actions left it.

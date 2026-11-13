@@ -189,7 +189,7 @@ test "ui_find matches name words without case or accents, role and state; at mos
     const buttons = t.text(try h.call("ui_find", "{\"query\":\"role:button\"}"));
     try t.expectContains(buttons, "button \"Enregistrer\"");
     try t.expectContains(buttons, "button \"Imprimer\" {disabled}");
-    try t.expectContains(t.text(try h.call("ui_find", "{\"query\":\"state:checked \\\"automatique à\\\"\"}")), "checkbox \"Retour automatique");
+    try t.expectContains(t.text(try h.call("ui_find", "{\"query\":\"state:checked automatique à\"}")), "checkbox \"Retour automatique");
     // Off-screen elements are found, so scroll_into_view can reach them.
     try t.expectContains(t.text(try h.call("ui_find", "{\"query\":\"hors champ\"}")), "{offscreen}");
     const bad = try h.call("ui_find", "{\"query\":\"role:bouton\"}");
@@ -203,7 +203,9 @@ test "ui_find matches name words without case or accents, role and state; at mos
     h.backend.ui_elements = &many;
     const capped = t.text(try h.call("ui_find", "{\"query\":\"fichier recent\"}"));
     try testing.expectEqual(@as(usize, 22), std.mem.count(u8, capped, "\n") + 1);
-    try t.expectContains(capped, "… 9 autres résultats : précise la requête.");
+    // US-057: the count comes first, the lines are the first 20.
+    try testing.expect(std.mem.startsWith(u8, capped, "29 correspondances, 20 affichées\ndisplay=0 scale=2 window=0x1a2b\n"));
+    try testing.expect(std.mem.indexOf(u8, capped, "autres résultats") == null);
 }
 
 test "ui_act checks preconditions, reports stale ids and falls back to a click" {

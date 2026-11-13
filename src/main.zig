@@ -30,6 +30,7 @@ const usage =
     \\       neo-compute bg-probe [dump] [autofocus=on|off] [only=PRIMITIVE]
     \\                            [window|show|launch|notepad|calculator|settings|explorer|chrome|vscode]...
     \\       neo-compute events-probe [window|notepad|calculator|settings|explorer|chrome|vscode|churn]...
+    \\       neo-compute occlusion-probe [chrome|vscode|wpf]... [reps=N] [sit=visible|covered|strip|other_display|minimized]
     \\       neo-compute --version
     \\
 ;
@@ -85,6 +86,13 @@ pub fn main(init: std.process.Init) !u8 {
         var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
         defer stderr.interface.flush() catch {};
         return Backend.eventsProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
+    }
+    // US-058: whether the tree of a covered Chromium window stays current, on stderr.
+    if (args.len > 1 and std.mem.eql(u8, args[1], "occlusion-probe") and @hasDecl(Backend, "occlusionProbe")) {
+        var err_buf: [4096]u8 = undefined;
+        var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
+        defer stderr.interface.flush() catch {};
+        return Backend.occlusionProbe(init.gpa, init.io, init.environ_map, &stderr.interface, args[2..]);
     }
     // Started by selftest only: a still window of another process (US-032 wait CPU).
     if (args.len > 1 and std.mem.eql(u8, args[1], "selftest-still") and @hasDecl(Backend, "stillWindow")) return Backend.stillWindow(args[2..]);
@@ -311,6 +319,7 @@ test {
     _ = @import("core/tools_test.zig");
     _ = @import("core/uitree.zig");
     _ = @import("core/a11y_test.zig");
+    _ = @import("core/perception_test.zig");
     _ = @import("core/act_test.zig");
     _ = @import("core/policy.zig");
     _ = @import("core/control.zig");

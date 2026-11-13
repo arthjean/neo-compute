@@ -90,6 +90,9 @@ pub const WindowInfo = struct {
     /// Cloaked because it sits on another virtual desktop (US-026), as
     /// IVirtualDesktopManager reports; then `cloaked` is false.
     other_desktop: bool = false,
+    /// Nothing of it shows under the windows above it (US-059); filled by
+    /// the core.
+    occluded: bool = false,
 };
 
 pub const FocusResult = enum { ok, closed, refused };
@@ -118,6 +121,42 @@ pub const WindowRef = struct { handle: u64, pid: u32 };
 /// z-order first. `solid` is false for layered or transparent windows,
 /// which may show what lies below them.
 pub const VisibleWindow = struct { handle: u64, pid: u32, rect: Rect, solid: bool };
+
+/// A visible top-level window in the z-order (US-059). The windows listed
+/// before it are above it.
+pub const Layer = struct {
+    handle: u64,
+    /// Visible frame.
+    rect: Rect,
+    /// Window rectangle, invisible resize borders included: the one
+    /// Chromium reads.
+    outer: Rect,
+    minimized: bool = false,
+    /// It hides what lies under it: not minimized, not click-through, not a
+    /// translucent or color-keyed layered window, not shaped by a region.
+    solid: bool = true,
+    /// Chromium's occlusion tracker counts it as a cover. It ignores popups
+    /// and tool windows, the taskbar and its own popups aside
+    /// (`native_window_occlusion_tracker_win.cc`).
+    counted: bool = true,
+    /// A Chromium or Electron window (class `Chrome_WidgetWin_*`): it works
+    /// out its own occlusion and stops rendering a page nobody can see.
+    chromium: bool = false,
+};
+
+/// Whether nothing of `target` shows: each part of it on a display lies
+/// under `covers`. A target on no display shows nothing either. When the
+/// covers cut it into more pieces than `subtract` follows, it is taken to
+/// show.
+pub fn hidden(arena: std.mem.Allocator, target: Rect, displays: []const Display, covers: []const Rect) bool {
+    var pieces: std.ArrayList(Rect) = .empty;
+    for (displays) |d| if (intersection(target, d.rect)) |part| pieces.append(arena, part) catch return false;
+    for (covers) |c| {
+        if (pieces.items.len == 0) break;
+        subtract(arena, &pieces, c) catch return false;
+    }
+    return pieces.items.len == 0;
+}
 
 pub fn intersection(a: Rect, b: Rect) ?Rect {
     if (!a.intersects(b)) return null;
