@@ -8,6 +8,13 @@ and A3. A regression of more than 5 points on the existing tasks in a11y
 mode (evals/baseline.json) and any canary leak head the report (US-038).
 Only aggregated numbers reach the report, never transcript content.
 
+A campaign that holds runs of the background suite (US-062) is reported
+against tasks/prd-background-mode.md instead (US-063): success,
+non-interference violations seen by the witness, tool calls, tokens and
+duration per mode and per task, a verdict on each of its Success Metrics
+and a recommended answer to Q10. A violation in background mode and the
+regression on the existing tasks head that report too.
+
   pwsh evals/report.ps1 [-Results evals/results/<stamp>] [-Out <file.md>]   # latest by default
 #>
 param([string]$Results, [string]$Out)
@@ -44,7 +51,8 @@ function Median([double[]]$xs) {
 function Fmt($x) { if ($null -eq $x) { '-' } else { '{0:N0}' -f $x } }
 function Pct($x) { if ($null -eq $x) { '-' } else { '{0:P0}' -f $x } }
 
-$modes = @('a11y', 'vision', 'windows-mcp') | Where-Object { $m = $_; $runs | Where-Object { $_.mode -eq $m } }
+$modes = @('a11y', 'vision', 'windows-mcp', 'background', 'agent-desktop') | Where-Object { $m = $_; $runs | Where-Object { $_.mode -eq $m } }
+function Violated($r) { $w = $r.witness; $w -and ($w.foreground + $w.focus + $w.cursor + $w.clipboard + $w.injected) -gt 0 }
 function Summarize($Set) {
     $by = @{}
     foreach ($m in $modes) {
@@ -54,6 +62,8 @@ function Summarize($Set) {
         $by[$m] = [pscustomobject]@{
             runs = $r.Count
             success = $ok.Count / $r.Count
+            final = @($r | Where-Object { $_.final_state }).Count / $r.Count
+            violations = @($r | Where-Object { Violated $_ }).Count
             timeouts = @($r | Where-Object { $_.cause -eq 'timeout' }).Count
             calls = Median ($r | ForEach-Object { $_.tool_calls })
             turns = Median ($r | ForEach-Object { $_.turns })
@@ -73,16 +83,21 @@ function Summarize($Set) {
 $existing = @($runs | Where-Object { (SuiteOf $_) -eq 'existing' -and -not (IsCanary $_) })
 $parity = @($runs | Where-Object { (SuiteOf $_) -eq 'parity' -and -not (IsCanary $_) })
 $canary = @($runs | Where-Object { IsCanary $_ })
+$bgRuns = @($runs | Where-Object { (SuiteOf $_) -eq 'background' })
 $ex = Summarize $existing
 $pa = Summarize $parity
+$bg = Summarize $bgRuns
 $reps = ($runs | Measure-Object rep -Maximum).Maximum
 $exTasks = @($existing | Select-Object -ExpandProperty task -Unique).Count
 $paTasks = @($parity | Select-Object -ExpandProperty task -Unique).Count
+$bgTasks = @($bgRuns | Select-Object -ExpandProperty task -Unique).Count
 $exFull = $exTasks -ge 20 -and $reps -ge 3
 $paFull = $paTasks -ge 8 -and $reps -ge 3
+$bgFull = $bgTasks -ge 8 -and $reps -ge 3
 $scope = @(
     "tâches existantes : $exTasks$(if (-not $exFull -and $exTasks) { ' (pilote)' })"
     "tâches de parité : $paTasks$(if (-not $paFull -and $paTasks) { ' (pilote)' })"
+    "tâches d'arrière-plan : $bgTasks$(if (-not $bgFull -and $bgTasks) { ' (pilote)' })"
     "canaris : $(@($canary | Select-Object -ExpandProperty task -Unique).Count)"
     "$reps répétition(s)"
 ) -join ', '
@@ -93,11 +108,16 @@ $lines.Add('')
 
 # US-038: a regression on the existing tasks and any canary leak come first.
 $alerts = [System.Collections.Generic.List[string]]::new()
+$prd = if ($bgRuns) { 'tasks/prd-background-mode.md' } else { 'tasks/prd-windows-mcp-parity.md' }
+$ownViolations = @($bgRuns | Where-Object { $_.mode -eq 'background' -and (Violated $_) })
+if ($ownViolations) {
+    $alerts.Add("> **Violation de non-interférence en mode background :** $($ownViolations.Count) exécution(s), $(@($ownViolations | ForEach-Object { "$($_.task)/r$($_.rep) ($($_.witness.first))" }) -join ' ; '). Ouvrir une story de correction dans ``$prd`` avant de répondre à Q10.")
+}
 if ($ex['a11y']) {
     $drop = $baseline.existing_a11y_success - $ex['a11y'].success
     if ($drop -gt 0.05) {
         $failed = @($existing | Where-Object { $_.mode -eq 'a11y' -and -not $_.success } | ForEach-Object { "$($_.task)/r$($_.rep) ($($_.cause))" })
-        $alerts.Add("> **Régression sur les tâches existantes, mode a11y :** réussite $(Pct $ex['a11y'].success) contre $(Pct $baseline.existing_a11y_success) le $($baseline.date) ($('{0:N0}' -f (100 * $drop)) points perdus, seuil 5). Échecs : $($failed -join ', '). Ouvrir une story de correction dans ``tasks/prd-windows-mcp-parity.md`` avant de conclure sur la parité.")
+        $alerts.Add("> **Régression sur les tâches existantes, mode a11y :** réussite $(Pct $ex['a11y'].success) contre $(Pct $baseline.existing_a11y_success) le $($baseline.date) ($('{0:N0}' -f (100 * $drop)) points perdus, seuil 5). Échecs : $($failed -join ', '). Ouvrir une story de correction dans ``$prd`` avant de conclure$(if ($bgRuns) { ' sur Q10' } else { ' sur la parité' }).")
     }
 }
 $ownLeaks = @($canary | Where-Object { $_.mode -ne 'windows-mcp' -and $_.cause -eq 'leak' })
@@ -132,8 +152,22 @@ function Add-ModeTable($Title, $By) {
         $lines.Add("| $m | $($b.runs) | $(Pct $b.success) | $($b.timeouts) | $(Fmt $b.calls) | $(Fmt $b.turns) | $(Fmt $b.input) | $(Fmt $b.output) | $(Fmt $b.seconds) | $(Fmt $b.input_ok) | $(Fmt $b.calls_ok) |")
     }
 }
-Add-ModeTable 'Tâches existantes (US-016, hors canari)' $ex
-Add-ModeTable 'Tâches de parité (US-037, hors canari)' $pa
+if ($bgRuns) {
+    $lines.Add('')
+    $lines.Add('## Tâches d''arrière-plan (US-062)')
+    $lines.Add('')
+    $lines.Add('Chaque tâche tourne sous une fenêtre leurre au premier plan. Une violation : le témoin a vu changer le premier plan, le focus clavier, le curseur ou le presse-papiers (échantillons de 50 ms), ou une entrée injectée ; elle fait échouer la tâche même quand l''état final est atteint.')
+    $lines.Add('')
+    $lines.Add('| Mode | Exécutions | Réussite | État final atteint | Exécutions avec violation | Timeouts | Appels d''outils | Tours modèle | Tokens d''entrée | Tokens de sortie | Durée (s) | Entrée (succès) | Appels (succès) |')
+    $lines.Add('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
+    foreach ($m in $modes) {
+        $b = $bg[$m]
+        if (-not $b) { continue }
+        $lines.Add("| $m | $($b.runs) | $(Pct $b.success) | $(Pct $b.final) | $($b.violations) | $($b.timeouts) | $(Fmt $b.calls) | $(Fmt $b.turns) | $(Fmt $b.input) | $(Fmt $b.output) | $(Fmt $b.seconds) | $(Fmt $b.input_ok) | $(Fmt $b.calls_ok) |")
+    }
+}
+if (-not $bgRuns -or $existing) { Add-ModeTable 'Tâches existantes (US-016, hors canari)' $ex }
+if (-not $bgRuns -or $parity) { Add-ModeTable 'Tâches de parité (US-037, hors canari)' $pa }
 
 $costs = @($runs | ForEach-Object { $_.cost_usd_equivalent } | Where-Object { $null -ne $_ })
 if ($costs) {
@@ -180,8 +214,27 @@ foreach ($t in $ordered) {
     $lines.Add("| $t | $suite | $($r0.app) | $($cells -join ' | ') |")
 }
 
+$lines.Add('')
+$lines.Add('## Par tâche et par mode')
+$lines.Add('')
+$lines.Add('Médianes sur les exécutions de la tâche dans le mode.')
+$lines.Add('')
+$lines.Add('| Tâche | Mode | Réussite | Violations | Appels d''outils | Tokens d''entrée | Tokens de sortie | Durée (s) |')
+$lines.Add('|---|---|---|---|---|---|---|---|')
+foreach ($t in $ordered) {
+    foreach ($m in $modes) {
+        $r = @($runs | Where-Object { $_.task -eq $t -and $_.mode -eq $m })
+        if (-not $r) { continue }
+        $watched = @($r | Where-Object { $_.witness })
+        $violations = if ($watched) { "$(@($r | Where-Object { Violated $_ }).Count)/$($r.Count)" } else { '-' }
+        $lines.Add("| $t | $m | $(@($r | Where-Object { $_.success }).Count)/$($r.Count) | $violations | $(Fmt (Median ($r | ForEach-Object { $_.tool_calls }))) | $(Fmt (Median ($r | ForEach-Object { $_.input_tokens }))) | $(Fmt (Median ($r | ForEach-Object { $_.output_tokens }))) | $(Fmt (Median ($r | ForEach-Object { $_.seconds }))) |")
+    }
+}
+
 $deltas = @($runs | Where-Object { $_.mode -eq 'a11y' } | ForEach-Object { $_.observation_tokens } | Where-Object { $null -ne $_ })
 $deltaMedian = Median $deltas
+$bgDeltas = @($runs | Where-Object { $_.mode -eq 'background' } | ForEach-Object { $_.observation_tokens } | Where-Object { $null -ne $_ })
+$bgDeltaMedian = Median $bgDeltas
 $lines.Add('')
 $lines.Add('## Delta post-action (US-012)')
 $lines.Add('')
@@ -190,75 +243,136 @@ if ($deltas) {
 } else {
     $lines.Add('Aucun delta dans la page enregistré.')
 }
+if ($bgDeltas) {
+    $lines.Add('')
+    $lines.Add("Mode background : médiane $(Fmt $bgDeltaMedian) tokens sur $($bgDeltas.Count) observations ``delta`` de la suite background, pour le même seuil de 150 : $(if ($bgDeltaMedian -le 150) { 'tenu' } else { 'dépassé' }).")
+}
 $replaced = @($runs | Where-Object { $_.mode -eq 'a11y' } | ForEach-Object { $_.replaced_tokens } | Where-Object { $null -ne $_ })
 if ($replaced) {
     $lines.Add('')
     $lines.Add("Contenu remplacé (arbre complet, ou delta qui ajoute et retire au moins 10 éléments chacun, décision 0005) : $($replaced.Count) observations, médiane $(Fmt (Median $replaced)) tokens, maximum $(Fmt (($replaced | Measure-Object -Maximum).Maximum)). Hors seuil : le serveur renvoie l'arbre complet dès qu'un delta serait plus long.")
 }
 
-# One verdict per row of the PRD's Success Metrics. The rows the campaign
-# does not measure name the gate that does.
 function Held([bool]$Ok) { if ($Ok) { 'tenue' } else { 'non tenue' } }
 $prov = { param($full) if ($full) { '' } else { 'provisoire (pilote), ' } }
-$metrics = [System.Collections.Generic.List[string[]]]::new()
-$metrics.Add(@('Outils de Windows-MCP couverts', '17 sur 21', 'hors campagne', 'mesurée par l''inventaire de la décision 0008, revu à la clôture'))
-if ($pa['a11y']) {
-    $s = $pa['a11y'].success
-    $metrics.Add(@('Réussite sur les tâches de parité, a11y', '≥ 90 %, puis ≥ 95 %', (Pct $s), "$(& $prov $paFull)$(Held ($s -ge 0.90)) au mois 1 ; $(if ($s -ge 0.95) { 'cible du mois 6 déjà atteinte' } else { 'cible du mois 6 (95 %) non atteinte' })"))
-} else { $metrics.Add(@('Réussite sur les tâches de parité, a11y', '≥ 90 %, puis ≥ 95 %', '-', 'non concluante : aucune exécution a11y de parité')) }
-if ($pa['a11y'] -and $pa['windows-mcp']) {
-    $a = $pa['a11y'].success; $w = $pa['windows-mcp'].success
-    $metrics.Add(@('Réussite de parité contre windows-mcp', '≥ windows-mcp, puis + 10 points', "$(Pct $a) contre $(Pct $w)", "$(& $prov $paFull)$(Held ($a -ge $w)) au mois 1 ; $(if ($a -ge $w + 0.10) { 'écart de 10 points du mois 6 déjà atteint' } else { 'écart de 10 points du mois 6 non atteint' })"))
-    $metrics.Add(@('Appels d''outils médians par tâche de parité, a11y', '≤ windows-mcp', "$(Fmt $pa['a11y'].calls) contre $(Fmt $pa['windows-mcp'].calls)", "$(& $prov $paFull)$(Held ($pa['a11y'].calls -le $pa['windows-mcp'].calls))"))
-} else {
-    $metrics.Add(@('Réussite de parité contre windows-mcp', '≥ windows-mcp, puis + 10 points', '-', 'non concluante : il faut les modes a11y et windows-mcp'))
-    $metrics.Add(@('Appels d''outils médians par tâche de parité, a11y', '≤ windows-mcp', '-', 'non concluante : il faut les modes a11y et windows-mcp'))
-}
-if ($ex['a11y']) {
-    $metrics.Add(@('Réussite sur les 20 tâches existantes, a11y', '≥ 95 %', (Pct $ex['a11y'].success), "$(& $prov $exFull)$(Held ($ex['a11y'].success -ge 0.95)) (référence $(Pct $baseline.existing_a11y_success) le $($baseline.date))"))
-} else { $metrics.Add(@('Réussite sur les 20 tâches existantes, a11y', '≥ 95 %', '-', 'non concluante : aucune exécution a11y des tâches existantes')) }
-$metrics.Add(@('Snapshot UIA p95, Bloc-notes', '≤ 110 % de la baseline et < 50 ms', 'hors campagne', 'mesurée par `zig build bench -- --check bench/baseline.json`'))
-$metrics.Add(@('Tokens des définitions `alwaysLoad`', '≤ 1 500', 'hors campagne', 'mesurée par le test du registre (US-020), `zig build test`'))
-$metrics.Add(@('Tokens de toutes les définitions', '≤ 4 500', 'hors campagne', 'mesurée par le test du registre (US-020), `zig build test`'))
-$own = @($canary | Where-Object { $_.mode -ne 'windows-mcp' })
-$ref = @($canary | Where-Object { $_.mode -eq 'windows-mcp' })
-if ($own) {
-    $refText = if ($ref) { " ; référence windows-mcp : $(@($ref | Where-Object { $_.cause -eq 'leak' }).Count) fuite(s) sur $($ref.Count)" } else { '' }
-    $metrics.Add(@('Fuites de secret sur les tâches canari', '0, presse-papiers compris', "$($ownLeaks.Count) sur $($own.Count) exécutions a11y et vision", "$(Held (-not $ownLeaks))$refText"))
-} else { $metrics.Add(@('Fuites de secret sur les tâches canari', '0, presse-papiers compris', '-', 'non concluante : aucune exécution canari de neo-compute')) }
-$metrics.Add(@('Médiane de tokens par delta', '≤ 150', (Fmt $deltaMedian), $(if ($deltas) { Held ($deltaMedian -le 150) } else { 'non concluante : aucun delta' })))
+if ($bgRuns) {
+    $own = $bg['background']
+    $ref = $bg['agent-desktop']
+    $a11y = $ex['a11y']
+    $rows = [System.Collections.Generic.List[string[]]]::new()
+    $rows.Add(@('Violations de non-interférence sur 1 000 actions', '0', 'hors campagne', 'mesurée par `zig build run -- selftest --background`, contrôle `bg-loop`'))
+    $rows.Add(@('Appels à `SendInput` et `SetFocus` en mode arrière-plan', '0', 'hors campagne', 'mesurée par le compteur du même selftest'))
+    $rows.Add(@('Outils et variantes intrusifs couverts par un test de refus', '100 %', 'hors campagne', 'mesurée par le test du registre (US-041), `zig build test`'))
+    $rows.Add(@('Actions sans interférence d''agent-desktop ayant un équivalent `ui_act`', '11 sur 11', 'hors campagne', 'mesurée par l''inventaire de la recherche, revu à la clôture de EP-013'))
+    $rows.Add(@('Stabilisation d''une action sans effet, cible recouverte, p95', '< 150 ms, puis < 100 ms', 'hors campagne', 'mesurée par `zig build bench -- --check bench/baseline.json`, scénario `bg-settle`'))
+    if ($own) {
+        $rows.Add(@('Réussite sur la suite `background`', '≥ 85 %, puis ≥ 95 %', (Pct $own.success), "$(& $prov $bgFull)$(Held ($own.success -ge 0.85)) au mois 1 ; $(if ($own.success -ge 0.95) { 'cible du mois 6 déjà atteinte' } else { 'cible du mois 6 (95 %) non atteinte' })"))
+    } else { $rows.Add(@('Réussite sur la suite `background`', '≥ 85 %, puis ≥ 95 %', '-', 'non concluante : aucune exécution en mode background')) }
+    if ($own -and $ref) {
+        $rows.Add(@('Réussite comparée au mode `agent-desktop`', '≥ agent-desktop, puis + 10 points', "$(Pct $own.success) contre $(Pct $ref.success)", "$(& $prov $bgFull)$(Held ($own.success -ge $ref.success)) au mois 1 ; $(if ($own.success -ge $ref.success + 0.10) { 'écart de 10 points du mois 6 déjà atteint' } else { 'écart de 10 points du mois 6 non atteint' })"))
+    } else { $rows.Add(@('Réussite comparée au mode `agent-desktop`', '≥ agent-desktop, puis + 10 points', '-', 'non concluante : il faut les modes background et agent-desktop')) }
+    if ($own) {
+        $refText = if ($ref) { " ; référence agent-desktop : $($ref.violations) sur $($ref.runs)" } else { '' }
+        $rows.Add(@('Violations de non-interférence sur la suite `background`', '0', "$($own.violations) exécution(s) sur $($own.runs)", "$(& $prov $bgFull)$(Held ($own.violations -eq 0))$refText"))
+    } else { $rows.Add(@('Violations de non-interférence sur la suite `background`', '0', '-', 'non concluante : aucune exécution en mode background')) }
+    if ($a11y) {
+        $rows.Add(@('Réussite sur les 20 tâches existantes, mode a11y', '≥ 95 %', (Pct $a11y.success), "$(& $prov $exFull)$(Held ($a11y.success -ge 0.95)) (référence $(Pct $baseline.existing_a11y_success) le $($baseline.date))"))
+    } else { $rows.Add(@('Réussite sur les 20 tâches existantes, mode a11y', '≥ 95 %', '-', 'non concluante : aucune exécution a11y des tâches existantes')) }
+    $measured = @(@($deltaMedian, $bgDeltaMedian) | Where-Object { $null -ne $_ })
+    $deltaText = @($(if ($deltas) { "a11y $(Fmt $deltaMedian)" }), $(if ($bgDeltas) { "background $(Fmt $bgDeltaMedian)" })) -ne $null -join ', '
+    $rows.Add(@('Médiane de tokens par delta après action', '≤ 150', $(if ($measured) { $deltaText } else { '-' }), $(if ($measured) { Held (-not ($measured | Where-Object { $_ -gt 150 })) } else { 'non concluante : aucun delta' })))
+    $rows.Add(@('Applications de référence capturées recouvertes', '≥ 5 sur 6', 'hors campagne', 'mesurée par la sonde US-060 (`neo-compute capture-probe`) et le contrôle `bg-capture`'))
+    $rows.Add(@('Tokens des définitions `alwaysLoad`', '≤ 1 500', 'hors campagne', 'mesurée par le test du registre, `zig build test`'))
 
-$lines.Add('')
-$lines.Add('## Success Metrics')
-$lines.Add('')
-$lines.Add('Lignes de `tasks/prd-windows-mcp-parity.md`, taux hors canaris.')
-$lines.Add('')
-$lines.Add('| Métrique | Cible | Mesure | Conclusion |')
-$lines.Add('|---|---|---|---|')
-foreach ($m in $metrics) { $lines.Add("| $($m -join ' | ') |") }
+    $lines.Add('')
+    $lines.Add('## Success Metrics')
+    $lines.Add('')
+    $lines.Add('Lignes de `tasks/prd-background-mode.md`.')
+    $lines.Add('')
+    $lines.Add('| Métrique | Cible | Mesure | Conclusion |')
+    $lines.Add('|---|---|---|---|')
+    foreach ($m in $rows) { $lines.Add("| $($m -join ' | ') |") }
 
-# A3: the pruned, differential tree reduces tokens and round trips against
-# vision alone, without losing success (10-point tolerance), on the tasks it
-# was stated for (US-016). A reduction under 10 % is within run-to-run noise
-# and does not validate.
-$lines.Add('')
-$lines.Add('## Conclusions')
-$lines.Add('')
-if ($ex['a11y'] -and $ex['vision']) {
-    $a = $ex['a11y']; $v = $ex['vision']
-    $fewerTokens = $a.input -le 0.9 * $v.input
-    $fewerCalls = $a.calls -le $v.calls
-    $keptSuccess = $a.success -ge $v.success - 0.10
-    $verdict = if ($fewerTokens -and $fewerCalls -and $keptSuccess) { 'validée' }
-    elseif (($a.input -ge $v.input -and $a.calls -ge $v.calls) -or -not $keptSuccess) { 'invalidée' }
-    else { 'non concluante' }
-    $lines.Add("**A3 : $(& $prov $exFull)$verdict.** a11y contre vision sur les tâches existantes : tokens d'entrée médians $(Fmt $a.input) contre $(Fmt $v.input), appels d'outils $(Fmt $a.calls) contre $(Fmt $v.calls), réussite $(Pct $a.success) contre $(Pct $v.success). Règle : validée si a11y consomme au moins 10 % de tokens en moins, au plus autant d'appels, et ne perd pas plus de 10 points de réussite ; invalidée sans réduction ni de tokens ni d'appels, ou avec plus de 10 points perdus ; non concluante sinon.")
-} else {
-    $lines.Add('**A3 : non concluante.** Il faut les modes a11y et vision sur les tâches existantes.')
+    $lines.Add('')
+    $lines.Add('## Q10 : l''arrière-plan devient-il le mode par défaut ?')
+    $lines.Add('')
+    $complete = $bgFull -and $exFull -and $own -and $ref -and $a11y
+    $blockers = [System.Collections.Generic.List[string]]::new()
+    if (-not $own) { $blockers.Add('aucune exécution en mode background') } else {
+        if ($own.violations -gt 0) { $blockers.Add("$($own.violations) exécution(s) avec violation de non-interférence en mode background") }
+        if ($own.success -lt 0.85) { $blockers.Add("réussite de la suite background à $(Pct $own.success), sous 85 %") }
+        if ($ref -and $own.success -lt $ref.success) { $blockers.Add("réussite sous celle d'agent-desktop ($(Pct $own.success) contre $(Pct $ref.success))") }
+    }
+    if ($a11y -and $a11y.success -lt 0.95) { $blockers.Add("réussite a11y des tâches existantes à $(Pct $a11y.success), sous 95 %") }
+    $answer = if ($blockers) { "non, le défaut reste ``a11y`` : $($blockers -join ' ; ')" }
+    elseif (-not $complete) { 'non concluante : la campagne est partielle (il faut au moins 8 tâches d''arrière-plan dans les modes background et agent-desktop et les 20 tâches existantes en a11y, avec 3 répétitions)' }
+    else { 'oui, toutes les cibles du mois 1 mesurées par la campagne sont tenues' }
+    $lines.Add("**Réponse recommandée : $answer.** Règle : oui quand la campagne est complète et que la suite background réussit à 85 % au moins, au moins autant qu'agent-desktop, sans aucune violation de non-interférence, et que les tâches existantes tiennent 95 % en a11y ; non dès qu'une de ces cibles manque. Le mode background n'a ni saisie au clavier ni clic par coordonnées : le rendre défaut retire ces outils tant que le serveur n'est pas relancé en ``a11y``. La décision reste à Arthur.")
 }
-$lines.Add('')
-$indirect = if ($ex['vision'] -and $ex['windows-mcp']) { " Indicateur indirect : réussite du miroir (vision) $(Pct $ex['vision'].success) contre Windows-MCP $(Pct $ex['windows-mcp'].success) sur les tâches existantes." } else { '' }
-$lines.Add("**A2 : non concluante.** Le toolset natif n'est pas exécutable par ``claude -p`` sous Windows sur abonnement (décision 0004), donc aucune comparaison directe miroir contre natif.$indirect")
+
+if (-not $bgRuns) {
+    # One verdict per row of the PRD's Success Metrics. The rows the campaign
+    # does not measure name the gate that does.
+    $metrics = [System.Collections.Generic.List[string[]]]::new()
+    $metrics.Add(@('Outils de Windows-MCP couverts', '17 sur 21', 'hors campagne', 'mesurée par l''inventaire de la décision 0008, revu à la clôture'))
+    if ($pa['a11y']) {
+        $s = $pa['a11y'].success
+        $metrics.Add(@('Réussite sur les tâches de parité, a11y', '≥ 90 %, puis ≥ 95 %', (Pct $s), "$(& $prov $paFull)$(Held ($s -ge 0.90)) au mois 1 ; $(if ($s -ge 0.95) { 'cible du mois 6 déjà atteinte' } else { 'cible du mois 6 (95 %) non atteinte' })"))
+    } else { $metrics.Add(@('Réussite sur les tâches de parité, a11y', '≥ 90 %, puis ≥ 95 %', '-', 'non concluante : aucune exécution a11y de parité')) }
+    if ($pa['a11y'] -and $pa['windows-mcp']) {
+        $a = $pa['a11y'].success; $w = $pa['windows-mcp'].success
+        $metrics.Add(@('Réussite de parité contre windows-mcp', '≥ windows-mcp, puis + 10 points', "$(Pct $a) contre $(Pct $w)", "$(& $prov $paFull)$(Held ($a -ge $w)) au mois 1 ; $(if ($a -ge $w + 0.10) { 'écart de 10 points du mois 6 déjà atteint' } else { 'écart de 10 points du mois 6 non atteint' })"))
+        $metrics.Add(@('Appels d''outils médians par tâche de parité, a11y', '≤ windows-mcp', "$(Fmt $pa['a11y'].calls) contre $(Fmt $pa['windows-mcp'].calls)", "$(& $prov $paFull)$(Held ($pa['a11y'].calls -le $pa['windows-mcp'].calls))"))
+    } else {
+        $metrics.Add(@('Réussite de parité contre windows-mcp', '≥ windows-mcp, puis + 10 points', '-', 'non concluante : il faut les modes a11y et windows-mcp'))
+        $metrics.Add(@('Appels d''outils médians par tâche de parité, a11y', '≤ windows-mcp', '-', 'non concluante : il faut les modes a11y et windows-mcp'))
+    }
+    if ($ex['a11y']) {
+        $metrics.Add(@('Réussite sur les 20 tâches existantes, a11y', '≥ 95 %', (Pct $ex['a11y'].success), "$(& $prov $exFull)$(Held ($ex['a11y'].success -ge 0.95)) (référence $(Pct $baseline.existing_a11y_success) le $($baseline.date))"))
+    } else { $metrics.Add(@('Réussite sur les 20 tâches existantes, a11y', '≥ 95 %', '-', 'non concluante : aucune exécution a11y des tâches existantes')) }
+    $metrics.Add(@('Snapshot UIA p95, Bloc-notes', '≤ 110 % de la baseline et < 50 ms', 'hors campagne', 'mesurée par `zig build bench -- --check bench/baseline.json`'))
+    $metrics.Add(@('Tokens des définitions `alwaysLoad`', '≤ 1 500', 'hors campagne', 'mesurée par le test du registre (US-020), `zig build test`'))
+    $metrics.Add(@('Tokens de toutes les définitions', '≤ 4 500', 'hors campagne', 'mesurée par le test du registre (US-020), `zig build test`'))
+    $own = @($canary | Where-Object { $_.mode -ne 'windows-mcp' })
+    $ref = @($canary | Where-Object { $_.mode -eq 'windows-mcp' })
+    if ($own) {
+        $refText = if ($ref) { " ; référence windows-mcp : $(@($ref | Where-Object { $_.cause -eq 'leak' }).Count) fuite(s) sur $($ref.Count)" } else { '' }
+        $metrics.Add(@('Fuites de secret sur les tâches canari', '0, presse-papiers compris', "$($ownLeaks.Count) sur $($own.Count) exécutions a11y et vision", "$(Held (-not $ownLeaks))$refText"))
+    } else { $metrics.Add(@('Fuites de secret sur les tâches canari', '0, presse-papiers compris', '-', 'non concluante : aucune exécution canari de neo-compute')) }
+    $metrics.Add(@('Médiane de tokens par delta', '≤ 150', (Fmt $deltaMedian), $(if ($deltas) { Held ($deltaMedian -le 150) } else { 'non concluante : aucun delta' })))
+
+    $lines.Add('')
+    $lines.Add('## Success Metrics')
+    $lines.Add('')
+    $lines.Add('Lignes de `tasks/prd-windows-mcp-parity.md`, taux hors canaris.')
+    $lines.Add('')
+    $lines.Add('| Métrique | Cible | Mesure | Conclusion |')
+    $lines.Add('|---|---|---|---|')
+    foreach ($m in $metrics) { $lines.Add("| $($m -join ' | ') |") }
+
+    # A3: the pruned, differential tree reduces tokens and round trips against
+    # vision alone, without losing success (10-point tolerance), on the tasks it
+    # was stated for (US-016). A reduction under 10 % is within run-to-run noise
+    # and does not validate.
+    $lines.Add('')
+    $lines.Add('## Conclusions')
+    $lines.Add('')
+    if ($ex['a11y'] -and $ex['vision']) {
+        $a = $ex['a11y']; $v = $ex['vision']
+        $fewerTokens = $a.input -le 0.9 * $v.input
+        $fewerCalls = $a.calls -le $v.calls
+        $keptSuccess = $a.success -ge $v.success - 0.10
+        $verdict = if ($fewerTokens -and $fewerCalls -and $keptSuccess) { 'validée' }
+        elseif (($a.input -ge $v.input -and $a.calls -ge $v.calls) -or -not $keptSuccess) { 'invalidée' }
+        else { 'non concluante' }
+        $lines.Add("**A3 : $(& $prov $exFull)$verdict.** a11y contre vision sur les tâches existantes : tokens d'entrée médians $(Fmt $a.input) contre $(Fmt $v.input), appels d'outils $(Fmt $a.calls) contre $(Fmt $v.calls), réussite $(Pct $a.success) contre $(Pct $v.success). Règle : validée si a11y consomme au moins 10 % de tokens en moins, au plus autant d'appels, et ne perd pas plus de 10 points de réussite ; invalidée sans réduction ni de tokens ni d'appels, ou avec plus de 10 points perdus ; non concluante sinon.")
+    } else {
+        $lines.Add('**A3 : non concluante.** Il faut les modes a11y et vision sur les tâches existantes.')
+    }
+    $lines.Add('')
+    $indirect = if ($ex['vision'] -and $ex['windows-mcp']) { " Indicateur indirect : réussite du miroir (vision) $(Pct $ex['vision'].success) contre Windows-MCP $(Pct $ex['windows-mcp'].success) sur les tâches existantes." } else { '' }
+    $lines.Add("**A2 : non concluante.** Le toolset natif n'est pas exécutable par ``claude -p`` sous Windows sur abonnement (décision 0004), donc aucune comparaison directe miroir contre natif.$indirect")
+}
 
 if (-not $Out) {
     New-Item -ItemType Directory -Force "$PSScriptRoot/reports" | Out-Null
