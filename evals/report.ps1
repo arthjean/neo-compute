@@ -53,6 +53,18 @@ function Pct($x) { if ($null -eq $x) { '-' } else { '{0:P0}' -f $x } }
 
 $modes = @('a11y', 'vision', 'windows-mcp', 'background', 'agent-desktop') | Where-Object { $m = $_; $runs | Where-Object { $_.mode -eq $m } }
 function Violated($r) { $w = $r.witness; $w -and ($w.foreground + $w.focus + $w.cursor + $w.clipboard + $w.injected) -gt 0 }
+function ViolationKinds($r) {
+    $w = $r.witness
+    $kinds = @(
+        if ($w.foreground) { 'premier plan' }
+        if ($w.focus) { 'focus clavier' }
+        if ($w.cursor) { 'curseur' }
+        if ($w.clipboard) { 'presse-papiers' }
+        if ($w.injected) { 'entrée injectée' }
+    ) -join ', '
+    $by = [regex]::Match("$($w.first)", 'premier plan pris par .*\(([^()]+)\) à \d+ ms$')
+    if ($by.Success) { "$kinds ; pris par $($by.Groups[1].Value)" } else { $kinds }
+}
 function Summarize($Set) {
     $by = @{}
     foreach ($m in $modes) {
@@ -111,7 +123,7 @@ $alerts = [System.Collections.Generic.List[string]]::new()
 $prd = if ($bgRuns) { 'tasks/prd-background-mode.md' } else { 'tasks/prd-windows-mcp-parity.md' }
 $ownViolations = @($bgRuns | Where-Object { $_.mode -eq 'background' -and (Violated $_) })
 if ($ownViolations) {
-    $alerts.Add("> **Violation de non-interférence en mode background :** $($ownViolations.Count) exécution(s), $(@($ownViolations | ForEach-Object { "$($_.task)/r$($_.rep) ($($_.witness.first))" }) -join ' ; '). Ouvrir une story de correction dans ``$prd`` avant de répondre à Q10.")
+    $alerts.Add("> **Violation de non-interférence en mode background :** $($ownViolations.Count) exécution(s), $(@($ownViolations | ForEach-Object { "$($_.task)/r$($_.rep) ($(ViolationKinds $_))" }) -join ' ; '). Ouvrir une story de correction dans ``$prd`` avant de répondre à Q10.")
 }
 if ($ex['a11y']) {
     $drop = $baseline.existing_a11y_success - $ex['a11y'].success
