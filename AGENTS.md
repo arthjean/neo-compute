@@ -51,7 +51,7 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
 | `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned). Complete semantic actions (EP-013): `bg-check`, `bg-uncheck`, `bg-legacy`, `bg-scroll`, `bg-scroll-ancestor`, `bg-range`, `bg-select-name`, `bg-wait-enabled`, `bg-auto-scroll` each require the effect read from Win32, the verdict on the first line of the result and an unchanged session; `bg-verdict` budgets the read-back (< 10 ms p95). Targeted perception (EP-014): `bg-tree-root` (a subtree with the whole tree's ids, `depth`, `root` within the whole tree's p95), `bg-reread` (`ui_find id:` against the state Win32 gives, < 10 ms p95), `bg-occluded` (the flag under the decoy, gone with a 16 px strip that Win32 hit-tests), `bg-occlusion-cost` (< 1 ms p95 with 50 more windows above the target). Visual pass (EP-015): `bg-capture` (`screenshot` gives the covered window's own pixels, read against what Win32 says of its controls), `bg-capture-password` (the field black in `screenshot` and in a `zoom` on it, while the raw capture shows it), `bg-capture-marks` (`ui_tree marks` draws the ids on that image), `bg-observe-shot` (`ui_act` with `observe: screenshot` returns that same image of the target), `bg-capture-hung` (a window whose thread is stopped is refused by the 200 ms check, never captured) |
 | `zig build bench -- <app>` | One application scenario (`notepad`, `notepad-menu`, `explorer`, `settings`, `calculator`, `chrome`, `chrome-text`, `firefox`, `firefox-msaa`, `vscode`): opens the app, times `ui_tree`, closes it; `app_launch` launches Calculator and a document through `app_launch` and places and closes them with `window_set` (close Calculator first); figures in `bench/apps.md` |
-| `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016 and US-037 tasks (`-Suite existing` or `parity`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity prompt names a tool. `-Solve` also plays each parity task's scripted solution, which its check must accept. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
+| `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` | US-016, US-037 and US-062 tasks (`-Suite existing`, `parity` or `background`): scripted setup, final-state check and cleanup without `claude -p`, after checking that no parity or background prompt names a tool; a harness failure exits with code 1. A background task runs under the decoy while a witness samples the foreground, the keyboard focus, the cursor and the clipboard every 50 ms and counts injected input: it must stay silent. `-Solve` also plays each parity task's scripted solution, and each background task's through `neo-compute --mode background` (`-Modes background`), which its check must accept, and proves once that a moved cursor and a lost foreground are each refused. Without `-DryRun` it runs the campaign (see Boundaries) and refuses uncommitted changes under `evals/windows`; `evals/report.ps1` writes `evals/reports/<date>.md` |
 
 A story is done when its PRD acceptance criteria hold and the first five
 commands pass. A change under `src/backend/`, `bindings/` or `tools/winmdgen/`
@@ -85,7 +85,11 @@ leaves the application it had open and the decoy process: close both); `bench` c
 taskbar, raises a topmost test window (`settle`) and puts the decoy in the
 foreground three times for about 15 s (`bg-act`, `bg-settle`, and
 `bg-capture` with a decoy and a test window that fill the primary display); the eval dry run opens the task apps, moves two Explorer
-windows and overwrites the clipboard the same way. Run them one at a time.
+windows and overwrites the clipboard the same way; its background suite
+builds the ReleaseFast server into `evals/.build`, puts the decoy in the
+foreground for each task (it presses F15 there every 250 ms), turns the
+title bar shake setting off then back as it was, and with `-Solve` moves the
+cursor by 6 px once. Run them one at a time.
 
 ## Architecture and gotchas
 
@@ -127,7 +131,12 @@ windows and overwrites the clipboard the same way. Run them one at a time.
   `window.zig`. A process started from a chain that received the last input
   may take the foreground: a non-interference measure is valid only once the
   decoy has pressed a key itself (`decoy_window.zig`), and each `bg-probe`
-  target prints that control line.
+  target prints that control line. That key must come after the server
+  started: a server started after the user's last key launched Calculator
+  into the foreground for about 560 ms (3 of 3, given back by the guard), and
+  never once the decoy had pressed its key again (0 of 3). The decoy of the
+  evals therefore presses it every 250 ms (`selftest-decoy` with a fifth
+  argument), as a user who keeps typing.
 - Cohabitation (EP-012, measures in decision 0013). In background mode the
   user's mouse and Escape key pause nothing: `Control.background` makes the
   re-arm shortcut a pause toggle (`hooks.zig`), and the indicator is the

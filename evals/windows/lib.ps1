@@ -128,13 +128,16 @@ function Start-NotepadFile([string]$File) {
 }
 
 # Chrome on an isolated profile under the run directory, showing one of
-# evals/windows/pages.
+# evals/windows/pages. NEO_EVALS_CHROME points elsewhere to prove the skip
+# on a machine without Chrome.
+$chromeExe = if ($env:NEO_EVALS_CHROME) { $env:NEO_EVALS_CHROME } else { 'C:\Program Files\Google\Chrome\Application\chrome.exe' }
+
 function Start-ChromePage([string]$Work, [string]$Page, [string]$Title) {
     $profileDir = Join-Path $Work 'chrome-profile'
     $copy = Join-Path $Work $Page
     Copy-Item "$PSScriptRoot/pages/$Page" $copy
     $url = 'file:///' + ($copy -replace '\\', '/')
-    Start-Process 'C:\Program Files\Google\Chrome\Application\chrome.exe' "--user-data-dir=`"$profileDir`"", '--no-first-run', '--no-default-browser-check', '--new-window', $url
+    Start-Process $chromeExe "--user-data-dir=`"$profileDir`"", '--no-first-run', '--no-default-browser-check', '--new-window', $url
     Show-Window (Wait-Window "$Title*")
 }
 
@@ -214,6 +217,17 @@ namespace Evals {
         [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
         [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
+        [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint ms, out IntPtr result);
+
+        public static void Move(IntPtr h, int x, int y) {
+            var old = SetThreadDpiAwarenessContext(PerMonitorV2);
+            try {
+                ShowWindow(h, 4);
+                SetWindowPos(h, IntPtr.Zero, x, y, 0, 0, 0x0015);
+            } finally { SetThreadDpiAwarenessContext(old); }
+        }
 
         public static int ProcessOf(IntPtr h) {
             uint pid;
@@ -447,4 +461,190 @@ function Write-Answer([string]$Work, [string]$Answer) {
 function Get-ExplorerWindow([string]$Leaf) {
     (New-Object -ComObject Shell.Application).Windows() |
         Where-Object { $_.LocationURL -like "*/$Leaf" } | Select-Object -First 1
+}
+
+function Get-DecoyRect {
+    $a = [Evals.Desk]::PrimaryWorkArea()
+    @(($a[0] - 8), $a[1], ([int](($a[2] - $a[0]) * 0.8) + 8), ($a[3] - $a[1] + 8))
+}
+
+function Get-CoveredRect {
+    $a = [Evals.Desk]::PrimaryWorkArea()
+    @(($a[0] + 40), ($a[1] + 40), [int](($a[2] - $a[0]) * 0.5), [int](($a[3] - $a[1]) * 0.75))
+}
+
+function Hide-UnderDecoy($Window, [switch]$KeepSize) {
+    $r = Get-CoveredRect
+    if ($KeepSize) { [Evals.Desk]::Move($Window.Key, $r[0], $r[1]) } else { [Evals.Desk]::Place($Window.Key, $r[0], $r[1], $r[2], $r[3]) }
+    Start-Sleep -Milliseconds 500
+}
+
+function Start-Decoy([string]$Server) {
+    $r = Get-DecoyRect
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($Server)
+    foreach ($a in @('selftest-decoy') + $r + 250) { $psi.ArgumentList.Add("$a") }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $deadline = (Get-Date).AddSeconds(5)
+    do {
+        Start-Sleep -Milliseconds 100
+        $h = [Evals.Desk]::FindWindowW('NeoComputeDecoy', 'neo-compute decoy')
+    } while ($h -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline)
+    if ($h -eq [IntPtr]::Zero) { Stop-Process -Id $p.Id -ErrorAction SilentlyContinue; throw 'fenêtre leurre absente' }
+    $decoy = [pscustomobject]@{ process = $p; hwnd = $h }
+    $i = 0
+    do {
+        $done = [IntPtr]::Zero
+        [void][Evals.Desk]::SendMessageTimeoutW($h, 0x8001, [IntPtr]::Zero, [IntPtr]::Zero, 2, 500, [ref]$done)
+        Start-Sleep -Milliseconds 100
+        $i++
+    } while ($i -lt 20 -and [Evals.Desk]::GetForegroundWindow() -ne $h)
+    if ([Evals.Desk]::GetForegroundWindow() -ne $h) { Stop-Decoy $decoy; throw 'la fenêtre leurre n''a pas pris le premier plan' }
+    Start-Sleep -Milliseconds 500
+    $decoy
+}
+
+function Stop-Decoy($Decoy) {
+    if ($Decoy) { Stop-Process -Id $Decoy.process.Id -ErrorAction SilentlyContinue }
+}
+
+function Start-Desk([string]$Exe, [string[]]$ArgList, [string]$LocalAppData) {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($Exe)
+    foreach ($a in $ArgList) { $psi.ArgumentList.Add($a) }
+    if ($LocalAppData) { $psi.Environment['LOCALAPPDATA'] = $LocalAppData }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardInputEncoding = $utf8
+    $psi.StandardOutputEncoding = $utf8
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $desk = [pscustomobject]@{ process = $p; next = 1; stderr = $p.StandardError.ReadToEndAsync(); calls = 0 }
+    [void](Send-Desk $desk 'initialize' @{ protocolVersion = '2025-06-18'; capabilities = @{}; clientInfo = @{ name = 'neo-evals'; version = '1' } })
+    $p.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
+    $p.StandardInput.Flush()
+    $desk
+}
+
+function Send-Desk($Desk, [string]$Method, $Params) {
+    $id = $Desk.next
+    $Desk.next = $id + 1
+    $Desk.process.StandardInput.WriteLine((@{ jsonrpc = '2.0'; id = $id; method = $Method; params = $Params } | ConvertTo-Json -Compress -Depth 8))
+    $Desk.process.StandardInput.Flush()
+    while ($true) {
+        $read = $Desk.process.StandardOutput.ReadLineAsync()
+        if (-not $read.Wait(60000)) { throw "desk : aucune réponse à $Method en 60 s" }
+        if ($null -eq $read.Result) { throw "desk : le serveur a fermé sa sortie" }
+        $m = $read.Result | ConvertFrom-Json -Depth 32
+        if ($m.id -eq $id) {
+            if ($m.error) { throw "desk : $Method : $($m.error.message)" }
+            return $m.result
+        }
+    }
+}
+
+function Stop-Desk($Desk) {
+    if (-not $Desk) { return }
+    try { $Desk.process.StandardInput.Close() } catch {}
+    if (-not $Desk.process.WaitForExit(3000)) { $Desk.process.Kill() }
+}
+
+function Invoke-Desk([string]$Tool, [hashtable]$Arguments = @{}, [switch]$AllowError) {
+    $desk = $global:NeoEvalsDesk
+    if (-not $desk) { throw 'desk : aucun serveur d''arrière-plan pour la solution scriptée' }
+    $desk.calls++
+    $r = Send-Desk $desk 'tools/call' @{ name = $Tool; arguments = $Arguments }
+    $text = @($r.content | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text }) -join "`n"
+    if ($r.isError -and -not $AllowError) { throw "desk : $Tool : $text" }
+    $text
+}
+
+function Get-DeskWindow([string]$Title, [int]$Seconds = 10) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    do {
+        $hit = [regex]::Match((Invoke-Desk 'window_list'), "(?m)^(0x[0-9a-f]+) `"$Title")
+        if ($hit.Success) { return $hit.Groups[1].Value }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    throw "desk : aucune fenêtre « $Title »"
+}
+
+function Find-DeskId([string]$Query, [string]$Line, [string]$Window, [int]$WaitMs = 5000) {
+    $arguments = @{ query = $Query; wait_ms = $WaitMs }
+    if ($Window) { $arguments.window = $Window }
+    $found = Invoke-Desk 'ui_find' $arguments
+    $hit = [regex]::Match($found, "(?m)^\s*(e[0-9a-z]+) $Line")
+    if (-not $hit.Success) { throw "desk : aucun élément /$Line/ pour « $Query » :`n$found" }
+    $hit.Groups[1].Value
+}
+
+function Invoke-DeskAct([string]$Id, [string]$Action, [string]$Value) {
+    $arguments = @{ id = $Id; action = $Action }
+    if ($Value) { $arguments.value = $Value }
+    $r = Invoke-Desk 'ui_act' $arguments
+    if (($r -split "`n")[0] -notmatch 'vérifié') { throw "desk : $Action $Id non vérifié : $(($r -split "`n")[0])" }
+    $r
+}
+
+if (-not ('Evals.Ink' -as [type])) {
+    Add-Type -ReferencedAssemblies System.Drawing.Common, System.Drawing.Primitives, System.Private.Windows.GdiPlus, System.Private.Windows.Core, System.Runtime.InteropServices -TypeDefinition @'
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+
+namespace Evals {
+    public static class Ink {
+        public static int Dark(byte[] encoded, double fromY) {
+            using (var bmp = new Bitmap(new MemoryStream(encoded))) {
+                var d = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                var px = new byte[d.Stride * d.Height];
+                Marshal.Copy(d.Scan0, px, 0, px.Length);
+                bmp.UnlockBits(d);
+                int n = 0;
+                for (int y = (int)(fromY * d.Height); y < d.Height; y++) {
+                    for (int x = 0; x < d.Width; x++) {
+                        int i = y * d.Stride + x * 4;
+                        if (px[i] + px[i + 1] + px[i + 2] < 240) n++;
+                    }
+                }
+                return n;
+            }
+        }
+    }
+}
+'@
+}
+
+$panelCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+
+function Start-Panel([string]$Work, [string]$Code = '0000') {
+    $exe = Join-Path $Work 'reglages.exe'
+    $log = & $panelCompiler -nologo -codepage:65001 -target:winexe "-out:$exe" "$PSScriptRoot\helpers\panel.cs"
+    if ($LASTEXITCODE) { throw "compilation de la fenêtre Réglages : $log" }
+    $p = Start-Process $exe -ArgumentList "`"$(Join-Path $Work 'panel-state.json')`"", $Code -PassThru
+    Set-Content (Join-Path $Work 'panel.pid') $p.Id
+    $w = Wait-Window 'Réglages neo-compute'
+    Show-Window $w
+    Hide-UnderDecoy $w -KeepSize
+}
+
+function Read-PanelState([string]$Work) {
+    $file = Join-Path $Work 'panel-state.json'
+    for ($i = 0; $i -lt 10; $i++) {
+        try { return Get-Content $file -Raw -ErrorAction Stop | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 100 }
+    }
+    $null
+}
+
+function Stop-Panel([string]$Work) {
+    $file = Join-Path $Work 'panel.pid'
+    if (Test-Path $file) { Stop-Process -Id ([int](Get-Content $file)) -ErrorAction SilentlyContinue }
+}
+
+function Test-CalculatorAbsent {
+    if (-not (Get-AppxPackage Microsoft.WindowsCalculator)) { 'Calculatrice absente (paquet Microsoft.WindowsCalculator)' }
 }

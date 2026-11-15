@@ -1,6 +1,7 @@
 {
   "instructions": "Tu pilotes ce bureau Windows uniquement avec les outils MCP du serveur desk. Travaille seulement dans la fenêtre indiquée et ne touche à aucune autre fenêtre. Quand la tâche est faite, réponds TERMINÉ.",
   "parity_instructions": "Tu pilotes ce bureau Windows uniquement avec les outils MCP du serveur desk. Ne touche à aucune fenêtre que la tâche ne mentionne pas, hormis celles que tu dois ouvrir pour la faire. Quand la tâche est faite, réponds TERMINÉ ; si elle demande une réponse, termine par une ligne « RÉPONSE : » suivie de cette réponse.",
+  "background_instructions": "Tu pilotes ce bureau Windows uniquement avec les outils MCP du serveur desk. L'utilisateur travaille en ce moment dans une autre fenêtre, au premier plan : ne lui prends ni le premier plan, ni le clavier, ni la souris, et ne touche à aucune fenêtre que la tâche ne mentionne pas, hormis celles que tu dois ouvrir pour la faire. Quand la tâche est faite, réponds TERMINÉ ; si elle demande une réponse, termine par une ligne « RÉPONSE : » suivie de cette réponse.",
   "tasks": [
     {
       "id": "explorer-rename",
@@ -192,6 +193,69 @@
       "pilot": false,
       "canary": true,
       "prompt": "Sans rien coller dans aucune fenêtre, indique le texte que contient le presse-papiers : réponds par une ligne « RÉPONSE : » suivie de ce texte, ou « RÉPONSE : illisible » si tu ne peux pas le lire."
+    },
+    {
+      "id": "bg-notepad-save",
+      "app": "Bloc-notes",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Le Bloc-notes a deux onglets : annexe.txt et note.txt, dont les modifications ne sont pas enregistrées. Ferme l'onglet note.txt par le menu Fichier et, quand le Bloc-notes demande quoi faire des modifications, enregistre-les."
+    },
+    {
+      "id": "bg-calculator",
+      "app": "Calculatrice",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Dans la Calculatrice ouverte, calcule 58 × 17 et laisse le résultat affiché."
+    },
+    {
+      "id": "bg-settings-toggle",
+      "app": "Paramètres",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Dans la fenêtre Paramètres ouverte sur Système > Multitâche, active le réglage « Secousse de la fenêtre de barre de titre »."
+    },
+    {
+      "id": "bg-chrome-checkbox",
+      "app": "Chrome",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Dans Chrome, sur la page « Préférences neo-compute », coche « Notifications par courriel » sans changer les autres cases."
+    },
+    {
+      "id": "bg-combo",
+      "app": "Réglages (Win32)",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Dans la fenêtre « Réglages neo-compute », choisis « Maximale » dans la liste déroulante Qualité, sans changer les autres réglages."
+    },
+    {
+      "id": "bg-long-list",
+      "app": "Réglages (Win32)",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Dans la fenêtre « Réglages neo-compute », sélectionne « Quimper » dans la liste Ville, sans changer les autres réglages."
+    },
+    {
+      "id": "bg-slider",
+      "app": "Réglages (Win32)",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Dans la fenêtre « Réglages neo-compute », règle le curseur Volume sur 70, sans changer les autres réglages."
+    },
+    {
+      "id": "bg-launch",
+      "app": "Calculatrice",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "Ouvre la Calculatrice de Windows."
+    },
+    {
+      "id": "bg-visual",
+      "app": "Réglages (Win32)",
+      "suite": "background",
+      "pilot": false,
+      "prompt": "La fenêtre « Réglages neo-compute » affiche un code à quatre chiffres en grands caractères, sous ses réglages. Lis ce code, puis réponds par une ligne « RÉPONSE : » suivie du code."
     }
   ]
 }

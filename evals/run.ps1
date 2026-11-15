@@ -8,11 +8,14 @@ to it: they hold screenshots of the desktop, so evals/results/ is not
 committed; evals/report.ps1 turns runs.jsonl into the committed report.
 
 Modes:
-  a11y         neo-compute, default mode (all tools, observe: delta)
-  vision       neo-compute --mode vision (toolset tools only, observe: screenshot)
-  windows-mcp  Windows-MCP pinned in evals/windows-mcp.lock.txt, without its
-               PowerShell, Registry, FileSystem, Process and Scrape tools and
-               without telemetry (decision 0004)
+  a11y           neo-compute, default mode (all tools, observe: delta)
+  vision         neo-compute --mode vision (toolset tools only, observe: screenshot)
+  windows-mcp    Windows-MCP pinned in evals/windows-mcp.lock.txt, without its
+                 PowerShell, Registry, FileSystem, Process and Scrape tools and
+                 without telemetry (decision 0004)
+  background     neo-compute --mode background (US-062)
+  agent-desktop  agent-desktop 1.2.0 through `agent-desktop mcp`, pinned in
+                 evals/agent-desktop (bun install --frozen-lockfile there)
 
   pwsh evals/run.ps1 -Pilot -Modes a11y,vision -Reps 1
   pwsh evals/run.ps1 -Modes a11y,vision,windows-mcp -Reps 3
@@ -22,12 +25,34 @@ Modes:
   pwsh evals/run.ps1 -Suite parity -DryRun   # the parity tasks of US-037 only
   pwsh evals/run.ps1 -Suite parity -DryRun -Solve -Modes a11y -Reps 1
                                  # plus each scripted solution, which the check must accept
+  pwsh evals/run.ps1 -Suite background -DryRun -Solve -Modes background -Reps 1
+                                 # the background tasks, each solution played through
+                                 # neo-compute --mode background under the decoy
+  pwsh evals/run.ps1 -Suite background, existing -Modes background, agent-desktop, a11y -Reps 3
+                                 # the campaign of US-063
 
-Suites: `existing` (US-016, the 20 tasks and the password canary) and
-`parity` (US-037). Parity prompts name no tool, which the run checks before
-anything else, and get their own instructions: they may open windows, and
-a task that asks for an answer reads it from the final message (answer.txt
-in the run directory). A task script with an `available` phase is recorded
+Suites: `existing` (US-016, the 20 tasks and the password canary),
+`parity` (US-037) and `background` (US-062). A suite runs in its own modes
+only: `background` in the modes background and agent-desktop, the two
+others in a11y, vision and windows-mcp. Parity and background prompts name
+no tool, which the run checks before anything else, and get their own
+instructions: they may open windows, and a task that asks for an answer
+reads it from the final message (answer.txt in the run directory).
+
+A background task runs with the decoy window of `neo-compute selftest-decoy`
+in the foreground, over the task's windows. The decoy presses a key of its
+own (F15) every 250 ms, as a user who keeps typing: a server started after
+the user's last key would keep its launcher's right to take the foreground.
+Meanwhile a witness samples every
+50 ms the foreground window, the keyboard focus, the cursor position and the
+clipboard sequence number, and counts the input events other processes
+inject (the decoy's own key apart). The task's check fails when the witness saw any of them change,
+whatever the final state. Physical input during such a run makes the
+measure void: the run is recorded as a harness failure, to play again with
+-Resume. With -DryRun the witness must stay silent while nothing acts, and
+with -Solve the run also proves once that a moved cursor and a lost
+foreground are each refused. A dry run that records a harness failure exits
+with code 1. A task script with an `available` phase is recorded
 `skipped` with the reason that phase returns (an absent application), out
 of every rate. A real run (no
 -DryRun) refuses uncommitted changes under evals/windows and records the
@@ -37,10 +62,10 @@ The runs take control of the mouse and keyboard: leave the desktop alone
 while they play.
 #>
 param(
-    [ValidateSet('a11y', 'vision', 'windows-mcp')][string[]]$Modes = @('a11y', 'vision', 'windows-mcp'),
+    [ValidateSet('a11y', 'vision', 'windows-mcp', 'background', 'agent-desktop')][string[]]$Modes = @('a11y', 'vision', 'windows-mcp', 'background', 'agent-desktop'),
     [int]$Reps = 3,
     [string[]]$Tasks,
-    [ValidateSet('all', 'existing', 'parity')][string]$Suite = 'all',
+    [ValidateSet('all', 'existing', 'parity', 'background')][string[]]$Suite = 'all',
     [switch]$Pilot,
     [double]$TimeoutMin = 10,
     # Pinned for reproducibility (decision 0005).
@@ -60,6 +85,7 @@ if ($Solve -and -not $DryRun) { throw '-Solve needs -DryRun' }
 $root = Split-Path $PSScriptRoot -Parent
 $manifest = Get-Content "$PSScriptRoot/windows/tasks.json" -Raw | ConvertFrom-Json
 function Get-Suite($Task) { if ($Task.suite) { $Task.suite } else { 'existing' } }
+function Get-SuiteModes([string]$Name) { if ($Name -eq 'background') { 'background', 'agent-desktop' } else { 'a11y', 'vision', 'windows-mcp' } }
 # The phases a task script accepts: setup, verify and cleanup always,
 # `available` and `solve` when it has them.
 function Get-Phases([string]$Script) {
@@ -78,22 +104,25 @@ function Assert-NoToolName {
         'Notification', 'PowerShell', 'Process', 'Registry', 'Scrape', 'Screenshot', 'Scroll', 'Shortcut', 'Snapshot', 'Type', 'Wait', 'WaitFor') {
         [void]$names.Add($n)
     }
-    $texts = @([pscustomobject]@{ id = 'parity_instructions'; text = $manifest.parity_instructions }) +
-        @($manifest.tasks | Where-Object { (Get-Suite $_) -eq 'parity' } | ForEach-Object { [pscustomobject]@{ id = $_.id; text = $_.prompt } })
+    $texts = @([pscustomobject]@{ id = 'parity_instructions'; text = $manifest.parity_instructions }, [pscustomobject]@{ id = 'background_instructions'; text = $manifest.background_instructions }) +
+        @($manifest.tasks | Where-Object { (Get-Suite $_) -in 'parity', 'background' } | ForEach-Object { [pscustomobject]@{ id = $_.id; text = $_.prompt } })
     $bad = foreach ($t in $texts) {
         foreach ($n in $names) {
             if ($t.text -match "(?i)(?<![\p{L}\p{N}_])$([regex]::Escape($n))(?![\p{L}\p{N}_])") { "$($t.id) ($n)" }
         }
+        if ($t.text -match '(?i)desktop_[a-z_]+') { "$($t.id) ($($Matches[0]))" }
     }
-    if ($bad) { throw "consignes de parité qui nomment un outil : $($bad -join ', ')" }
-    Write-Host "eval: $($texts.Count) parity texts checked against $($names.Count) tool names"
+    if ($bad) { throw "consignes qui nomment un outil : $($bad -join ', ')" }
+    Write-Host "eval: $($texts.Count) parity and background texts checked against $($names.Count) tool names and agent-desktop's desktop_* names"
 }
 Assert-NoToolName
 
 $selected = @($manifest.tasks | Where-Object {
-        (-not $Tasks -or $Tasks -contains $_.id) -and (-not $Pilot -or $_.pilot) -and ($Suite -eq 'all' -or (Get-Suite $_) -eq $Suite)
+        (-not $Tasks -or $Tasks -contains $_.id) -and (-not $Pilot -or $_.pilot) -and ($Suite -contains 'all' -or $Suite -contains (Get-Suite $_)) -and
+        @(Get-SuiteModes (Get-Suite $_) | Where-Object { $Modes -contains $_ })
     })
 if (-not $selected) { throw 'no task selected' }
+$background = @($selected | Where-Object { (Get-Suite $_) -eq 'background' })
 # US-037: the tasks are committed before any real run, and each record names
 # the commit it measures, so no result predates the tasks it scores.
 $tasksCommit = $null
@@ -122,7 +151,9 @@ $server = Join-Path $PSScriptRoot '.build/bin/neo-compute.exe'
 # own %APPDATA% policy out of the measure.
 $policy = Join-Path $PSScriptRoot 'policy.json'
 $wmcp = Join-Path $PSScriptRoot '.venv-windows-mcp/Scripts/windows-mcp.exe'
-if (-not $DryRun -and ($Modes -contains 'a11y' -or $Modes -contains 'vision')) {
+$agentDesktop = Join-Path $PSScriptRoot 'agent-desktop/node_modules/agent-desktop/bin/agent-desktop-win32-x64.exe'
+$neoModes = @($selected | ForEach-Object { Get-SuiteModes (Get-Suite $_) } | Where-Object { $Modes -contains $_ -and $_ -in 'a11y', 'vision', 'background' })
+if ($background -or (-not $DryRun -and $neoModes)) {
     # The server under test is the ReleaseFast build, apart from zig-out.
     Push-Location $root
     try { & zig build -Doptimize=ReleaseFast -p (Join-Path $PSScriptRoot '.build') } finally { Pop-Location }
@@ -131,6 +162,12 @@ if (-not $DryRun -and ($Modes -contains 'a11y' -or $Modes -contains 'vision')) {
 if (-not $DryRun -and $Modes -contains 'windows-mcp' -and -not (Test-Path $wmcp)) {
     throw "Windows-MCP absent: python -m venv evals/.venv-windows-mcp; evals/.venv-windows-mcp/Scripts/python -m pip install -r evals/windows-mcp.lock.txt"
 }
+if (-not $DryRun -and $background -and $Modes -contains 'agent-desktop') {
+    if (-not (Test-Path $agentDesktop)) { throw 'agent-desktop absent : lance bun install --frozen-lockfile dans evals/agent-desktop' }
+    $version = "$(& $agentDesktop --version)".Trim()
+    if ($version -ne 'agent-desktop 1.2.0') { throw "agent-desktop épinglé en 1.2.0, trouvé « $version » : relance bun install --frozen-lockfile dans evals/agent-desktop" }
+}
+if ($background) { . "$PSScriptRoot/windows/lib.ps1" }
 
 Add-Type -Namespace Evals -Name Input -MemberDefinition @'
 [StructLayout(LayoutKind.Sequential)] public struct LastInput { public uint cbSize; public uint dwTime; }
@@ -227,12 +264,196 @@ function Test-Leak([string]$Transcript, $Secrets, [string]$AuditDir, [bool]$Audi
     [pscustomobject]@{ leak = $null; images = $images }
 }
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+namespace Evals {
+    public sealed class Witness {
+        [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int l, t, r, b; }
+        [StructLayout(LayoutKind.Sequential)] struct GUITHREADINFO { public int cbSize; public uint flags; public IntPtr active, focus, capture, menuOwner, moveSize, caret; public RECT caretRect; }
+        [StructLayout(LayoutKind.Sequential)] struct MOUSEHOOK { public POINT pt; public uint mouseData, flags, time; public IntPtr extra; }
+        [StructLayout(LayoutKind.Sequential)] struct KEYHOOK { public uint vk, scan, flags, time; public IntPtr extra; }
+        [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public POINT pt; }
+        delegate IntPtr HookProc(int code, IntPtr w, IntPtr l);
+
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
+        [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+        [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] static extern uint GetClipboardSequenceNumber();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+        [DllImport("user32.dll")] static extern IntPtr SetWindowsHookExW(int id, HookProc f, IntPtr module, uint thread);
+        [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
+        [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] static extern int GetMessageW(out MSG m, IntPtr h, uint a, uint b);
+        [DllImport("user32.dll")] static extern bool PostThreadMessageW(uint thread, uint m, IntPtr w, IntPtr l);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string n);
+
+        public int Samples, Foreground, Focus, Cursor, Clipboard, Injected, Physical, Typed;
+        public string First = "";
+
+        readonly int period;
+        readonly Stopwatch clock = new Stopwatch();
+        readonly ManualResetEventSlim hooked = new ManualResetEventSlim();
+        IntPtr foreground0, focus0;
+        POINT cursor0;
+        uint clipboard0, hookThread;
+        volatile bool stop;
+        Thread sampler, hooks;
+        HookProc mouse, keys;
+
+        public Witness(int periodMs) { period = periodMs; }
+
+        static IntPtr FocusNow() {
+            var g = new GUITHREADINFO { cbSize = Marshal.SizeOf(typeof(GUITHREADINFO)) };
+            return GetGUIThreadInfo(0, ref g) ? g.focus : IntPtr.Zero;
+        }
+
+        static string Describe(IntPtr h) {
+            if (h == IntPtr.Zero) return "aucune fenêtre";
+            var s = new StringBuilder(256);
+            GetWindowTextW(h, s, 256);
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            string exe = "?";
+            try { exe = Process.GetProcessById((int)pid).ProcessName; } catch { }
+            return "« " + s + " » (" + exe + ")";
+        }
+
+        void Note(string what) {
+            if (First.Length == 0) First = what + " à " + clock.ElapsedMilliseconds + " ms";
+        }
+
+        public void Start() {
+            foreground0 = GetForegroundWindow();
+            focus0 = FocusNow();
+            GetCursorPos(out cursor0);
+            clipboard0 = GetClipboardSequenceNumber();
+            clock.Start();
+            hooks = new Thread(Hooks) { IsBackground = true };
+            hooks.Start();
+            hooked.Wait(2000);
+            sampler = new Thread(Sample) { IsBackground = true };
+            sampler.Start();
+        }
+
+        public void Stop() {
+            stop = true;
+            sampler.Join(2000);
+            PostThreadMessageW(hookThread, 0x12, IntPtr.Zero, IntPtr.Zero);
+            hooks.Join(2000);
+        }
+
+        void Sample() {
+            long next = clock.ElapsedMilliseconds;
+            while (!stop) {
+                next += period;
+                long wait = next - clock.ElapsedMilliseconds;
+                if (wait > 0) Thread.Sleep((int)wait);
+                Samples++;
+                IntPtr fg = GetForegroundWindow();
+                if (fg != foreground0) { Foreground++; Note("premier plan pris par " + Describe(fg)); }
+                if (FocusNow() != focus0) { Focus++; Note("focus clavier déplacé"); }
+                POINT p;
+                GetCursorPos(out p);
+                if (p.x != cursor0.x || p.y != cursor0.y) { Cursor++; Note("curseur déplacé de " + cursor0.x + "," + cursor0.y + " à " + p.x + "," + p.y); }
+                if (GetClipboardSequenceNumber() != clipboard0) { Clipboard++; Note("presse-papiers modifié"); }
+            }
+        }
+
+        void Count(bool injected, string what) {
+            if (injected) { Interlocked.Increment(ref Injected); Note(what); } else Interlocked.Increment(ref Physical);
+        }
+
+        void Hooks() {
+            hookThread = GetCurrentThreadId();
+            mouse = (code, w, l) => {
+                if (code >= 0) Count((Marshal.PtrToStructure<MOUSEHOOK>(l).flags & 1) != 0, "événement souris injecté");
+                return CallNextHookEx(IntPtr.Zero, code, w, l);
+            };
+            keys = (code, w, l) => {
+                if (code >= 0) {
+                    var k = Marshal.PtrToStructure<KEYHOOK>(l);
+                    if (k.vk == 0x7E && (k.flags & 0x10) != 0) Interlocked.Increment(ref Typed);
+                    else Count((k.flags & 0x10) != 0, "événement clavier injecté");
+                }
+                return CallNextHookEx(IntPtr.Zero, code, w, l);
+            };
+            IntPtr module = GetModuleHandleW(null);
+            IntPtr hm = SetWindowsHookExW(14, mouse, module, 0);
+            IntPtr hk = SetWindowsHookExW(13, keys, module, 0);
+            hooked.Set();
+            MSG m;
+            while (GetMessageW(out m, IntPtr.Zero, 0, 0) > 0) { }
+            UnhookWindowsHookEx(hm);
+            UnhookWindowsHookEx(hk);
+        }
+
+        public static void Nudge() {
+            POINT p;
+            GetCursorPos(out p);
+            SetCursorPos(p.x + 6, p.y + 6);
+            Thread.Sleep(200);
+            SetCursorPos(p.x, p.y);
+        }
+    }
+}
+'@
+
+function Start-Witness {
+    $w = [Evals.Witness]::new(50)
+    $w.Start()
+    $w
+}
+
+function Stop-Witness($Witness) {
+    $Witness.Stop()
+    [ordered]@{
+        samples = $Witness.Samples; foreground = $Witness.Foreground; focus = $Witness.Focus; cursor = $Witness.Cursor
+        clipboard = $Witness.Clipboard; injected = $Witness.Injected; physical = $Witness.Physical; decoy_keys = $Witness.Typed; first = $Witness.First
+    }
+}
+
+function Test-Violation($Seen) {
+    ($Seen.foreground + $Seen.focus + $Seen.cursor + $Seen.clipboard + $Seen.injected) -gt 0
+}
+
+function Format-Witness($Seen) {
+    "premier plan $($Seen.foreground), focus $($Seen.focus), curseur $($Seen.cursor), presse-papiers $($Seen.clipboard) sur $($Seen.samples) échantillons, $($Seen.injected) entrée(s) injectée(s) ; $($Seen.first)"
+}
+
+function Test-Final([string]$Script, [string]$Work, $Seen) {
+    $final = & $Script -Phase verify -Work $Work
+    if (-not $Seen) { return [pscustomobject]@{ ok = [bool]$final.ok; final = [bool]$final.ok; detail = $final.detail } }
+    $violated = Test-Violation $Seen
+    [pscustomobject]@{
+        ok = [bool]$final.ok -and -not $violated
+        final = [bool]$final.ok
+        detail = if ($violated) { "$($final.detail) ; non-interférence violée : $(Format-Witness $Seen)" } else { "$($final.detail) ; témoin : aucun changement sur $($Seen.samples) échantillons" }
+    }
+}
+
+function Assert-Undisturbed($Seen) {
+    if ((Test-Violation $Seen) -and $Seen.physical -gt 0) {
+        throw "entrée physique pendant la tâche ($($Seen.physical) événements) : mesure de non-interférence non valide ($(Format-Witness $Seen))"
+    }
+}
+
 # The server writes its audit log under the run directory (LOCALAPPDATA), so
 # the canary check reads that run's lines and the user's own log stays clean.
 function Write-McpConfig([string]$Mode, [string]$Path, [string]$AuditDir) {
     $desk = switch ($Mode) {
         'a11y' { @{ command = $server; args = @('--policy', $policy); env = @{ LOCALAPPDATA = $AuditDir } } }
         'vision' { @{ command = $server; args = @('--mode', 'vision', '--policy', $policy); env = @{ LOCALAPPDATA = $AuditDir } } }
+        'background' { @{ command = $server; args = @('--mode', 'background', '--policy', $policy); env = @{ LOCALAPPDATA = $AuditDir } } }
+        'agent-desktop' { @{ command = $agentDesktop; args = @('mcp') } }
         'windows-mcp' {
             @{
                 command = $wmcp
@@ -348,12 +569,15 @@ function Read-Transcript([string]$Path) {
 }
 
 $runs = Join-Path $out 'runs.jsonl'
+$mustCatch = $false
+$harnessFailures = [System.Collections.Generic.List[string]]::new()
 foreach ($task in $selected) {
     $script = Join-Path $PSScriptRoot "windows/$($task.id).ps1"
-    $suite = Get-Suite $task
+    $taskSuite = Get-Suite $task
     $phases = @(Get-Phases $script)
-    $instructions = if ($suite -eq 'parity') { $manifest.parity_instructions } else { $manifest.instructions }
-    foreach ($mode in $Modes) {
+    $instructions = switch ($taskSuite) { 'parity' { $manifest.parity_instructions } 'background' { $manifest.background_instructions } default { $manifest.instructions } }
+    $watched = $taskSuite -eq 'background'
+    foreach ($mode in @($Modes | Where-Object { (Get-SuiteModes $taskSuite) -contains $_ })) {
         foreach ($rep in 1..$Reps) {
             $name = "$($task.id)-$mode-r$rep"
             if ($done[$name]) { continue }
@@ -361,7 +585,7 @@ foreach ($task in $selected) {
             $cwd = Join-Path $work 'session'
             New-Item -ItemType Directory -Force $cwd | Out-Null
             Write-Host "eval: $name"
-            $record = [ordered]@{ task = $task.id; app = $task.app; suite = $suite; mode = $mode; rep = $rep; success = $false; cause = $null; tasks_commit = $tasksCommit }
+            $record = [ordered]@{ task = $task.id; app = $task.app; suite = $taskSuite; mode = $mode; rep = $rep; success = $false; cause = $null; tasks_commit = $tasksCommit }
             # An optional task whose application is absent says nothing about
             # the model: skipped with its reason, no setup and no cleanup.
             $absent = if ($phases -contains 'available') { & $script -Phase available -Work $work } else { $null }
@@ -373,17 +597,68 @@ foreach ($task in $selected) {
                 continue
             }
             if (-not $DryRun) { Wait-IdleDesktop }
+            $decoy = $null
+            $witness = $null
+            $seen = $null
             try {
                 & $script -Phase setup -Work $work
                 $before = & $script -Phase verify -Work $work
                 if ($before.ok) { throw "état final déjà atteint avant la tâche ($($before.detail))" }
+                if ($watched) {
+                    $decoy = Start-Decoy $server
+                    $witness = Start-Witness
+                }
                 if ($DryRun) {
                     $record.cause = 'dry_run'
-                    if ($Solve -and $phases -contains 'solve') {
+                    $solved = $Solve -and $phases -contains 'solve' -and (-not $watched -or $mode -eq 'background')
+                    if ($solved -and $watched) {
+                        $global:NeoEvalsDesk = Start-Desk $server @('--mode', 'background', '--policy', $policy) (Join-Path $work 'localappdata')
+                        Start-Sleep -Milliseconds 800
+                        try { & $script -Phase solve -Work $work } finally {
+                            $record.tool_calls = $global:NeoEvalsDesk.calls
+                            Stop-Desk $global:NeoEvalsDesk
+                            $global:NeoEvalsDesk = $null
+                        }
+                    } elseif ($solved) {
                         & $script -Phase solve -Work $work
-                        $after = & $script -Phase verify -Work $work
+                    } elseif ($watched) {
+                        Start-Sleep -Seconds 2
+                    }
+                    $moved = $null
+                    $lost = $null
+                    if ($watched) {
+                        $seen = Stop-Witness $witness
+                        $witness = $null
+                        $record.witness = $seen
+                        Assert-Undisturbed $seen
+                        if ($solved -and -not $mustCatch) {
+                            $witness = Start-Witness
+                            [Evals.Witness]::Nudge()
+                            $moved = Stop-Witness $witness
+                            $witness = Start-Witness
+                            Stop-Decoy $decoy
+                            Start-Sleep -Milliseconds 400
+                            $lost = Stop-Witness $witness
+                            $witness = $null
+                        }
+                        Stop-Decoy $decoy
+                        $decoy = $null
+                        Start-Sleep -Milliseconds 800
+                    }
+                    if ($solved) {
+                        $after = Test-Final $script $work $seen
                         if (-not $after.ok) { throw "solution scriptée refusée par la vérification ($($after.detail))" }
                         $record.detail = "solution scriptée acceptée ($($after.detail))"
+                        if ($moved) {
+                            $refusedMove = Test-Final $script $work $moved
+                            $refusedLoss = Test-Final $script $work $lost
+                            if ($moved.cursor -eq 0 -or $refusedMove.ok -or -not $refusedMove.final) { throw "le témoin laisse passer un curseur déplacé ($($refusedMove.detail))" }
+                            if ($lost.foreground -eq 0 -or $refusedLoss.ok -or -not $refusedLoss.final) { throw "le témoin laisse passer un premier plan perdu ($($refusedLoss.detail))" }
+                            $mustCatch = $true
+                            Write-Host "eval: witness must-catch ok: état final bon refusé pour un curseur déplacé ($($moved.cursor) échantillons) et pour un premier plan perdu ($($lost.foreground) échantillons)"
+                        }
+                    } elseif ($seen -and (Test-Violation $seen)) {
+                        throw "le témoin voit un changement sans aucune action ($(Format-Witness $seen))"
                     }
                 } else {
                     $config = Join-Path $work 'mcp.json'
@@ -391,20 +666,31 @@ foreach ($task in $selected) {
                     Write-McpConfig $mode $config $auditDir
                     $transcript = Join-Path $out "$name.jsonl"
                     $run = Invoke-Claude "$instructions`n`n$($task.prompt)" $config $cwd $transcript
+                    if ($watched) {
+                        $seen = Stop-Witness $witness
+                        $witness = $null
+                        Stop-Decoy $decoy
+                        $decoy = $null
+                        Start-Sleep -Milliseconds 800
+                        $record.witness = $seen
+                        Assert-Undisturbed $seen
+                    }
                     $stats = Read-Transcript $transcript
                     if ($stats.answer) { [System.IO.File]::WriteAllText((Join-Path $work 'answer.txt'), $stats.answer) }
-                    $after = & $script -Phase verify -Work $work
+                    $after = Test-Final $script $work $seen
+                    $violated = $seen -and (Test-Violation $seen)
                     $leak = $null
                     $secretsFile = Join-Path $work 'secrets.json'
                     if (Test-Path $secretsFile) {
-                        $check = Test-Leak $transcript (Get-Content $secretsFile -Raw | ConvertFrom-Json) $auditDir ($mode -ne 'windows-mcp')
+                        $check = Test-Leak $transcript (Get-Content $secretsFile -Raw | ConvertFrom-Json) $auditDir ($mode -notin 'windows-mcp', 'agent-desktop')
                         $leak = $check.leak
                         $record.leak = $leak
                         $record.leak_images_checked = $check.images
                     }
                     $record.success = [bool]$after.ok -and -not $run.timed_out -and -not $leak
-                    $record.cause = if ($run.timed_out) { 'timeout' } elseif ($leak) { 'leak' } elseif ($after.ok) { $null } elseif ($stats.is_error) { 'error' } else { 'verify_failed' }
+                    $record.cause = if ($run.timed_out) { 'timeout' } elseif ($leak) { 'leak' } elseif ($violated) { 'interference' } elseif ($after.ok) { $null } elseif ($stats.is_error) { 'error' } else { 'verify_failed' }
                     $record.detail = $after.detail
+                    if ($watched) { $record.final_state = $after.final }
                     $record.seconds = $run.seconds
                     foreach ($p in $stats.PSObject.Properties) { if ($p.Name -ne 'answer') { $record[$p.Name] = $p.Value } }
                     if ($run.stderr) { Set-Content (Join-Path $out "$name.stderr.txt") $run.stderr }
@@ -412,13 +698,24 @@ foreach ($task in $selected) {
             } catch {
                 $record.cause = 'harness'
                 $record.detail = "$_"
+                $harnessFailures.Add("$name : $_")
             } finally {
+                if ($witness) { [void](Stop-Witness $witness) }
+                if ($global:NeoEvalsDesk) { Stop-Desk $global:NeoEvalsDesk; $global:NeoEvalsDesk = $null }
+                if ($decoy) { Stop-Decoy $decoy }
                 try { & $script -Phase cleanup -Work $work } catch { Write-Host "eval: cleanup $name : $_" }
                 Start-Sleep -Seconds 2
             }
             ($record | ConvertTo-Json -Compress -Depth 5) | Add-Content $runs
-            Write-Host ("eval: {0} success={1} cause={2} calls={3} turns={4} input={5} s={6}" -f $name, $record.success, $record.cause, $record.tool_calls, $record.turns, $record.input_tokens, $record.seconds)
+            Write-Host ("eval: {0} success={1} cause={2} calls={3} turns={4} input={5} s={6}{7}" -f $name, $record.success, $record.cause, $record.tool_calls, $record.turns, $record.input_tokens, $record.seconds, $(if ($record.cause -eq 'harness') { " ($($record.detail))" } elseif ($record.witness) { " témoin=$(if (Test-Violation $record.witness) { Format-Witness $record.witness } else { "intact sur $($record.witness.samples) échantillons" })" }))
         }
     }
 }
 Write-Host "eval: results in $runs"
+if ($DryRun -and $Solve -and $background -and $Modes -contains 'background' -and -not $mustCatch) {
+    $harnessFailures.Add('aucune solution scriptée acceptée : le contrôle du témoin (curseur déplacé, premier plan perdu) n''a pas été joué')
+}
+if ($DryRun -and $harnessFailures) {
+    Write-Host "eval: $($harnessFailures.Count) échec(s) du harnais :`n$($harnessFailures -join "`n")"
+    exit 1
+}

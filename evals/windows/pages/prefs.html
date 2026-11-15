@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Préférences neo-compute</title>
+<style>
+  body { font: 18px/1.6 "Segoe UI", sans-serif; margin: 40px; }
+  label { display: block; margin: 14px 0; }
+  input { width: 20px; height: 20px; vertical-align: middle; margin-right: 10px; }
+</style>
+</head>
+<body>
+<h1>Préférences</h1>
+<label><input type="checkbox" id="sombre" checked>Thème sombre</label>
+<label><input type="checkbox" id="notifications">Notifications par courriel</label>
+<label><input type="checkbox" id="lettre">Lettre mensuelle</label>
+<script>
+  const ids = ['sombre', 'notifications', 'lettre'];
+  for (const id of ids) {
+    document.getElementById(id).addEventListener('change', () => {
+      document.title = 'préférences ' + ids.map(i => i + '=' + (document.getElementById(i).checked ? 'oui' : 'non')).join(';');
+    });
+  }
+</script>
+</body>
+</html>

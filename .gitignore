@@ -4,9 +4,11 @@ zig-out/
 bindings/vendor/
 # Packages fetched by the Zig build (build.zig.zon).
 zig-pkg/
-# Evals: server build, Windows-MCP venv, per-run state and raw transcripts
-# (they hold screenshots of the desktop). evals/reports/ is committed.
+# Evals: server build, Windows-MCP venv, agent-desktop package, per-run state
+# and raw transcripts (they hold screenshots of the desktop). evals/reports/
+# is committed.
 evals/.build/
 evals/.venv-windows-mcp/
+evals/agent-desktop/node_modules/
 evals/work/
 evals/results/

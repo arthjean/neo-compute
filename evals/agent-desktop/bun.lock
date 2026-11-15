@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "neo-compute-evals-agent-desktop",
+      "devDependencies": {
+        "agent-desktop": "1.2.0",
+      },
+    },
+  },
+  "packages": {
+    "agent-desktop": ["agent-desktop@1.2.0", "", { "os": [ "linux", "win32", "darwin", ], "cpu": [ "x64", "arm64", ], "hasInstallScript": true, "bin": { "agent-desktop": "bin/agent-desktop" } }, "sha512-sp8hHs8JfnuZe8ZQwiKZrqSOlu26SSeZXkjDog4KsU31L09G3uZJa8pITGN2vORif9uuh0iOSJHD146CEyTqag=="],
+  }
+}

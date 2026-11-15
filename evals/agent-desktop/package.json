@@ -1,0 +1,7 @@
+{
+  "name": "neo-compute-evals-agent-desktop",
+  "private": true,
+  "devDependencies": {
+    "agent-desktop": "1.2.0"
+  }
+}

@@ -1,16 +1,20 @@
-//! `neo-compute selftest-decoy <x> <y> <w> <h>`: the window a user would be
-//! working in, in a process of its own (EP-011). It takes the foreground and
-//! keeps the keyboard focus in its text field; the background probe and
-//! selftest put their target under it and check that no action moves the
-//! foreground, the focus or the cursor away. A process of its own matters:
+//! `neo-compute selftest-decoy <x> <y> <w> <h> [typing_ms]`: the window a
+//! user would be working in, in a process of its own (EP-011). It takes the
+//! foreground and keeps the keyboard focus in its text field; the background
+//! probe and selftest put their target under it and check that no action
+//! moves the foreground, the focus or the cursor away. A process of its own
+//! matters:
 //! Windows lets the foreground process take the foreground at will, so a
 //! decoy inside the server's process would grant the server a right it never
 //! has while a user works in another application. For the same reason the
 //! decoy takes the foreground back by itself when asked (`msg_front`), with
 //! an input event of its own, as a user clicking back into their window
 //! would: the process that sent the last input may take the foreground, and
-//! that must never be the server. The window closes itself after
-//! `lifetime_ms`.
+//! that must never be the server. With `typing_ms` it presses its key again
+//! at that period while it holds the foreground and the focus, as a user who
+//! keeps typing (US-062): a server started after the user's last key keeps
+//! its launcher's right to take the foreground until the next one. The
+//! window closes itself after `lifetime_ms`.
 const std = @import("std");
 const w = @import("win32");
 
@@ -31,6 +35,7 @@ pub const msg_animate = w.WM_APP + 3;
 
 const lifetime_timer = 1;
 const animation_timer = 2;
+const typing_timer = 3;
 var animation_step: u32 = 0;
 
 var field: w.HWND = null;
@@ -56,24 +61,28 @@ fn takeForeground(hwnd: w.HWND) void {
         if (fg_thread != 0 and fg_thread != me) _ = w.AttachThreadInput(me, fg_thread, 0);
     }
     _ = w.SetFocus(field);
-    // The user's keystroke: a key the decoy reads itself. Only real-looking
-    // key input read by another process ends the foreground right a process
-    // inherits from the one that started it. F15 is bound to nothing, and it
-    // is sent only while the decoy holds the foreground and the focus.
-    if (w.GetForegroundWindow() == hwnd and w.GetFocus() == field) {
-        const f15 = 0x7E;
-        var keys = [_]w.INPUT{
-            .{ .type = w.INPUT_KEYBOARD, .Anonymous = .{ .ki = .{ .wVk = f15, .wScan = 0, .dwFlags = 0, .time = 0, .dwExtraInfo = 0 } } },
-            .{ .type = w.INPUT_KEYBOARD, .Anonymous = .{ .ki = .{ .wVk = f15, .wScan = 0, .dwFlags = w.KEYEVENTF_KEYUP, .time = 0, .dwExtraInfo = 0 } } },
-        };
-        _ = w.SendInput(keys.len, &keys, @sizeOf(w.INPUT));
-    }
+    pressKey(hwnd);
+}
+
+/// The user's keystroke: a key the decoy reads itself. Only real-looking
+/// key input read by another process ends the foreground right a process
+/// inherits from the one that started it. F15 is bound to nothing, and it
+/// is sent only while the decoy holds the foreground and the focus.
+fn pressKey(hwnd: w.HWND) void {
+    if (w.GetForegroundWindow() != hwnd or w.GetFocus() != field) return;
+    const f15 = 0x7E;
+    var keys = [_]w.INPUT{
+        .{ .type = w.INPUT_KEYBOARD, .Anonymous = .{ .ki = .{ .wVk = f15, .wScan = 0, .dwFlags = 0, .time = 0, .dwExtraInfo = 0 } } },
+        .{ .type = w.INPUT_KEYBOARD, .Anonymous = .{ .ki = .{ .wVk = f15, .wScan = 0, .dwFlags = w.KEYEVENTF_KEYUP, .time = 0, .dwExtraInfo = 0 } } },
+    };
+    _ = w.SendInput(keys.len, &keys, @sizeOf(w.INPUT));
 }
 
 pub fn run(args: []const [:0]const u8) u8 {
-    if (args.len != 4) return 2;
+    if (args.len != 4 and args.len != 5) return 2;
     var r: [4]i32 = undefined;
-    for (args, &r) |a, *v| v.* = std.fmt.parseInt(i32, a, 10) catch return 2;
+    for (args[0..4], &r) |a, *v| v.* = std.fmt.parseInt(i32, a, 10) catch return 2;
+    const typing_ms: u32 = if (args.len == 5) std.fmt.parseInt(u32, args[4], 10) catch return 2 else 0;
     const instance = w.GetModuleHandleW(null);
     const class = std.unicode.utf8ToUtf16LeStringLiteral(class_name);
     const wc: w.WNDCLASSEXW = .{
@@ -103,6 +112,7 @@ pub fn run(args: []const [:0]const u8) u8 {
     if (field == null) return 1;
     takeForeground(hwnd);
     _ = w.SetTimer(hwnd, lifetime_timer, lifetime_ms, null);
+    if (typing_ms != 0) _ = w.SetTimer(hwnd, typing_timer, typing_ms, null);
     var msg: w.MSG = undefined;
     while (w.GetMessageW(&msg, null, 0, 0) > 0) {
         _ = w.TranslateMessage(&msg);
@@ -157,6 +167,10 @@ fn wndProc(hwnd: w.HWND, msg: u32, wparam: w.WPARAM, lparam: w.LPARAM) callconv(
                 animation_step +%= 1;
                 if (animation_step == 0) animation_step = 1;
                 _ = w.InvalidateRect(hwnd, null, 1);
+                return 0;
+            }
+            if (wparam == typing_timer) {
+                pressKey(hwnd);
                 return 0;
             }
             _ = w.DestroyWindow(hwnd);
