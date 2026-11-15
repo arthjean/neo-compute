@@ -136,6 +136,20 @@ $ownLeaks = @($canary | Where-Object { $_.mode -ne 'windows-mcp' -and $_.cause -
 if ($ownLeaks) {
     $alerts.Add("> **Fuite de secret dans neo-compute :** $(@($ownLeaks | ForEach-Object { "$($_.task)/$($_.mode)/r$($_.rep) ($($_.leak))" }) -join ', ').")
 }
+# A missed Month-1 target of the background PRD that the campaign measures
+# comes first too: the Q10 answer must not read as if every target held.
+$deltas = @($runs | Where-Object { $_.mode -eq 'a11y' } | ForEach-Object { $_.observation_tokens } | Where-Object { $null -ne $_ })
+$deltaMedian = Median $deltas
+$bgDeltas = @($runs | Where-Object { $_.mode -eq 'background' } | ForEach-Object { $_.observation_tokens } | Where-Object { $null -ne $_ })
+$bgDeltaMedian = Median $bgDeltas
+$deltaMisses = [System.Collections.Generic.List[string]]::new()
+if ($bgRuns) {
+    if ($deltas -and $deltaMedian -gt 150) { $deltaMisses.Add("a11y $(Fmt $deltaMedian) tokens sur $($deltas.Count) observations") }
+    if ($bgDeltas -and $bgDeltaMedian -gt 150) { $deltaMisses.Add("background $(Fmt $bgDeltaMedian) tokens sur $($bgDeltas.Count) observations") }
+    if ($deltaMisses) {
+        $alerts.Add("> **Cible manquée, médiane de tokens par delta après action (≤ 150) :** $($deltaMisses -join ' ; '). Ouvrir une story de correction dans ``$prd``.")
+    }
+}
 foreach ($a in $alerts) { $lines.Add($a); $lines.Add('') }
 
 $tick = '`'
@@ -243,10 +257,6 @@ foreach ($t in $ordered) {
     }
 }
 
-$deltas = @($runs | Where-Object { $_.mode -eq 'a11y' } | ForEach-Object { $_.observation_tokens } | Where-Object { $null -ne $_ })
-$deltaMedian = Median $deltas
-$bgDeltas = @($runs | Where-Object { $_.mode -eq 'background' } | ForEach-Object { $_.observation_tokens } | Where-Object { $null -ne $_ })
-$bgDeltaMedian = Median $bgDeltas
 $lines.Add('')
 $lines.Add('## Delta post-action (US-012)')
 $lines.Add('')
@@ -292,7 +302,8 @@ if ($bgRuns) {
     } else { $rows.Add(@('Réussite sur les 20 tâches existantes, mode a11y', '≥ 95 %', '-', 'non concluante : aucune exécution a11y des tâches existantes')) }
     $measured = @(@($deltaMedian, $bgDeltaMedian) | Where-Object { $null -ne $_ })
     $deltaText = @($(if ($deltas) { "a11y $(Fmt $deltaMedian)" }), $(if ($bgDeltas) { "background $(Fmt $bgDeltaMedian)" })) -ne $null -join ', '
-    $rows.Add(@('Médiane de tokens par delta après action', '≤ 150', $(if ($measured) { $deltaText } else { '-' }), $(if ($measured) { Held (-not ($measured | Where-Object { $_ -gt 150 })) } else { 'non concluante : aucun delta' })))
+    $deltaHeld = @($(if ($deltas) { "a11y : $(Held ($deltaMedian -le 150))" }), $(if ($bgDeltas) { "background : $(Held ($bgDeltaMedian -le 150))" })) -ne $null -join ' ; '
+    $rows.Add(@('Médiane de tokens par delta après action', '≤ 150', $(if ($measured) { $deltaText } else { '-' }), $(if ($measured) { $deltaHeld } else { 'non concluante : aucun delta' })))
     $rows.Add(@('Applications de référence capturées recouvertes', '≥ 5 sur 6', 'hors campagne', 'mesurée par la sonde US-060 (`neo-compute capture-probe`) et le contrôle `bg-capture`'))
     $rows.Add(@('Tokens des définitions `alwaysLoad`', '≤ 1 500', 'hors campagne', 'mesurée par le test du registre, `zig build test`'))
 
@@ -318,8 +329,9 @@ if ($bgRuns) {
     if ($a11y -and $a11y.success -lt 0.95) { $blockers.Add("réussite a11y des tâches existantes à $(Pct $a11y.success), sous 95 %") }
     $answer = if ($blockers) { "non, le défaut reste ``a11y`` : $($blockers -join ' ; ')" }
     elseif (-not $complete) { 'non concluante : la campagne est partielle (il faut au moins 8 tâches d''arrière-plan dans les modes background et agent-desktop et les 20 tâches existantes en a11y, avec 3 répétitions)' }
+    elseif ($deltaMisses) { "oui, avec une réserve : la cible de tokens par delta est manquée ($($deltaMisses -join ' ; '), pour 150)" }
     else { 'oui, toutes les cibles du mois 1 mesurées par la campagne sont tenues' }
-    $lines.Add("**Réponse recommandée : $answer.** Règle : oui quand la campagne est complète et que la suite background réussit à 85 % au moins, au moins autant qu'agent-desktop, sans aucune violation de non-interférence, et que les tâches existantes tiennent 95 % en a11y ; non dès qu'une de ces cibles manque. Le mode background n'a ni saisie au clavier ni clic par coordonnées : le rendre défaut retire ces outils tant que le serveur n'est pas relancé en ``a11y``. La décision reste à Arthur.")
+    $lines.Add("**Réponse recommandée : $answer.** Règle : oui quand la campagne est complète et que la suite background réussit à 85 % au moins, au moins autant qu'agent-desktop, sans aucune violation de non-interférence, et que les tâches existantes tiennent 95 % en a11y ; non dès qu'une de ces cibles manque. La médiane de tokens par delta mesure un coût, pas une réussite ni une interférence : manquée, elle laisse la réponse et l'accompagne d'une réserve et d'une story de correction. Le mode background n'a ni saisie au clavier ni clic par coordonnées : le rendre défaut retire ces outils tant que le serveur n'est pas relancé en ``a11y``. La décision reste à Arthur.")
 }
 
 if (-not $bgRuns) {
