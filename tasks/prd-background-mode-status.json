@@ -49,7 +49,7 @@
     {
       "id": "EP-016",
       "title": "Mesure",
-      "status": "TODO",
+      "status": "IN_REVIEW",
       "priority": "P1",
       "stories_total": 2,
       "stories_done": 0
@@ -352,11 +352,11 @@
       "id": "US-062",
       "title": "Tâches d'évals d'arrière-plan",
       "epic": "EP-016",
-      "status": "TODO",
+      "status": "IN_REVIEW",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-044", "US-048", "US-050", "US-055"],
-      "started_at": null,
+      "started_at": "2026-11-13",
       "completed_at": null,
       "reviewed_at": null
     },
@@ -364,11 +364,11 @@
       "id": "US-063",
       "title": "Campagne d'arrière-plan",
       "epic": "EP-016",
-      "status": "TODO",
+      "status": "IN_REVIEW",
       "priority": "P1",
       "size": "S",
       "blocked_by": ["US-062"],
-      "started_at": null,
+      "started_at": "2026-11-13",
       "completed_at": null,
       "reviewed_at": null
     },
