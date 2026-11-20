@@ -117,6 +117,14 @@
       "priority": "P0",
       "stories_total": 2,
       "stories_done": 0
+    },
+    {
+      "id": "EP-033",
+      "title": "Validation Windows du portage",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 3,
+      "stories_done": 0
     }
   ],
   "stories": [
@@ -1028,6 +1036,46 @@
         "US-082",
         "US-091",
         "US-097"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-126",
+      "title": "Gates Windows sur copie fraîche",
+      "epic": "EP-033",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-127",
+      "title": "Selftests Windows identiques au commit de référence",
+      "epic": "EP-033",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-126"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-128",
+      "title": "Dry run des évals Windows",
+      "epic": "EP-033",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [
+        "US-126"
       ],
       "started_at": null,
       "completed_at": null,

@@ -6,6 +6,7 @@
 | Version | Date | Author | Summary |
 |---------|------|--------|---------|
 | 1.0 | 2026-11-20 | Arthur Jean | Version initiale : portage Linux (GNOME de référence, KDE, wlroots) d'après l'audit `docs/research/2026-11-20-audit-portage-linux.md` et la décision `docs/decisions/0014-portage-linux.md` (D1 à D14), EP-019 à EP-032 |
+| 1.2 | 2026-11-20 | Arthur Jean | Toute preuve sous Windows (gates de l'hôte Windows, `selftest`, `selftest --background`, bench Windows, dry run des évals Windows) sort des stories et passe dans l'epic final EP-033 (US-126 à US-128) : le portage s'itère et se certifie sous Linux sans redémarrer sous Windows |
 | 1.1 | 2026-11-20 | Arthur Jean | P1, P3, P9, P10 et P12 tranchés (décision 0014, « Amendement du PRD Linux ») : pause à la perte de l'extension (US-094) ; evdev limité aux périphériques de pointeur et réarmement par un clic physique sur le libellé sous wlroots (US-121, US-125) ; filtre seccomp étendu à `execve`, `ptrace` et `process_vm_*` (US-119) ; lanceur qui ne reçoit qu'un identifiant `.desktop` (US-099) ; crochets de test absents des builds de release (`-Dtest-hooks`, US-083, US-120) |
 
 ## Problem Statement
@@ -94,8 +95,9 @@ Ces points ne sont pas tranchés par les décisions D1 à D14. Ils touchent la s
 | 1 : GNOME au premier plan | EP-019 à EP-025 sauf US-097, plus US-119 | 101 |
 | 2 : arrière-plan et mesures GNOME | EP-026, EP-029, EP-030, EP-031, US-097, US-120 | 42 |
 | 3 : KDE et wlroots | EP-027, EP-028 | 33 |
+| 4 : validation Windows | EP-033 | 8 |
 
-Périmètre : 14 epics, 59 stories, 176 points. Si la sonde US-095 infirme A25, US-097 devient P0 et passe en livraison 1.
+Périmètre : 15 epics, 62 stories, 184 points. Si la sonde US-095 infirme A25, US-097 devient P0 et passe en livraison 1.
 
 ## Non-Goals
 
@@ -198,7 +200,7 @@ Les sources primaires sont l'audit `docs/research/2026-11-20-audit-portage-linux
 - Aucun selftest, bench ni éval ne tourne sur la session réelle sans `--real-session`, réservé à Arthur.
 - Aucune campagne `claude -p` sans Arthur, aucune clé `ANTHROPIC_API_KEY` (AGENTS.md).
 - Chaque défaut de la couche des bibliothèques C sous Linux compte pour la condition 3 du Rust Switch Gate (D12) : libpipewire, libxkbcommon, durée de vie des descripteurs. Le compteur est dans `docs/decisions/0001-zig-vs-rust.md`.
-- Le comportement Windows ne change pas : une story qui touche `src/core/`, `build.zig`, `build.zig.zon` ou `src/backend/windows/` passe aussi les gates Windows (Quality Gates).
+- Le comportement Windows ne change pas. Sous Linux, chaque story le protège par ce qui tourne sans redémarrer : `zig build cross`, les tests du cœur sur le backend factice qui parle les textes Windows, et les tests de comparaison d'octets (US-071). Tout ce qui exige l'hôte Windows est prouvé une fois, par l'epic final EP-033.
 
 ## Technical Decisions
 
@@ -222,12 +224,14 @@ Les sources primaires sont l'audit `docs/research/2026-11-20-audit-portage-linux
 
 ## Quality Gates
 
-These commands must pass for every user story, on the host OS where the story is developed:
+These commands must pass for every user story, under Linux, where the port is developed and certified:
 - `zig fmt --check .` - formatage
-- `zig build` - serveur du système hôte (Linux : backend Linux ; Windows : backend Windows, sondes et bindings générés)
-- `zig build test` - tests du cœur sur le backend factice, budgets vérifiés à la compilation, générateurs, et sous Windows bindings et dispositions de structures
-- `zig build cross` - le serveur de l'autre système compile (depuis Linux : Windows ; depuis Windows : Linux x86_64 et aarch64)
-- `zig build bench -- --check bench/baseline-linux.json` - sous Linux (à partir de US-115, cette commande lance elle-même les scénarios de bureau dans une session `gnome` isolée) ; sous Windows, `zig build bench -- --check bench/baseline.json`
+- `zig build` - serveur Linux
+- `zig build test` - tests du cœur sur le backend factice (textes Windows compris), budgets vérifiés à la compilation, générateurs, tests du backend Linux
+- `zig build cross` - le serveur Windows et ses sondes compilent pour `x86_64-windows-gnu`
+- `zig build bench -- --check bench/baseline-linux.json` - à partir de US-115, cette commande lance elle-même les scénarios de bureau dans une session `gnome` isolée
+
+Aucune story de EP-019 à EP-032 n'exige l'hôte Windows : ses gates, `selftest`, `selftest --background`, le bench Windows et le dry run des évals Windows appartiennent à EP-033, l'epic final, et `/review-epic` certifie les autres sous Linux.
 
 US-068, US-069 et US-073 créent la forme Linux de ces gates. Une story antérieure à leur livraison n'est tenue qu'aux gates déjà établis sur son hôte.
 
@@ -236,7 +240,6 @@ Additional gates:
 - `zig build session -- kde selftest` et `zig build session -- sway selftest` - à partir de US-079 pour les contrôles de transport, puis pour chaque story de EP-027 (`kde`) et de EP-028 (`sway`, plus `labwc` pour US-111 et US-122)
 - `zig build session -- gnome selftest --background` - à partir de US-100, pour les stories qui touchent le mode arrière-plan ou un chemin qu'il partage
 - `zig build evals -- --dry-run` - stories qui touchent `evals/linux/` ou `tools/evals-linux/`
-- Stories qui touchent `src/core/`, `build.zig`, `build.zig.zon` ou `src/backend/windows/` : les gates Windows d'AGENTS.md sur la machine de référence démarrée sous Windows (`zig build run -- selftest`, et `selftest --background` quand un chemin du mode arrière-plan change), avant que `/review-epic` certifie la story
 
 ## Epics & User Stories
 
@@ -244,7 +247,7 @@ Additional gates:
 
 Rendre le dépôt constructible et vérifiable sous Linux sans changer Windows : build sur copie fraîche, modules séparés, squelette du backend Linux, cœur sans hypothèse Windows (chantiers L1 à L3 de l'audit). Livraison 1.
 
-**Definition of Done:** Sur une copie fraîche sous Linux, les cinq gates passent et le serveur Linux répond à `initialize` et `tools/list`. Sous Windows, les cinq gates et `selftest` rendent les mêmes contrôles `ok` qu'au commit `3091301`. L'amendement de la décision 0014 porte les réponses d'Arthur aux points P1 à P12.
+**Definition of Done:** Sur une copie fraîche sous Linux, les cinq gates passent et le serveur Linux répond à `initialize` et `tools/list`. La preuve sous Windows est celle de EP-033. L'amendement de la décision 0014 porte les réponses d'Arthur aux points P1 à P12.
 
 #### US-067: Amendement de la décision 0014 pour les points de contrat du PRD
 **Description:** En tant qu'Arthur, je veux les points de contrat que ce PRD ajoute consignés et confirmés afin qu'aucun code qui change la sécurité, la politique ou le contrat ne parte sans mon accord.
@@ -267,11 +270,10 @@ Rendre le dépôt constructible et vérifiable sous Linux sans changer Windows :
 
 **Acceptance Criteria:**
 - [ ] Étant donné une copie fraîche du dépôt, Zig 0.17.0, et `ZIG_GLOBAL_CACHE_DIR` et `ZIG_LOCAL_CACHE_DIR` vers des dossiers vides, quand `zig build` tourne sous Linux, alors le fetch de libjpeg-turbo réussit sans « hash mismatch ».
-- [ ] Le même `build.zig.zon` construit sous Windows sur une copie fraîche avec un cache vide.
 - [ ] `build.zig` ne code plus le répertoire racine de l'archive libjpeg-turbo (`build.zig:201` aujourd'hui).
 - [ ] `probe` et `probe_c` ne sont construits et installés que pour une cible Windows.
 - [ ] `bindings_test`, `layout_test` et les tests de lecture PE de `tests/process_test.zig` ne sont ajoutés au step `test` que pour une cible Windows.
-- [ ] Le test de `src/core/background_test.zig:638` passe sous Linux (110 ms mesurés) et sous Windows : sa borne basse vient de la granularité du minuteur de l'hôte au lieu du quantum Windows de 15,6 ms.
+- [ ] Le test de `src/core/background_test.zig:638` passe sous Linux (110 ms mesurés) : sa borne basse vient de la granularité du minuteur de l'hôte au lieu du quantum Windows de 15,6 ms.
 - [ ] Étant donné une cible sans backend (`-Dtarget=aarch64-macos`), quand `zig build` tourne, alors il échoue avec « Aucun backend pour macos : neo-compute se construit pour windows et linux, ou avec -Dfake-backend=true pour les tests. »
 - [ ] `AGENTS.md` dit comment installer Zig 0.17.0 sous Linux. Il précise aussi que `ZIG_GLOBAL_CACHE_DIR` redirige le cache et que `zig build` 0.17 refuse `--global-cache-dir`.
 
@@ -287,9 +289,8 @@ Rendre le dépôt constructible et vérifiable sous Linux sans changer Windows :
 - [ ] Un test du build échoue en nommant le fichier si un fichier de `src/core/` importe un fichier de `src/backend/`, ou si un fichier de `src/backend/linux/` importe un fichier de `src/backend/windows/`, ou l'inverse.
 - [ ] `src/backend/linux.zig` implémente les 58 méthodes appelées sans condition par le cœur. Chaque méthode pas encore implémentée rend une erreur que l'outil traduit en « Linux : <outil> n'est pas encore disponible dans ce build. Aucune action exécutée. »
 - [ ] Sous Linux, le serveur répond à `initialize` et à `tools/list`, et la liste contient les 17 outils de la fixture.
-- [ ] `zig build cross` lancé sous Linux construit `neo-compute.exe`, `probe.exe` et `probe_c.exe` pour `x86_64-windows-gnu`. Lancé sous Windows, il construit le serveur Linux pour `x86_64-linux-gnu.2.28` et `aarch64-linux-gnu.2.28`.
+- [ ] `zig build cross` lancé sous Linux construit `neo-compute.exe`, `probe.exe` et `probe_c.exe` pour `x86_64-windows-gnu`. Avec une cible Windows (`-Dtarget=x86_64-windows-gnu`, comme sur un hôte Windows), il construit le serveur Linux pour `x86_64-linux-gnu.2.28` et `aarch64-linux-gnu.2.28`.
 - [ ] Étant donné un appel `screenshot` au serveur Linux de cette story, quand il est traité, alors la réponse est `isError: true` avec le message ci-dessus, et le processus répond à l'appel suivant.
-- [ ] Sous Windows, `zig build run -- selftest` rend les mêmes contrôles `ok` qu'avant la story.
 
 #### US-070: Politique et audit aux emplacements XDG, identité d'application
 **Description:** En tant qu'Arthur, je veux que la politique et l'audit se chargent sous Linux et reconnaissent les applications Linux afin que les règles `deny` protègent vraiment mes gestionnaires de mots de passe et mes terminaux.
@@ -323,7 +324,7 @@ Rendre le dépôt constructible et vérifiable sous Linux sans changer Windows :
 **Dependencies:** Blocked by US-069
 
 **Acceptance Criteria:**
-- [ ] Les descriptions des outils ajoutés au toolset et les trois textes d'`instructions` (modes `a11y`, `vision`, `background`) viennent de constantes du backend. Sous Windows, `tools/list` et `initialize` rendent des octets identiques à ceux d'avant la story (test de comparaison).
+- [ ] Les descriptions des outils ajoutés au toolset et les trois textes d'`instructions` (modes `a11y`, `vision`, `background`) viennent de constantes du backend. Avec les textes Windows, `tools/list` et `initialize` rendent des octets identiques à ceux d'avant la story (test de comparaison du cœur, qui tourne sous Linux).
 - [ ] Sous Linux, aucun texte de `tools/list` ni d'`instructions` ne contient « Windows », « Start menu », « AUMID », « HKCU » ou « registry ».
 - [ ] `registry_read` n'est enregistré que si le backend déclare `registryValue` (`@hasDecl`). Le backend Linux ne le déclare pas, et `tools/list` sous Linux ne contient pas `registry_read`.
 - [ ] Étant donné un appel `registry_read` au serveur Linux, alors la réponse est l'erreur d'outil inconnu existante (-32602).
@@ -359,7 +360,6 @@ Rendre le dépôt constructible et vérifiable sous Linux sans changer Windows :
 - [ ] Étant donné une baseline d'un autre OS que l'hôte, quand `zig build bench -- --check <fichier>` tourne, alors il échoue avec « Baseline <os> sur un hôte <os> : utilise bench/baseline-linux.json sous Linux, bench/baseline.json sous Windows. »
 - [ ] Étant donné un scénario présent dans la baseline qui rend `unsupported`, alors le gate échoue en nommant le scénario.
 - [ ] `zig build bench` ne dépend plus de l'installation de `probe` et `probe_c` sous Linux.
-- [ ] Sous Windows, `zig build bench -- --check bench/baseline.json` rend le même verdict qu'avant la story.
 
 ---
 
@@ -1346,6 +1346,59 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 
 ---
 
+### EP-033: Validation Windows du portage
+
+Prouver, en une seule session sur la machine de référence démarrée sous Windows, que le portage n'a rien changé au comportement Windows : gates, selftests, bench et dry run des évals. Epic final : toutes les preuves sous Windows du PRD sont ici, pour que les autres epics s'itèrent et se certifient sous Linux. Livraison 4. L'epic peut tourner plus tôt, à une fin de livraison, et se rejoue à chaque passage sous Windows.
+
+**Definition of Done:**
+- Sur une copie fraîche sous Windows, les cinq gates Windows d'AGENTS.md passent avec un cache vide.
+- `selftest`, `selftest --capture gdi` et `selftest --background` rendent les mêmes contrôles `ok` qu'au commit `3091301`, ou chaque différence est expliquée par une story du PRD.
+- Le dry run des évals Windows passe.
+- Chaque régression trouvée est corrigée, sa cause et son commit d'origine consignés dans le rapport.
+
+#### US-126: Gates Windows sur copie fraîche
+**Description:** En tant qu'Arthur, je veux les gates Windows sur une copie fraîche à la fin du portage afin de savoir que Windows construit et se teste comme avant, sans redémarrer sous Windows à chaque story.
+
+**Priority:** P0
+**Size:** M (3 pts)
+**Dependencies:** Epic final : toutes les stories des autres epics à l'état `DONE` ou `CANCELLED`, ou une fin de livraison choisie par Arthur
+
+**Acceptance Criteria:**
+- [ ] Étant donné une copie fraîche du dépôt sous Windows, Zig 0.17.0, et `ZIG_GLOBAL_CACHE_DIR` et `ZIG_LOCAL_CACHE_DIR` vers des dossiers vides, quand `zig build` tourne, alors le fetch de libjpeg-turbo réussit sans « hash mismatch » avec le `build.zig.zon` de US-068, et `probe` et `probe_c` sont installés.
+- [ ] `zig fmt --check .` et `zig build test` passent sous Windows, bindings, dispositions de structures et tables d'import PE compris. Le test de `src/core/background_test.zig:638` y passe avec la granularité du minuteur Windows.
+- [ ] `zig build cross` lancé sous Windows construit le serveur Linux pour `x86_64-linux-gnu.2.28` et `aarch64-linux-gnu.2.28`.
+- [ ] `zig build bench -- --check bench/baseline.json` rend le même verdict qu'au commit `3091301`, sans réécrire `bench/baseline.json`. Un scénario de la baseline marqué `unsupported` fait échouer le gate (US-073) : le rapport donne sa raison.
+- [ ] Avec `bench/baseline-linux.json`, le bench refuse la baseline avec le message de US-073.
+- [ ] Étant donné un gate qui échoue, alors la story reste `IN_REVIEW`, le rapport nomme le commit du portage qui l'a introduit (bissection depuis `3091301`), et le correctif passe aussi les gates Linux.
+
+#### US-127: Selftests Windows identiques au commit de référence
+**Description:** En tant qu'Arthur, je veux les selftests Windows comparés au commit `3091301` afin de prouver que la séparation des modules et le cœur neutre n'ont changé aucun contrôle.
+
+**Priority:** P0
+**Size:** M (3 pts)
+**Dependencies:** Blocked by US-126
+
+**Acceptance Criteria:**
+- [ ] `zig build run -- selftest` rend les mêmes contrôles `ok` qu'au commit `3091301`. Le rapport joint les deux sorties et leur différence, contrôle par contrôle.
+- [ ] `zig build run -- selftest --capture gdi` rend de même les contrôles `ok` de `3091301`.
+- [ ] `zig build run -- selftest --background` rend les mêmes contrôles `ok` qu'au commit `3091301`, `bg-loop` compris (1 000 actions, 0 violation).
+- [ ] Un contrôle ajouté ou retiré depuis `3091301` est nommé dans le rapport, avec la story qui l'explique. Un contrôle passé de `ok` à un autre état est une régression.
+- [ ] Un serveur Windows enregistré par `claude mcp add -s local neo-compute-check` répond dans `claude mcp list`, puis est retiré (AGENTS.md).
+
+#### US-128: Dry run des évals Windows
+**Description:** En tant qu'Arthur, je veux le dry run des évals Windows après le portage afin que la campagne Windows reste jouable telle quelle.
+
+**Priority:** P1
+**Size:** S (2 pts)
+**Dependencies:** Blocked by US-126
+
+**Acceptance Criteria:**
+- [ ] `pwsh -NoProfile -Command "& ./evals/run.ps1 -DryRun"` passe pour les suites `existing`, `parity` et `background`, sans `claude -p`.
+- [ ] `-Solve` passe pour les suites `parity` et `background`, et le témoin de non-interférence reste silencieux.
+- [ ] `evals/windows/`, `evals/run.ps1`, `evals/night.ps1` et `evals/report.ps1` sont inchangés depuis `3091301` (Files NOT to Modify).
+
+---
+
 ## Functional Requirements
 
 - FR-48: Sous Linux, un binaire unique identifie à l'exécution la famille de compositeur (GNOME, KDE, wlroots). Un outil qui exige une capacité absente répond par un message qui nomme la capacité, la cause et l'action suivante (FR-06).
@@ -1431,8 +1484,8 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 | 9 | `SetKeymap` ou `SetActive` appelés par erreur (plantage de Mutter, déverrouillage) | Low | High | Liste de refus du générateur et tests (US-091, US-094, FR-61) |
 | 10 | Un mot de passe sort par AT-SPI (puces, `Peek`) ou par une capture | Low | High | FR-60 ; image refusée sans balayage complet (FR-42) ; tâche canari Linux |
 | 11 | Chrome recouvert rend un arbre figé sous Linux (A31) | High | Med | Sonde US-114 ; verdict « non vérifiable » comme sous Windows |
-| 12 | Une évolution du cœur casse Windows | Med | High | Gates Windows obligatoires pour toute story qui touche le cœur ou le build ; tests de comparaison d'octets (US-071) |
-| 13 | 59 stories dépassent une livraison | High | Low | Trois livraisons ; la livraison 1 rend GNOME utilisable seule |
+| 12 | Une évolution du cœur casse Windows, découverte seulement par EP-033 | Med | High | Sous Linux à chaque story : `zig build cross`, tests du cœur avec les textes Windows, comparaison d'octets (US-071). En fin de portage : EP-033 contre le commit `3091301`, régression cherchée par bissection sur les commits du portage. Arthur peut lancer EP-033 plus tôt, à une fin de livraison |
+| 13 | 62 stories dépassent une livraison | High | Low | Quatre livraisons ; la livraison 1 rend GNOME utilisable seule |
 | 14 | Les selftests reposent sur Python (fixture) | Low | Low | `python3 -I` ; contrôles notés `skipped` avec leur raison si PyGObject manque |
 | 15 | Le serveur figé par SIGSTOP garde ses touches | Low | Med | Limite documentée (US-093) ; hors du chemin d'arrêt de Claude Code, qui envoie SIGINT, SIGTERM puis SIGKILL |
 | 16 | Les applications lancées héritent du filtre seccomp et perdent le réseau | High | High | Processus lanceur créé avant le filtre (T9, US-099) ; contrôle `app-launch` de US-119 qui lit `Seccomp:` à 0 pour l'application lancée |

@@ -65,7 +65,12 @@ background mode, the intrusion classes or a path they share (`ui_act`,
 and `ui_find`'s wait in `a11y.zig`, the window capture of `screenshot`,
 `zoom` and `ui_tree marks` in `screen.zig` and `capture.zig`, the native
 selection in `native_list.zig`) also needs
-`selftest --background`. `selftest` moves the
+`selftest --background`. Exception, the Linux port (`tasks/prd-linux-port.md`):
+its stories are developed and certified under Linux with the Linux gates,
+`zig build cross` and the core tests on the fake backend; every check that
+needs a Windows host (these selftests, the Windows bench, the Windows eval
+dry run) belongs to its final epic EP-033, never to another story's
+review. `selftest` moves the
 cursor, types, raises a topmost window, shows the control indicator and
 overwrites the clipboard (its earlier text is put back, other formats are
 lost); `selftest --background` puts a large decoy window of a second
