@@ -47,14 +47,6 @@
       "stories_done": 2
     },
     {
-      "id": "EP-016",
-      "title": "Mesure",
-      "status": "IN_REVIEW",
-      "priority": "P1",
-      "stories_total": 2,
-      "stories_done": 0
-    },
-    {
       "id": "EP-017",
       "title": "Sélection native des listes Win32",
       "status": "TODO",
@@ -68,6 +60,14 @@
       "status": "TODO",
       "priority": "P2",
       "stories_total": 1,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-016",
+      "title": "Mesure",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 2,
       "stories_done": 0
     }
   ],
@@ -349,30 +349,6 @@
       "reviewed_at": "2026-11-13"
     },
     {
-      "id": "US-062",
-      "title": "Tâches d'évals d'arrière-plan",
-      "epic": "EP-016",
-      "status": "IN_REVIEW",
-      "priority": "P1",
-      "size": "M",
-      "blocked_by": ["US-044", "US-048", "US-050", "US-055"],
-      "started_at": "2026-11-13",
-      "completed_at": null,
-      "reviewed_at": null
-    },
-    {
-      "id": "US-063",
-      "title": "Campagne d'arrière-plan",
-      "epic": "EP-016",
-      "status": "IN_REVIEW",
-      "priority": "P1",
-      "size": "S",
-      "blocked_by": ["US-062"],
-      "started_at": "2026-11-13",
-      "completed_at": null,
-      "reviewed_at": null
-    },
-    {
       "id": "US-064",
       "title": "Sélection par messages natifs",
       "epic": "EP-017",
@@ -393,6 +369,30 @@
       "size": "M",
       "blocked_by": ["US-055", "US-058", "US-059"],
       "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-062",
+      "title": "Tâches d'évals d'arrière-plan",
+      "epic": "EP-016",
+      "status": "IN_REVIEW",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": ["US-044", "US-048", "US-050", "US-055"],
+      "started_at": "2026-11-13",
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-063",
+      "title": "Campagne d'arrière-plan",
+      "epic": "EP-016",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": ["US-062", "US-064", "US-065"],
+      "started_at": "2026-11-13",
       "completed_at": null,
       "reviewed_at": null
     }

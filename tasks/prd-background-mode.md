@@ -11,6 +11,7 @@
 | 1.3 | 2026-11-13 | Arthur Jean | Après l'exploration du 2026-11-13 (décision 0013) : EP-017 et US-064, sélection des listes Win32 par leurs messages natifs (A22, FR-46, risque 14, cas 25 et 26) ; note pour US-058 sur le `<select>` de Chrome ; questions Q18 et Q19 |
 | 1.4 | 2026-11-13 | Arthur Jean | Après la revue de EP-014 (décision 0013, « Revue de EP-014 ») : ligne « Fenêtre minimisée » gardée pour toute fenêtre Chromium (US-059) ; Q18 tranchée, la liste déroulante de la tâche Chrome de US-062 devient une liste Win32 ; EP-018 et US-065, gel appris des applications Chromium (A23, FR-47, risque 15, cas 27) |
 | 1.5 | 2026-11-13 | Arthur Jean | Après la revue de EP-015 (décision 0013, « Décisions d'Arthur après la revue de EP-015 ») : capture de fenêtre refusée quand le masque des mots de passe n'est pas garanti (balayage en échec, fenêtre élevée), conseil du refus « arbre web non construit » réécrit, `observe: screenshot` admis en mode arrière-plan avec l'image de la fenêtre cible (US-061, FR-42) |
+| 1.6 | 2026-11-20 | Arthur Jean | EP-016 devient l'epic final, après EP-017 et EP-018 : la campagne de US-063 se rejoue une fois tout le reste livré, lancée par Arthur une nuit par `evals/night.ps1` (gates de bureau d'abord, machine gardée éveillée, arrêt propre et reprise) ; la campagne du 2026-11-15 reste une mesure intermédiaire ; Q16 tranchée ; US-063 passe à M (3 pts) |
 
 ## Problem Statement
 
@@ -40,7 +41,7 @@ Décisions de contrat proposées, à confirmer par Arthur dans la décision 0013
 4. `ui_act` reçoit trois actions et étend `value` ; `ui_tree`, `ui_find`, `screenshot` et `zoom` reçoivent des paramètres optionnels.
 5. Les modes `a11y` et `vision` gardent leur kill switch, leur indicateur, leur stabilisation et leur liste d'outils.
 
-Périmètre : 8 epics, 27 stories, 78 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014, EP-017 et EP-018 (parité d'actions, perception, sélection native et gel appris, 30 points). Livraison 3 : EP-015 et EP-016 (passe visuelle et mesure, 12 points).
+Périmètre : 8 epics, 27 stories, 79 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014, EP-017 et EP-018 (parité d'actions, perception, sélection native et gel appris, 30 points). Livraison 3 : EP-015, puis EP-016 (passe visuelle et mesure, 13 points). EP-016 est l'epic final : sa campagne de nuit mesure tous les autres et ne se joue qu'après eux.
 
 ## Goals
 
@@ -588,44 +589,6 @@ Capturer une fenêtre recouverte pour un contrôle visuel, sans capturer l'écra
 
 ---
 
-### EP-016: Mesure
-
-Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan réussit sans interférence, contre agent-desktop comme référence indépendante. Livraison 3.
-
-**Definition of Done:** `evals/run.ps1 -DryRun -Suite background` passe. Une campagne approuvée par Arthur a produit son rapport dans `evals/reports/` avec la conclusion sur chaque ligne des Success Metrics et sur la question Q10.
-
-#### US-062: Tâches d'évals d'arrière-plan
-**Description:** En tant qu'Arthur, je veux des tâches exécutées pendant qu'une fenêtre leurre garde le premier plan afin de mesurer la réussite et la non-interférence sur des cas réels.
-
-**Priority:** P1
-**Size:** M (3 pts)
-**Dependencies:** Blocked by US-044, US-048, US-050, US-055
-
-**Acceptance Criteria:**
-- [ ] Une suite `background` d'au moins 8 tâches, chacune avec préparation, vérification de l'état final et nettoyage : enregistrer un document du Bloc-notes par le menu et le dialogue, un calcul dans la Calculatrice, un réglage à bascule dans Paramètres, une case d'une page Chrome, une entrée d'une liste déroulante Win32 (Q18 : le `<select>` d'une page Chrome ne s'ouvre pas fenêtre non active), une entrée d'une longue liste à faire défiler, un curseur à régler, une application à lancer sans activation, et un contrôle visuel d'une fenêtre recouverte.
-- [ ] Chaque tâche tourne avec une fenêtre leurre au premier plan ; un témoin échantillonne toutes les 50 ms le premier plan, le focus clavier et la position du curseur.
-- [ ] La vérification d'une tâche échoue si le témoin a vu un changement de premier plan ou de curseur, même quand l'état final est bon.
-- [ ] `-Solve` joue la solution scriptée de chaque tâche en mode arrière-plan, et sa vérification doit l'accepter.
-- [ ] Les consignes ne nomment aucun outil.
-- [ ] Un mode de référence `agent-desktop` lance agent-desktop 1.2.0 par son serveur MCP, épinglé dans `evals/` comme dépendance de développement, absent du binaire livré.
-- [ ] Étant donné une application absente, alors la tâche est `skipped` avec sa raison.
-- [ ] Les tâches sont commitées avant la première exécution réelle.
-
-#### US-063: Campagne d'arrière-plan
-**Description:** En tant qu'Arthur, je veux une campagne mesurée afin de décider sur des chiffres si l'arrière-plan devient le mode par défaut.
-
-**Priority:** P1
-**Size:** S (2 pts)
-**Dependencies:** Blocked by US-062
-
-**Acceptance Criteria:**
-- [ ] La campagne ne démarre qu'après l'accord écrit d'Arthur sur son budget (tâches × répétitions × modes).
-- [ ] Elle couvre la suite `background` en modes `background` et `agent-desktop`, et les 20 tâches existantes en mode `a11y`, avec 3 répétitions.
-- [ ] `evals/report.ps1` produit `evals/reports/<date>.md` avec réussite, violations de non-interférence, appels d'outils, tokens et durée par mode et par tâche.
-- [ ] Le rapport conclut sur chaque ligne des Success Metrics et recommande une réponse à Q10.
-- [ ] Étant donné une violation de non-interférence en mode `background`, alors le rapport la signale en tête et ouvre une story de correction.
-- [ ] Étant donné une régression de plus de 5 points sur les 20 tâches existantes en mode `a11y`, alors le rapport la signale en tête et ouvre une story de correction.
-
 ### EP-017: Sélection native des listes Win32
 
 Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l'application qui la possède. Livraison 2.
@@ -693,6 +656,54 @@ Savoir, sans liste de noms à tenir, quelles applications Chromium continuent de
 - [ ] Les résultats sont ajoutés à `bench/apps.md` et à la décision 0013.
 
 **Note de conception :** l'appartenance à un document web se lit dans le dernier arbre montré de la fenêtre (ancêtre de rôle `document`) ou par un aller-retour vers l'élément ; à choisir à l'implémentation, sous le budget.
+
+---
+
+### EP-016: Mesure
+
+Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan réussit sans interférence, contre agent-desktop comme référence indépendante. Livraison 3, epic final du PRD : sa campagne mesure en une fois tout ce que les autres epics livrent, elle ne se joue donc qu'après eux. Elle prend la machine plusieurs heures : Arthur la lance lui-même, une nuit, sans surveillance.
+
+**Definition of Done:** `evals/run.ps1 -DryRun -Suite background` passe. La campagne de nuit, lancée par Arthur une fois EP-011 à EP-015, EP-017 et EP-018 terminés, a produit son rapport dans `evals/reports/` avec la conclusion sur chaque ligne des Success Metrics et sur la question Q10. La campagne du 2026-11-15 (tâches du commit `4ad7228`, avant EP-017 et EP-018) reste une mesure intermédiaire.
+
+#### US-062: Tâches d'évals d'arrière-plan
+**Description:** En tant qu'Arthur, je veux des tâches exécutées pendant qu'une fenêtre leurre garde le premier plan afin de mesurer la réussite et la non-interférence sur des cas réels.
+
+**Priority:** P1
+**Size:** M (3 pts)
+**Dependencies:** Blocked by US-044, US-048, US-050, US-055
+
+**Acceptance Criteria:**
+- [ ] Une suite `background` d'au moins 8 tâches, chacune avec préparation, vérification de l'état final et nettoyage : enregistrer un document du Bloc-notes par le menu et le dialogue, un calcul dans la Calculatrice, un réglage à bascule dans Paramètres, une case d'une page Chrome, une entrée d'une liste déroulante Win32 (Q18 : le `<select>` d'une page Chrome ne s'ouvre pas fenêtre non active), une entrée d'une longue liste à faire défiler, un curseur à régler, une application à lancer sans activation, et un contrôle visuel d'une fenêtre recouverte.
+- [ ] Chaque tâche tourne avec une fenêtre leurre au premier plan ; un témoin échantillonne toutes les 50 ms le premier plan, le focus clavier et la position du curseur.
+- [ ] La vérification d'une tâche échoue si le témoin a vu un changement de premier plan ou de curseur, même quand l'état final est bon.
+- [ ] `-Solve` joue la solution scriptée de chaque tâche en mode arrière-plan, et sa vérification doit l'accepter.
+- [ ] Les consignes ne nomment aucun outil.
+- [ ] Un mode de référence `agent-desktop` lance agent-desktop 1.2.0 par son serveur MCP, épinglé dans `evals/` comme dépendance de développement, absent du binaire livré.
+- [ ] Étant donné une application absente, alors la tâche est `skipped` avec sa raison.
+- [ ] Les tâches sont commitées avant la première exécution réelle.
+
+#### US-063: Campagne d'arrière-plan
+**Description:** En tant qu'Arthur, je veux une campagne mesurée afin de décider sur des chiffres si l'arrière-plan devient le mode par défaut.
+
+**Contexte :** la campagne du 2026-11-15 (117 exécutions, `evals/reports/2026-11-15.md`) a tenu les cibles qu'elle mesure sauf la médiane de tokens par delta en mode background (204 pour 150). Jouée pendant une journée de travail, elle bloquait la machine, et le bench de la revue a échoué sous la charge d'autres sessions (19 régressions sur des chemins inchangés). La campagne finale se joue de nuit, machine au repos, gates de bureau compris.
+
+**Priority:** P1
+**Size:** M (3 pts)
+**Dependencies:** Blocked by US-062, US-064, US-065
+
+**Acceptance Criteria:**
+- [ ] La campagne ne démarre que lancée par Arthur lui-même (commande de nuit), ou après son accord écrit sur son budget (tâches × répétitions × modes) ; la commande affiche ce budget avant la première exécution.
+- [ ] Une commande unique, `pwsh evals/night.ps1`, joue toute la nuit sans surveillance : elle refuse un arbre de travail modifié, joue d'abord les gates de bureau (`selftest`, `selftest --background`, `zig build bench -- --check bench/baseline.json`, `evals/run.ps1 -DryRun`), puis la campagne, puis `evals/report.ps1`, et écrit un journal de nuit avec le résultat de chaque étape.
+- [ ] Un échec de `selftest`, de `selftest --background` ou du dry run arrête la nuit avant toute exécution `claude -p`. Le bench ne l'arrête pas : son verdict est écrit dans le journal et en tête du rapport.
+- [ ] Pendant la nuit, la machine reste éveillée et l'écran allumé (`SetThreadExecutionState`), rendus à leur état à la fin, même sur erreur.
+- [ ] Étant donné une session verrouillée ou une entrée physique pendant la campagne, alors la tâche en cours est un échec du harnais et la nuit s'arrête proprement ; `pwsh evals/night.ps1 -Resume` reprend là où elle s'est arrêtée, sans rejouer les exécutions gardées.
+- [ ] Les échecs du harnais sont rejoués une fois en fin de campagne (`-Resume`) avant le rapport.
+- [ ] `-DryRun` joue la même nuit sans `claude -p` (gates, puis la campagne en dry run) : il prouve la commande sans rien facturer. `-SkipGates` saute les gates, pour une vérification courte de l'enchaînement.
+- [ ] Elle couvre la suite `background` en modes `background` et `agent-desktop`, et les 20 tâches existantes en mode `a11y`, avec 3 répétitions.
+- [ ] `evals/report.ps1` produit `evals/reports/<date>.md` avec réussite, violations de non-interférence, appels d'outils, tokens et durée par mode et par tâche.
+- [ ] Le rapport conclut sur chaque ligne des Success Metrics et recommande une réponse à Q10.
+- [ ] Étant donné une violation de non-interférence en mode `background`, alors le rapport la signale en tête et ouvre une story de correction.
+- [ ] Étant donné une régression de plus de 5 points sur les 20 tâches existantes en mode `a11y`, alors le rapport la signale en tête et ouvre une story de correction.
 
 ## Functional Requirements
 
@@ -855,7 +866,7 @@ Frame as questions for engineering input, not mandates:
 - **Q13 :** si `PrintWindow` ne suffit pas (A20 infirmée), étend-on `tools/winmdgen` aux métadonnées WinRT pour Windows.Graphics.Capture, au prix d'une surface COM plus large face au Rust Switch Gate ? Décision d'Arthur à la clôture de US-060.
 - **Q14 :** veut-on une surface CLI au-dessus du serveur résident ? Elle demande un canal local (tube nommé refusant les clients distants) à confronter à FR-10 et FR-14. Décision d'Arthur après US-063.
 - **Q15 :** l'isolation forte (session enfant, prise en charge sur Windows 11 Pro d'après Power Automate) fait-elle l'objet d'un PRD séparé ? Décision d'Arthur après la livraison 2.
-- **Q16 :** quel budget pour la campagne de US-063 (environ 8 tâches × 3 répétitions × 2 modes, plus 20 tâches × 3 répétitions, soit 108 exécutions) ? Décision d'Arthur avant US-063.
+- **Q16 :** quel budget pour la campagne de US-063 (environ 8 tâches × 3 répétitions × 2 modes, plus 20 tâches × 3 répétitions, soit 108 exécutions) ? Décision d'Arthur avant US-063. **Décidé le 2026-11-15 :** accord écrit d'Arthur sur 117 exécutions `claude -p` (9 tâches d'arrière-plan × 3 répétitions × modes `background` et `agent-desktop`, plus les 21 tâches existantes, canari compris, × 3 en `a11y`), jouées le même jour (`evals/reports/2026-11-15.md`). La campagne finale (version 1.6) est lancée par Arthur lui-même par `evals/night.ps1`, qui affiche son budget avant la première exécution.
 - **Q17 :** `clipboard` `get` reste-t-il permis en mode arrière-plan ? Il ne gêne pas l'utilisateur mais lit ce qu'il vient de copier. Recommandé : permis, sous `system.clipboard`. Décision d'Arthur dans US-039.
 - **Q18 :** la tâche d'éval « une case et une liste déroulante d'une page Chrome » de US-062 demande ce que la mesure du 2026-11-13 dit impossible fenêtre non active (le `<select>` ne s'ouvre pas). La garde-t-on comme échec attendu et documenté, ou la liste déroulante devient-elle une liste Win32 ? Décision d'Arthur avant US-062, après US-058. **Décidé le 2026-11-13 :** la liste déroulante devient une liste Win32, la case d'une page Chrome reste (US-062) ; une tâche impossible par construction fausserait le taux de réussite. La limite du `<select>` est notée dans les Non-Goals.
 - **Q19 :** étend-on la voie native aux onglets, listes et arbres des contrôles communs (`SysTabControl32`, `SysListView32`, `SysTreeView32`) si leur sélection par UI Automation ne prévient pas non plus l'application ? À mesurer d'abord. Décision d'Arthur après US-064.
