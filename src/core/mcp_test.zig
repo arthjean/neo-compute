@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 const mcp = @import("mcp.zig");
 const tools = @import("tools.zig");
-const Fake = @import("../backend/fake.zig").Fake;
+const Fake = @import("fake").Fake;
 const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 const timing = @import("timing.zig");
 

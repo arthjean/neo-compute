@@ -8,7 +8,7 @@
 
 const std = @import("std");
 const w = @import("win32");
-const uitree = @import("../../core/uitree.zig");
+const uitree = @import("core").uitree;
 const input = @import("input.zig");
 const uia = @import("uia.zig");
 

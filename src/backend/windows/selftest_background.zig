@@ -17,7 +17,7 @@
 const std = @import("std");
 const w = @import("win32");
 const com = @import("com.zig");
-const uitree = @import("../../core/uitree.zig");
+const uitree = @import("core").uitree;
 const test_window = @import("test_window.zig");
 const TestWindow = test_window.TestWindow;
 const fixture = @import("bg_fixture.zig");
@@ -30,10 +30,10 @@ const selftest = @import("selftest.zig");
 const Report = selftest.Report;
 const Caller = selftest.Caller;
 const Windows = @import("../windows.zig").Windows;
-const Control = @import("../../core/control.zig").Control;
-const mcp = @import("../../core/mcp.zig");
-const tools = @import("../../core/tools.zig");
-const display = @import("../../core/display.zig");
+const Control = @import("core").control.Control;
+const mcp = @import("core").mcp;
+const tools = @import("core").tools;
+const display = @import("core").display;
 
 pub const Server = mcp.Server(Windows, tools.all);
 const cohabitation = @import("selftest_cohabitation.zig");
@@ -42,7 +42,7 @@ const perception = @import("selftest_perception.zig");
 const capture = @import("selftest_capture.zig");
 const native = @import("selftest_native.zig");
 const uia_events = @import("uia_events.zig");
-const core_a11y = @import("../../core/a11y.zig");
+const core_a11y = @import("core").a11y;
 
 /// Actions of `bg-loop` (PRD, US-044).
 pub const loop_actions = 1000;

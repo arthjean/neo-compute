@@ -1,5 +1,6 @@
 //! Audit log (US-019, FR-13): one JSON line per tool call in
-//! `%LOCALAPPDATA%\neo-compute\audit.jsonl`: time, tool, target application,
+//! `audit.jsonl` of the backend's state folder (`Places.audit`): time, tool,
+//! target application,
 //! pid, policy level, duration and result. Typed text is never recorded,
 //! only its length. Rotated at 10 MB, 5 files kept (`audit.jsonl` and
 //! `audit.jsonl.1` to `.4`). A write failure never blocks the tool: it is
@@ -8,6 +9,17 @@
 const std = @import("std");
 const Io = std.Io;
 const policy = @import("policy.zig");
+
+/// Where the policy file and the audit log live on this OS, from the
+/// backend (`places`): the core reads no environment variable of its own.
+pub const Places = struct {
+    /// The default policy file, read when `--policy` names none.
+    policy: ?[]const u8 = null,
+    /// The folder of `audit.jsonl`, created by the backend.
+    audit: ?[]const u8 = null,
+    /// Why there is no audit folder, for stderr.
+    audit_unset: []const u8 = "this build has no audit folder: tool calls are not recorded",
+};
 
 pub const file_name = "audit.jsonl";
 pub const max_bytes = 10 * 1024 * 1024;

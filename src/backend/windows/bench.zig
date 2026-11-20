@@ -11,14 +11,14 @@
 const std = @import("std");
 const w = @import("win32");
 const com = @import("com.zig");
-const bench = @import("../../core/bench.zig");
-const timing = @import("../../core/timing.zig");
+const bench = @import("core").bench;
+const timing = @import("core").timing;
 const Timings = timing.Timings;
-const CountingAllocator = @import("../../core/counting_allocator.zig").CountingAllocator;
-const mcp = @import("../../core/mcp.zig");
-const tools = @import("../../core/tools.zig");
+const CountingAllocator = @import("core").counting_allocator.CountingAllocator;
+const mcp = @import("core").mcp;
+const tools = @import("core").tools;
 const Windows = @import("../windows.zig").Windows;
-const display = @import("../../core/display.zig");
+const display = @import("core").display;
 const window = @import("window.zig");
 const test_window = @import("test_window.zig");
 const TestWindow = test_window.TestWindow;
@@ -399,7 +399,7 @@ fn idOf(tree: []const u8, needle: []const u8) ?[]const u8 {
         if (std.mem.indexOf(u8, line, needle) == null) continue;
         var it = std.mem.tokenizeScalar(u8, line, ' ');
         const first = it.next() orelse return null;
-        return if (@import("../../core/uitree.zig").parseId(first) != null) first else null;
+        return if (@import("core").uitree.parseId(first) != null) first else null;
     }
     return null;
 }
@@ -460,7 +460,7 @@ const CatalogScenario = struct {
     io: std.Io,
     backend: *Windows,
     arena: std.heap.ArenaAllocator,
-    catalog: @import("../../core/apps.zig").Catalog = .{},
+    catalog: @import("core").apps.Catalog = .{},
     enumerate: bool,
     round: usize = 0,
     cancel: std.atomic.Value(bool) = .init(false),
@@ -478,7 +478,7 @@ const CatalogScenario = struct {
                 .err => return error.CatalogFailed,
             }
         } else {
-            _ = try @import("../../core/apps.zig").match(a, self.catalog.apps, queries[self.round % queries.len]);
+            _ = try @import("core").apps.match(a, self.catalog.apps, queries[self.round % queries.len]);
             self.round += 1;
         }
     }

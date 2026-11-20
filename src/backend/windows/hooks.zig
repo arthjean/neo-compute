@@ -10,8 +10,8 @@
 
 const std = @import("std");
 const w = @import("win32");
-const Control = @import("../../core/control.zig").Control;
-const keys = @import("../../core/keys.zig");
+const Control = @import("core").control.Control;
+const keys = @import("core").keys;
 
 /// Physical displacement during an action that trips the switch.
 pub const move_threshold_px = 8;

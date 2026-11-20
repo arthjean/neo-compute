@@ -6,7 +6,7 @@ const testing = std.testing;
 const registry = @import("registry.zig");
 const tools = @import("tools.zig");
 const mcp = @import("mcp.zig");
-const Fake = @import("../backend/fake.zig").Fake;
+const Fake = @import("fake").Fake;
 const timing = @import("timing.zig");
 
 fn parse(arena: std.mem.Allocator, json: []const u8) !std.json.Value {
@@ -57,7 +57,7 @@ fn expectJsonEqual(expected: std.json.Value, actual: std.json.Value) !void {
     try testing.expectEqualStrings(a.written(), b.written());
 }
 
-const Reg = registry.Registry(tools.all);
+const Reg = @import("mcp.zig").Server(@import("fake").Fake, tools.all).Reg;
 
 fn toolMap(arena: std.mem.Allocator) !std.StringArrayHashMapUnmanaged(std.json.Value) {
     const list = try parse(arena, Reg.list_result);
@@ -165,14 +165,14 @@ test "tool definitions stay within the token and description budgets" {
     try testing.expect(Reg.always_load_tokens <= registry.max_always_load_tokens);
     try testing.expect(Reg.definition_tokens <= registry.max_definition_tokens);
     try testing.expect(Reg.always_load_tokens < Reg.definition_tokens);
-    inline for (tools.all) |T| try testing.expect(T.description.len <= registry.max_description_len);
+    inline for (tools.all) |T| if (@hasDecl(T, "description")) try testing.expect(T.description.len <= registry.max_description_len);
     std.debug.print("tools/list: {d} bytes, about {d} tokens (limit {d}); alwaysLoad definitions about {d} tokens (limit {d})\n", .{
         Reg.list_result.len, Reg.definition_tokens, registry.max_definition_tokens, Reg.always_load_tokens, registry.max_always_load_tokens,
     });
 }
 
 test "the background registry stays within the same budgets (FR-22, US-041)" {
-    const BgReg = registry.Background(tools.all);
+    const BgReg = @import("mcp.zig").Server(@import("fake").Fake, tools.all).BgReg;
     try testing.expect(BgReg.always_load_tokens <= registry.max_always_load_tokens);
     try testing.expect(BgReg.definition_tokens <= registry.max_definition_tokens);
     std.debug.print("background tools/list: {d} bytes, about {d} tokens (limit {d}); alwaysLoad definitions about {d} tokens (limit {d})\n", .{

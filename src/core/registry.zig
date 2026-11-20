@@ -146,14 +146,39 @@ pub fn annotationsOf(comptime T: type) Annotations {
 }
 
 /// One `Tool` object of `tools/list`.
-pub fn toolDefinition(comptime T: type) []const u8 {
-    return definitionWith(T, T.description);
+pub fn toolDefinition(comptime T: type, comptime Texts: type) []const u8 {
+    return definitionWith(T, descriptionOf(T, Texts));
 }
 
-/// The tool's description in the background mode: `background_description`
-/// when the default one speaks of the foreground window.
-fn backgroundDescription(comptime T: type) []const u8 {
-    return if (@hasDecl(T, "background_description")) T.background_description else T.description;
+/// The tool's description: from the backend's `Texts.descriptions` when
+/// it has one (the tools neo-compute adds, worded for each OS, decision
+/// 0014 D7), else the tool's own (the 17 toolset tools, whose texts are
+/// the contract of tests/fixtures/toolset_20260801.json).
+fn descriptionOf(comptime T: type, comptime Texts: type) []const u8 {
+    if (@hasDecl(Texts, "descriptions") and @hasDecl(Texts.descriptions, T.name)) return @field(Texts.descriptions, T.name);
+    return T.description;
+}
+
+/// The tool's description in the background mode, when the default one
+/// speaks of the foreground window: `Texts.background_descriptions`, else
+/// the tool's own `background_description`.
+fn backgroundDescription(comptime T: type, comptime Texts: type) []const u8 {
+    if (@hasDecl(Texts, "background_descriptions") and @hasDecl(Texts.background_descriptions, T.name)) return @field(Texts.background_descriptions, T.name);
+    return if (@hasDecl(T, "background_description")) T.background_description else descriptionOf(T, Texts);
+}
+
+/// The tools of `tools` that `Backend` can run: a tool that declares
+/// `requires` (a backend method name) is left out when the backend does not
+/// declare that method, so it is neither listed nor callable
+/// (`registry_read` on Linux, decision 0014 D6).
+pub fn available(comptime Backend: type, comptime tools: anytype) []const type {
+    comptime {
+        var list: []const type = &.{};
+        for (tools) |T| if (!@hasDecl(T, "requires") or @hasDecl(Backend, T.requires)) {
+            list = list ++ &[_]type{T};
+        };
+        return list;
+    }
 }
 
 fn definitionWith(comptime T: type, comptime description: []const u8) []const u8 {
@@ -177,15 +202,21 @@ pub fn estimateTokens(comptime bytes: usize) usize {
     return @intFromFloat(@ceil(@as(comptime_float, bytes) / ratio));
 }
 
-/// Builds the registry for a tuple of tool namespaces.
+/// Builds the registry for a tuple of tool namespaces, whose own
+/// descriptions it lists.
 pub fn Registry(comptime tools: anytype) type {
+    return RegistryWith(tools, struct {});
+}
+
+/// The registry of `tools` with the descriptions of a backend's `Texts`.
+pub fn RegistryWith(comptime tools: anytype, comptime Texts: type) type {
     return struct {
         pub const list_result: []const u8 = blk: {
             @setEvalBranchQuota(1_000_000);
             var defs: []const u8 = "";
             var always: []const u8 = "";
             for (tools, 0..) |T, i| {
-                const def = toolDefinition(T);
+                const def = toolDefinition(T, Texts);
                 defs = defs ++ (if (i == 0) "" else ",") ++ def;
                 if (!annotationsOf(T).always_load) continue;
                 always = always ++ (if (always.len == 0) "" else ",") ++ def;
@@ -206,7 +237,7 @@ pub fn Registry(comptime tools: anytype) type {
             @setEvalBranchQuota(1_000_000);
             var always: []const u8 = "";
             for (tools) |T| if (annotationsOf(T).always_load) {
-                always = always ++ (if (always.len == 0) "" else ",") ++ toolDefinition(T);
+                always = always ++ (if (always.len == 0) "" else ",") ++ toolDefinition(T, Texts);
             };
             break :blk estimateTokens(always.len);
         };
@@ -320,15 +351,21 @@ pub fn intrusiveVariants(comptime Args: type) []const Variant {
 /// `tools`, their intrusive variants refused before `run`, and a refusal
 /// for every other tool of `tools`.
 pub fn Background(comptime tools: anytype) type {
+    return BackgroundWith(tools, struct {});
+}
+
+/// The background registry of `tools` with the descriptions of a
+/// backend's `Texts`.
+pub fn BackgroundWith(comptime tools: anytype, comptime Texts: type) type {
     const members = backgroundMembers(tools);
-    const Base = Registry(members);
+    const Base = RegistryWith(members, Texts);
     return struct {
         pub const list_result: []const u8 = blk: {
             @setEvalBranchQuota(1_000_000);
             var defs: []const u8 = "";
             var always: []const u8 = "";
             for (members, 0..) |T, i| {
-                const def = definitionWith(T, backgroundDescription(T));
+                const def = definitionWith(T, backgroundDescription(T, Texts));
                 defs = defs ++ (if (i == 0) "" else ",") ++ def;
                 if (annotationsOf(T).always_load) always = always ++ (if (always.len == 0) "" else ",") ++ def;
             }
@@ -344,7 +381,7 @@ pub fn Background(comptime tools: anytype) type {
             @setEvalBranchQuota(1_000_000);
             var always: []const u8 = "";
             for (members) |T| if (annotationsOf(T).always_load) {
-                always = always ++ (if (always.len == 0) "" else ",") ++ definitionWith(T, backgroundDescription(T));
+                always = always ++ (if (always.len == 0) "" else ",") ++ definitionWith(T, backgroundDescription(T, Texts));
             };
             break :blk estimateTokens(always.len);
         };

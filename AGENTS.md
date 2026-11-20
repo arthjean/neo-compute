@@ -46,9 +46,10 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 | Command | Checks |
 |---|---|
 | `zig fmt --check .` | Formatting (`zig fmt <path>` fixes it) |
-| `zig build` | Server and probes. The first run downloads the pinned win32metadata nupkg from nuget.org with `curl` and fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`, then serves both from the cache |
-| `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, compile-time budget errors, generated bindings and struct layouts, generator failure message, process lifecycle. Omit the filter for the full gate |
-| `zig build cross` | Core builds for x86_64-linux-gnu with the fake backend, so no Windows dependency entered `src/core/` |
+| `zig build` | The server of the host OS (Windows: Windows backend and the probes; Linux: Linux backend). It fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`; a Windows build also downloads the pinned win32metadata nupkg from nuget.org with `curl` on first use. A target with no backend fails (`-Dfake-backend=true` builds the fake one for any target) |
+| `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, the Linux and Windows texts and their compile-time budgets, compile-time budget errors, module boundaries and OS names out of `src/core/` (`tests/imports_test.zig`), generator failure message, process lifecycle; on Windows also generated bindings, struct layouts and the PE import tables, on Linux the Linux backend's tests and the signal, lock and XDG checks. Omit the filter for the full gate |
+| `zig build cross` | The server of the other OS compiles: from Linux `neo-compute.exe`, `probe.exe` and `probe_c.exe` for x86_64-windows-gnu; from Windows the Linux server for x86_64 and aarch64 at glibc 2.28. Installed under `zig-out/cross/` |
+| `zig build bench -- --check bench/baseline-linux.json` | Linux: `transport` and `diff` against their Linux references. A baseline of another OS (`os` key; none means Windows) is refused before any scenario runs, and a scenario of the baseline that does not run fails the gate |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 and p50 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. A p95 above 110 % still passes under the limit of its own noise (`fence`: Q3 + 1.5 IQR of the p95 of the five baseline passes, `passes_p95_us`), printed when it applies. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010). `bg-act` and `bg-settle` run the background mode behind the decoy; `bg-settle` is budgeted on its `settle` stage, which every other scenario only reports; `bg-capture` is `screenshot` of a 2560x1440 test window entirely under a decoy larger than the display (US-061, < 60 ms p95) |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
 | `zig build run -- selftest --background` | Background mode (EP-011): each `bg-*` control acts on a covered, inactive test window through the `--mode background` server and requires its effect plus an unchanged foreground, keyboard focus, cursor and clipboard and no injected event; 1,000 actions with 0 violation (`bg-loop`); a witness a11y click that the detector must flag (`bg-must-catch`). Cohabitation (EP-012): the pause shortcut and the ignored mouse and Escape (`bg-kill-*`), the label (`bg-indicator*`), settling and waits on change events (`bg-settle-*`, `bg-events-cpu`, `bg-find-*`; `bg-settle-xaml` on Calculator's UI Automation events, `bg-events-learn` on the subscription learned from changes without an event), the foreground guard (`bg-guard-*`: restored from the foreground event while the user types, left alone after a gesture that changes the foreground window, restored for a dialog that comes after the action returned). Complete semantic actions (EP-013): `bg-check`, `bg-uncheck`, `bg-legacy`, `bg-scroll`, `bg-scroll-ancestor`, `bg-range`, `bg-select-name`, `bg-wait-enabled`, `bg-auto-scroll` each require the effect read from Win32, the verdict on the first line of the result and an unchanged session; `bg-verdict` budgets the read-back (< 10 ms p95). Targeted perception (EP-014): `bg-tree-root` (a subtree with the whole tree's ids, `depth`, `root` within the whole tree's p95), `bg-reread` (`ui_find id:` against the state Win32 gives, < 10 ms p95), `bg-occluded` (the flag under the decoy, gone with a 16 px strip that Win32 hit-tests), `bg-occlusion-cost` (< 1 ms p95 with 50 more windows above the target). Visual pass (EP-015): `bg-capture` (`screenshot` gives the covered window's own pixels, read against what Win32 says of its controls), `bg-capture-password` (the field black in `screenshot` and in a `zoom` on it, while the raw capture shows it), `bg-capture-marks` (`ui_tree marks` draws the ids on that image), `bg-observe-shot` (`ui_act` with `observe: screenshot` returns that same image of the target), `bg-capture-hung` (a window whose thread is stopped is refused by the 200 ms check, never captured). Native selection (EP-017): `bg-select-native` (the drop-down list takes an entry by name closed: one `CBN_SELCHANGE` with its control id, no `CBN_DROPDOWN`, < 5 ms p95 over 30 selections), `bg-select-notify` (one `LBN_SELCHANGE` after Select on a list box entry), `bg-select-winforms` (a WinForms combo box of another process raises SelectedIndexChanged once; skipped without the .NET Framework compiler) |
@@ -106,11 +107,28 @@ cursor by 6 px once. Run them one at a time.
 
 ## Architecture and gotchas
 
-- `src/core/` calls no Windows API; Windows code lives in
-  `src/backend/windows/`. `src/main.zig` selects the backend at comptime,
-  optional backend capabilities are probed with `@hasDecl`, and
+- Modules (`build.zig`): `core` (`src/core/`, root `core.zig`),
+  `backend_windows` (`src/backend/windows.zig` and `windows/`),
+  `backend_linux` (`src/backend/linux.zig` and `linux/`), `fake`
+  (`src/backend/fake.zig`), and `texts_windows` and `texts_linux`
+  (`<os>/texts.zig`, shared with the fake). `src/core/` calls no OS API and
+  names no OS variable or folder: the backend gives them (`places`,
+  `acquireInstance`, `policy_rules`, `texts`). The core imports the fake
+  only as the `fake` module of its tests; `tests/imports_test.zig` names any
+  file that crosses a boundary. `src/main.zig` selects the backend at
+  comptime, optional backend capabilities are probed with `@hasDecl`, and
   `src/backend/fake.zig` implements every method the core calls
   unconditionally.
+- Linux backend (EP-019 on, `tasks/prd-linux-port.md`). A method not
+  implemented yet records a gap and returns its type's failure value; the
+  gap stops the tool's waits (`ctx.cancelled`) and the dispatcher answers
+  "Linux : <tool> n'est pas encore disponible dans ce build. Aucune action
+  exécutée." A story that implements a method removes its `gap` call. The
+  texts of tools neo-compute adds and the instructions come from
+  `Backend.texts`; a tool with `requires` is listed only where the backend
+  declares that method (`registry_read`). Under Linux, SIGINT, SIGTERM and
+  SIGHUP write to a pipe (`src/stop_signals.zig`) that `serveUntil`
+  watches: the server stops as at the end of stdin.
 - Tools are declared in `src/core/tools.zig`; schemas, `tools/list` and
   argument validation derive from each `Args` struct at comptime
   (`src/core/registry.zig`). Allocate tool output from `ctx.arena`, never the
@@ -307,6 +325,12 @@ cursor by 6 px once. Run them one at a time.
   window's whole rectangle whatever its region. An overlay that must not
   disturb settling stays small and static, and its windows are skipped by
   `Collect` in `window.zig`, as the control indicator does (decision 0011).
+- Zig 0.17.0 on Linux: the tarball and SHA-256 of
+  `https://ziglang.org/download/index.json` (`0.17.0`, `x86_64-linux`),
+  checked with `sha256sum -c` and unpacked outside any system folder; the
+  gates run with that `zig`, not a distribution's 0.17.1. `zig build` 0.17
+  refuses `--global-cache-dir`: `ZIG_GLOBAL_CACHE_DIR` and
+  `ZIG_LOCAL_CACHE_DIR` redirect the caches, to check a fresh copy.
 - Zig 0.17's std (`std.Io`, `std.process.Init`, `std.lang.Optimize`) differs
   from older releases. Verify APIs against the installed std (`std_dir` in
   `zig env`) or against Ghostty, which pins the same version (`C:/dev/ghostty`

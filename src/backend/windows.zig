@@ -4,11 +4,11 @@
 
 const std = @import("std");
 const w = @import("win32");
-const bench = @import("../core/bench.zig");
-const display = @import("../core/display.zig");
-const core_input = @import("../core/input.zig");
-const keys = @import("../core/keys.zig");
-const CountingAllocator = @import("../core/counting_allocator.zig").CountingAllocator;
+const bench = @import("core").bench;
+const display = @import("core").display;
+const core_input = @import("core").input;
+const keys = @import("core").keys;
+const CountingAllocator = @import("core").counting_allocator.CountingAllocator;
 const capture_mod = @import("windows/capture.zig");
 const input = @import("windows/input.zig");
 const window = @import("windows/window.zig");
@@ -22,18 +22,33 @@ const uia_events = @import("windows/uia_events.zig");
 const shell_mod = @import("windows/shell.zig");
 const clip_mod = @import("windows/clipboard.zig");
 const reg_mod = @import("windows/regread.zig");
-const clipboard = @import("../core/clipboard.zig");
-const regread = @import("../core/regread.zig");
-const apps = @import("../core/apps.zig");
-const Control = @import("../core/control.zig").Control;
-const guard = @import("../core/guard.zig");
-const uitree = @import("../core/uitree.zig");
+const clipboard = @import("core").clipboard;
+const regread = @import("core").regread;
+const apps = @import("core").apps;
+const Control = @import("core").control.Control;
+const guard = @import("core").guard;
+const audit = @import("core").audit;
+const uitree = @import("core").uitree;
 const Capture = capture_mod.Capture;
-const fmt = @import("../core/session.zig").fmt;
+const fmt = @import("core").session.fmt;
 
 pub const secure_desktop_message = "Bureau sécurisé actif (UAC ou verrouillage) : capture impossible, réessaie après sa fermeture";
 
 pub const Windows = struct {
+    /// Instructions and added tool descriptions of the Windows server (D7).
+    pub const texts = @import("texts_windows");
+
+    /// US-017 and US-019: `%APPDATA%\neo-compute\policy.json` and
+    /// `%LOCALAPPDATA%\neo-compute\audit.jsonl`.
+    pub fn places(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !audit.Places {
+        _ = io;
+        return .{
+            .policy = if (env.get("APPDATA")) |d| try std.fs.path.join(arena, &.{ d, "neo-compute", "policy.json" }) else null,
+            .audit = if (env.get("LOCALAPPDATA")) |d| try std.fs.path.join(arena, &.{ d, "neo-compute" }) else null,
+            .audit_unset = "LOCALAPPDATA is not set: tool calls are not recorded",
+        };
+    }
+
     gpa: std.mem.Allocator,
     cap: ?Capture = null,
     displays_buf: [display.max_displays]display.Display = undefined,

@@ -7,8 +7,8 @@
 
 const std = @import("std");
 const w = @import("win32");
-const display = @import("../../core/display.zig");
-const uitree = @import("../../core/uitree.zig");
+const display = @import("core").display;
+const uitree = @import("core").uitree;
 const test_window = @import("test_window.zig");
 const window = @import("window.zig");
 const selftest = @import("selftest.zig");

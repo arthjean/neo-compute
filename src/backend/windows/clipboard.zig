@@ -13,7 +13,7 @@
 
 const std = @import("std");
 const w = @import("win32");
-const clipboard = @import("../../core/clipboard.zig");
+const clipboard = @import("core").clipboard;
 
 /// OpenClipboard is tried once, then retried this many times, this far apart.
 pub const retries = 10;

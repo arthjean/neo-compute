@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const w = @import("win32");
-const clipboard = @import("../../core/clipboard.zig");
+const clipboard = @import("core").clipboard;
 const window = @import("window.zig");
 
 fn register(name: []const u8) u32 {

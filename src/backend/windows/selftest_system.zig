@@ -6,8 +6,8 @@
 
 const std = @import("std");
 const w = @import("win32");
-const clipboard = @import("../../core/clipboard.zig");
-const policy = @import("../../core/policy.zig");
+const clipboard = @import("core").clipboard;
+const policy = @import("core").policy;
 
 fn qpcUs() u64 {
     var t: i64 = 0;

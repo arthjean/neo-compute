@@ -112,7 +112,7 @@ fn busyMessage(ctx: anytype, pid: ?u32) Result {
 /// manager by default, US-017).
 fn ownerDenied(ctx: anytype, pid: ?u32) bool {
     const p = pid orelse return false;
-    return ctx.session.policy.levelOf(ctx.backend.processName(ctx.arena, p)) == .deny;
+    return policy.levelOfPid(ctx, p) == .deny;
 }
 
 pub fn run(ctx: anytype, mode: Mode, text: ?[]const u8) Result {

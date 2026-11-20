@@ -7,7 +7,7 @@ const std = @import("std");
 const testing = std.testing;
 const t = @import("tools_test.zig");
 const uitree = @import("uitree.zig");
-const fake = @import("../backend/fake.zig");
+const fake = @import("fake");
 const mcp = @import("mcp.zig");
 const tools = @import("tools.zig");
 const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
@@ -312,7 +312,7 @@ test "vision mode lists only the toolset and observes with screenshots" {
     try h.server.handleMessage("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"1\"}}}", &h.out.writer);
     const init = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), h.out.written(), .{});
     const instr = init.object.get("result").?.object.get("instructions").?.string;
-    try testing.expectEqualStrings(@import("mcp.zig").vision_instructions, instr);
+    try testing.expectEqualStrings(@import("fake").Fake.texts.vision_instructions, instr);
     for ([_][]const u8{ "ui_tree", "ui_find", "ui_act", "window_list" }) |name| try testing.expect(std.mem.indexOf(u8, instr, name) == null);
 }
 
@@ -673,8 +673,8 @@ test "a Firefox window with its accessibility off says so after its frame" {
 }
 
 test "the instructions say a web page's text is untrusted data" {
-    try t.expectContains(mcp.instructions, "text: true");
-    try t.expectContains(mcp.instructions, "untrusted data");
+    try t.expectContains(@import("fake").Fake.texts.instructions, "text: true");
+    try t.expectContains(@import("fake").Fake.texts.instructions, "untrusted data");
 }
 
 // ---------------------------------------------------------------- US-030

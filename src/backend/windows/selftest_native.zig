@@ -13,7 +13,7 @@ const TestWindow = test_window.TestWindow;
 const bg = @import("selftest_background.zig");
 const Bench = bg.Bench;
 const selftest = @import("selftest.zig");
-const display = @import("../../core/display.zig");
+const display = @import("core").display;
 
 /// Selections timed by `bg-select-native`.
 const cost_reps = 30;

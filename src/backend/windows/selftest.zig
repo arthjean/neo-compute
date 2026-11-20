@@ -8,15 +8,15 @@
 const std = @import("std");
 const w = @import("win32");
 const com = @import("com.zig");
-const uitree = @import("../../core/uitree.zig");
+const uitree = @import("core").uitree;
 const TestWindow = @import("test_window.zig").TestWindow;
 const test_window = @import("test_window.zig");
 const stall_provider = @import("stall_provider.zig");
 const still_window = @import("still_window.zig");
 const Windows = @import("../windows.zig").Windows;
-const mcp = @import("../../core/mcp.zig");
-const tools = @import("../../core/tools.zig");
-const display = @import("../../core/display.zig");
+const mcp = @import("core").mcp;
+const tools = @import("core").tools;
+const display = @import("core").display;
 
 const Server = mcp.Server(Windows, tools.all);
 
@@ -228,7 +228,7 @@ fn gdiChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: std.mem
     var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
     defer caller.out.deinit();
     const shot = try caller.call("screenshot", "{{\"display\":0}}", .{});
-    const note = @import("../../core/screen.zig").gdi_note;
+    const note = @import("core").screen.gdi_note;
     if (!shot.is_error and shot.image_mime != null and std.mem.indexOf(u8, shot.text, note) != null) report.ok("screenshot-gdi", "`{s}`", .{shot.text}) else report.fail("screenshot-gdi", "{s}", .{shot.text});
 
     // A click on the still window settles on two equal fingerprints; a
@@ -805,7 +805,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
 /// window_set on a window of its own (US-027), the Start menu catalog
 /// (US-028). Applications are launched by `bench app_launch` only.
 fn windowsAndAppsChecks(report: *Report, caller: *Caller, backend: *Windows, arena: std.mem.Allocator) !void {
-    const apps = @import("../../core/apps.zig");
+    const apps = @import("core").apps;
     const displays = backend.displays();
 
     // window-displays: one line per display first, the primary one flagged,
@@ -1257,8 +1257,8 @@ fn injectKeys(vks: []const u16, up: bool) void {
 /// real low-level hooks (physical events are fed to the hook logic on its
 /// thread; injected ones go through Windows).
 fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: std.mem.Allocator, backend: *Windows, tw: *TestWindow) !void {
-    const policy = @import("../../core/policy.zig");
-    const control = @import("../../core/control.zig");
+    const policy = @import("core").policy;
+    const control = @import("core").control;
     _ = w.SetForegroundWindow(tw.window());
     w.Sleep(150);
     const handle = @intFromPtr(tw.window());
@@ -1344,7 +1344,7 @@ fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: st
     defer server.deinit();
     var caller: Caller = .{ .server = &server, .arena = arena, .out = .init(gpa) };
     defer caller.out.deinit();
-    const rearm_combo: @import("../../core/keys.zig").Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
+    const rearm_combo: @import("core").keys.Combo = .{ .mods = .{ .ctrl = true, .alt = true, .shift = true }, .key = .{ .char = 'r' } };
     // The control indicator runs with the kill switch (US-034), so the kill
     // checks below also time the hooks with it. Stopped after the kill
     // switch, whose thread notifies it.
@@ -1449,7 +1449,7 @@ fn securityChecks(report: *Report, gpa: std.mem.Allocator, io: std.Io, arena: st
     indicatorChecks(report, gpa, arena, &caller, &server, backend, ks, tw, rearm_combo) catch |err| report.fail("indicator", "{t}", .{err});
 }
 
-const IndicatorLook = @import("../../core/indicator.zig").Look;
+const IndicatorLook = @import("core").indicator.Look;
 const Indicator = @import("indicator.zig").Indicator;
 
 fn waitLook(ind: *const Indicator, look: IndicatorLook, timeout_ms: u32) ?u64 {
@@ -1512,9 +1512,9 @@ fn amberAt(backend: *Windows, arena: std.mem.Allocator, points: []const [2]i32) 
 /// absent from window_list, point resolution, the policy and ui_tree, a
 /// state change cheap for the caller; a failure to start leaves tools
 /// working.
-fn indicatorChecks(report: *Report, gpa: std.mem.Allocator, arena: std.mem.Allocator, caller: *Caller, server: *Server, backend: *Windows, ks: *@import("hooks.zig").KillSwitch, tw: *TestWindow, rearm: @import("../../core/keys.zig").Combo) !void {
-    const core_ind = @import("../../core/indicator.zig");
-    const policy = @import("../../core/policy.zig");
+fn indicatorChecks(report: *Report, gpa: std.mem.Allocator, arena: std.mem.Allocator, caller: *Caller, server: *Server, backend: *Windows, ks: *@import("hooks.zig").KillSwitch, tw: *TestWindow, rearm: @import("core").keys.Combo) !void {
+    const core_ind = @import("core").indicator;
+    const policy = @import("core").policy;
     const ind = backend.indicator orelse return report.fail("indicator-start", "the indicator did not start (see stderr)", .{});
     if (!ind.ready(2000)) return report.fail("indicator-start", "its windows were not built (see stderr)", .{});
     var hbuf: [display.max_displays * 5]w.HWND = undefined;

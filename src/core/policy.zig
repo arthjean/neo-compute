@@ -1,6 +1,8 @@
 //! Per-application control levels (US-017, FR-08): `deny`, `observe`,
-//! `click`, `full`, read from `%APPDATA%\neo-compute\policy.json` or the
-//! `--policy` file, over the versioned defaults below. Every action resolves
+//! `click`, `full`, read from the backend's policy file (`places`: the
+//! user's configuration folder of each OS) or the `--policy` file, over the
+//! versioned defaults below and those of the backend's OS
+//! (`Policy.builtin`). Every action resolves
 //! its target application (window under the point, foreground window or
 //! element owner) and checks its level before the first event is sent.
 //!
@@ -111,6 +113,8 @@ pub const shells = [_][]const u8{
     "Zed.exe",             "powershell_ise.exe",
 };
 
+/// The built-in rules of the Windows server; a backend of another OS gives
+/// its own (`policy_rules`, decision 0014 P8).
 pub const default_rules = blk: {
     var out: [password_managers.len + shells.len]Rule = undefined;
     for (password_managers, 0..) |exe, i| out[i] = .{ .exe = exe, .level = .deny };
@@ -129,17 +133,49 @@ pub const Policy = struct {
     problem: ?[]const u8 = null,
     /// Tools without a target window (US-021).
     system: System = .{},
+    /// The versioned defaults of the OS, checked after `rules`.
+    builtin: []const Rule = &default_rules,
 
     pub fn levelOf(self: *const Policy, exe: ?[]const u8) Level {
+        const one = [1][]const u8{exe orelse return self.capped(self.default)};
+        return self.levelOfNames(&one);
+    }
+
+    /// The level of an application known by several names (on Linux its
+    /// application id and its executable, decision 0014 D8), each compared
+    /// without case: the file's rules first, for any of the names, then
+    /// the built-in ones.
+    pub fn levelOfNames(self: *const Policy, names: []const []const u8) Level {
         const level = blk: {
-            const e = exe orelse break :blk self.default;
-            for (self.rules) |r| if (std.ascii.eqlIgnoreCase(r.exe, e)) break :blk r.level;
-            for (default_rules) |r| if (std.ascii.eqlIgnoreCase(r.exe, e)) break :blk r.level;
+            for (self.rules) |r| for (names) |n| if (std.ascii.eqlIgnoreCase(r.exe, n)) break :blk r.level;
+            for (self.builtin) |r| for (names) |n| if (std.ascii.eqlIgnoreCase(r.exe, n)) break :blk r.level;
             break :blk self.default;
         };
+        return self.capped(level);
+    }
+
+    fn capped(self: *const Policy, level: Level) Level {
         return if (level.allows(self.cap)) self.cap else level;
     }
 };
+
+/// Every name the backend knows the process `pid` by, its display name
+/// first: `processNames` where the backend has it, else `processName`.
+pub fn namesOf(ctx: anytype, pid: u32) []const []const u8 {
+    const B = @TypeOf(ctx.backend.*);
+    if (comptime @hasDecl(B, "processNames")) return ctx.backend.processNames(ctx.arena, pid);
+    const name = ctx.backend.processName(ctx.arena, pid) orelse return &.{};
+    const one = ctx.arena.alloc([]const u8, 1) catch return &.{};
+    one[0] = name;
+    return one;
+}
+
+/// The level of the process `pid`, by every name it has.
+pub fn levelOfPid(ctx: anytype, pid: u32) Level {
+    const names = namesOf(ctx, pid);
+    if (names.len == 0) return ctx.session.policy.levelOf(null);
+    return ctx.session.policy.levelOfNames(names);
+}
 
 pub const defaults: Policy = .{};
 
@@ -309,9 +345,9 @@ pub const Cache = struct {
 pub fn resolve(ctx: anytype, ref: display.WindowRef) *const Target {
     const s = ctx.session;
     if (s.apps.get(ref)) |t| return t;
-    const name = ctx.backend.processName(ctx.arena, ref.pid);
-    var t: Target = .{ .handle = ref.handle, .pid = ref.pid, .level = s.policy.levelOf(name) };
-    const shown = name orelse "?";
+    const names = namesOf(ctx, ref.pid);
+    var t: Target = .{ .handle = ref.handle, .pid = ref.pid, .level = if (names.len > 0) s.policy.levelOfNames(names) else s.policy.levelOf(null) };
+    const shown = if (names.len > 0) names[0] else "?";
     t.exe_len = @intCast(@min(shown.len, t.exe_buf.len));
     @memcpy(t.exe_buf[0..t.exe_len], shown[0..t.exe_len]);
     return s.apps.put(t);
@@ -477,4 +513,29 @@ test "the system section: every value, the defaults without it, unknown keys and
     try std.testing.expect(std.mem.indexOf(u8, unknown.problem.?, "unknown key `shell` in `system` (valid keys: app_launch, clipboard, registry_read)") != null);
     const not_object = parse(a, "{\"system\": \"deny\"}", "p.json");
     try std.testing.expect(std.mem.indexOf(u8, not_object.problem.?, "`system` must be an object") != null);
+}
+
+test "the Windows built-in lists are those of before the Linux port (US-070)" {
+    const before_deny = [_][]const u8{
+        "1Password.exe", "Bitwarden.exe", "KeePass.exe",  "KeePassXC.exe",  "Dashlane.exe",
+        "Enpass.exe",    "NordPass.exe",  "RoboForm.exe", "ProtonPass.exe", "Proton Pass.exe",
+        "LastPass.exe",  "Keeper.exe",
+    };
+    const before_click = [_][]const u8{
+        "WindowsTerminal.exe", "OpenConsole.exe",    "conhost.exe",         "cmd.exe",    "powershell.exe",
+        "pwsh.exe",            "wsl.exe",            "bash.exe",            "mintty.exe", "alacritty.exe",
+        "wezterm-gui.exe",     "Code.exe",           "Code - Insiders.exe", "Cursor.exe", "Windsurf.exe",
+        "Zed.exe",             "powershell_ise.exe",
+    };
+    try std.testing.expectEqual(before_deny.len + before_click.len, default_rules.len);
+    for (before_deny, default_rules[0..before_deny.len]) |name, r| {
+        try std.testing.expectEqualStrings(name, r.exe);
+        try std.testing.expectEqual(Level.deny, r.level);
+    }
+    for (before_click, default_rules[before_deny.len..]) |name, r| {
+        try std.testing.expectEqualStrings(name, r.exe);
+        try std.testing.expectEqual(Level.click, r.level);
+    }
+    // A policy without a backend's rules keeps them.
+    try std.testing.expectEqual(@as([]const Rule, &default_rules), defaults.builtin);
 }

@@ -13,7 +13,7 @@
 const std = @import("std");
 const w = @import("win32");
 const com = @import("com.zig");
-const apps = @import("../../core/apps.zig");
+const apps = @import("core").apps;
 const check = com.check;
 const release = com.release;
 

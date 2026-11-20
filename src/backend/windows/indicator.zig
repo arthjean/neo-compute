@@ -25,10 +25,10 @@
 
 const std = @import("std");
 const w = @import("win32");
-const display = @import("../../core/display.zig");
-const core = @import("../../core/indicator.zig");
-const keys = @import("../../core/keys.zig");
-const control_mod = @import("../../core/control.zig");
+const display = @import("core").display;
+const core = @import("core").indicator;
+const keys = @import("core").keys;
+const control_mod = @import("core").control;
 
 pub const class_name = "NeoComputeIndicator";
 const max_screens = display.max_displays;

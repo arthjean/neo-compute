@@ -5,10 +5,10 @@ const std = @import("std");
 const testing = std.testing;
 const bench = @import("bench.zig");
 const timing = @import("timing.zig");
-const Fake = @import("../backend/fake.zig").Fake;
+const Fake = @import("fake").Fake;
 
 test "transport scenario records parse/dispatch/serialize/write timings and no steady-state allocation" {
-    const results = try bench.run(Fake, testing.allocator, testing.io, "transport", 500);
+    const results = try bench.run(Fake, Fake, testing.allocator, testing.io, "transport", 500);
     defer testing.allocator.free(results);
     try testing.expectEqual(@as(usize, 1), results.len);
     const ok = results[0].outcome.ok;
@@ -21,11 +21,11 @@ test "transport scenario records parse/dispatch/serialize/write timings and no s
     }
     // Transport overhead NFR: parse + dispatch + serialization p95 < 1 ms
     // per message (one iteration carries rounds * 3 messages).
-    try testing.expect(ok.total.p95_ns < bench.Transport.rounds * 3 * std.time.ns_per_ms);
+    try testing.expect(ok.total.p95_ns < bench.transport_rounds * 3 * std.time.ns_per_ms);
 }
 
 test "a backend without platform scenarios reports them unsupported without failing the run" {
-    const results = try bench.run(Fake, testing.allocator, testing.io, "all", 50);
+    const results = try bench.run(Fake, Fake, testing.allocator, testing.io, "all", 50);
     defer testing.allocator.free(results);
     try testing.expectEqual(bench.scenario_names.len, results.len);
     // transport and diff are portable; the others need a platform backend.
@@ -35,7 +35,7 @@ test "a backend without platform scenarios reports them unsupported without fail
 }
 
 test "diff scenario times 1,500-element diffs without steady-state allocation" {
-    const results = try bench.run(Fake, testing.allocator, testing.io, "diff", 200);
+    const results = try bench.run(Fake, Fake, testing.allocator, testing.io, "diff", 200);
     defer testing.allocator.free(results);
     const ok = results[0].outcome.ok;
     const st = ok.stages[@backingInt(timing.Stage.diff)].?;
@@ -59,7 +59,7 @@ test "settling time is reported as its own stage and kept out of the total" {
 }
 
 test "application scenarios run only on request" {
-    const results = try bench.run(Fake, testing.allocator, testing.io, "chrome", 1);
+    const results = try bench.run(Fake, Fake, testing.allocator, testing.io, "chrome", 1);
     defer testing.allocator.free(results);
     try testing.expectEqual(@as(usize, 1), results.len);
     try testing.expect(results[0].outcome == .unsupported);
@@ -67,7 +67,7 @@ test "application scenarios run only on request" {
 }
 
 test "report lists p50, p95, p99, max and allocations per stage" {
-    const results = try bench.run(Fake, testing.allocator, testing.io, "all", 20);
+    const results = try bench.run(Fake, Fake, testing.allocator, testing.io, "all", 20);
     defer testing.allocator.free(results);
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
@@ -153,9 +153,46 @@ test "check fails above 110 % of the reference or above the absolute budget" {
     cap.outcome.ok.witness_p95_ns = 10_000_000;
     try testing.expectEqual(@as(usize, 2), try bench.check(a, baseline, &.{cap}, &sink.writer));
 
-    // Unsupported scenarios are never checked.
+    // An unsupported scenario fails the gate when the baseline holds it
+    // (US-073), and is ignored otherwise.
     const skipped: bench.Result = .{ .name = "capture", .outcome = .{ .unsupported = "no output" } };
-    try testing.expectEqual(@as(usize, 0), try bench.check(a, baseline, &.{skipped}, &sink.writer));
+    var log: std.Io.Writer.Allocating = .init(a);
+    try testing.expectEqual(@as(usize, 1), try bench.check(a, baseline, &.{skipped}, &log.writer));
+    try testing.expectEqualStrings("bench: capture is in the baseline but did not run on this host: no output\n", log.written());
+    const other: bench.Result = .{ .name = "snapshot", .outcome = .{ .unsupported = "no taskbar" } };
+    try testing.expectEqual(@as(usize, 0), try bench.check(a, baseline, &.{other}, &sink.writer));
+}
+
+test "a baseline of another OS than the host is refused by name" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // No `os` key: a Windows baseline.
+    try testing.expectEqualStrings("windows", try bench.baselineOs(a, "{\"reference_p95_us\":{}}"));
+    try testing.expectEqual(@as(?[]const u8, null), try bench.osMismatch(a, "{\"reference_p95_us\":{}}", "windows"));
+    try testing.expectEqualStrings(
+        "Baseline windows sur un hôte linux : utilise bench/baseline-linux.json sous Linux, bench/baseline.json sous Windows.",
+        (try bench.osMismatch(a, "{\"reference_p95_us\":{}}", "linux")).?,
+    );
+    try testing.expectEqualStrings(
+        "Baseline linux sur un hôte windows : utilise bench/baseline-linux.json sous Linux, bench/baseline.json sous Windows.",
+        (try bench.osMismatch(a, "{\"os\":\"linux\",\"reference_p95_us\":{}}", "windows")).?,
+    );
+    try testing.expectEqual(@as(?[]const u8, null), try bench.osMismatch(a, "{\"os\":\"linux\"}", "linux"));
+}
+
+test "the repository baselines: bench/baseline.json is Windows, bench/baseline-linux.json is Linux with transport and diff" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("windows", try bench.baselineOs(a, @embedFile("baseline_windows")));
+    const linux = @embedFile("baseline_linux");
+    try testing.expectEqualStrings("linux", try bench.baselineOs(a, linux));
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, a, linux, .{});
+    var names = v.object.get("reference_p95_us").?.object.iterator();
+    var count: usize = 0;
+    while (names.next()) |e| : (count += 1) try testing.expect(std.mem.eql(u8, e.key_ptr.*, "transport") or std.mem.eql(u8, e.key_ptr.*, "diff"));
+    try testing.expectEqual(@as(usize, 2), count);
 }
 
 test "a baseline keeps the worst p95 and p50 of its runs, and the p95 of each" {
@@ -168,7 +205,7 @@ test "a baseline keeps the worst p95 and p50 of its runs, and the p95 of each" {
         &.{fakeResult("capture", .capture, 1100)},
     };
     var out: std.Io.Writer.Allocating = .init(a);
-    try bench.writeBaseline(&passes, &out.writer);
+    try bench.writeBaseline(&passes, "windows", &out.writer);
     const v = try std.json.parseFromSliceLeaky(std.json.Value, a, out.written(), .{});
     const stage = struct {
         fn of(root: std.json.Value, section: []const u8, name: []const u8) std.json.Value {

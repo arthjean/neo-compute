@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const w = @import("win32");
-const display = @import("../../core/display.zig");
+const display = @import("core").display;
 const window = @import("window.zig");
 const input = @import("input.zig");
 const uia = @import("uia.zig");

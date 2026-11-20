@@ -14,7 +14,6 @@ const stage_count = timing.stage_count;
 const CountingAllocator = @import("counting_allocator.zig").CountingAllocator;
 const mcp = @import("mcp.zig");
 const tools = @import("tools.zig");
-const Fake = @import("../backend/fake.zig").Fake;
 const uitree = @import("uitree.zig");
 
 pub const Stats = struct {
@@ -160,45 +159,52 @@ pub fn measure(gpa: std.mem.Allocator, io: Io, scenario: anytype, iterations: us
 /// scenarios time observations), through the real dispatcher, into a
 /// discarding writer. One iteration replays them `rounds` times so a sample spans tens
 /// of microseconds rather than a few timer ticks.
-pub const Transport = struct {
-    pub const name = "transport";
-    pub const default_iterations = 2000;
-    pub const rounds = 32;
-    const Server = mcp.Server(Fake, tools.all);
-    const lines = [_][]const u8{
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"key\",\"arguments\":{\"text\":\"ctrl+s\",\"repeat\":0,\"observe\":\"none\"}}}",
-    };
+pub const transport_rounds = 32;
 
-    backend: Fake = .{},
-    server: Server,
-    sink_buf: [64 * 1024]u8 = undefined,
-    sink: Io.Writer.Discarding,
-
-    pub fn init(self: *Transport, gpa: std.mem.Allocator, io: Io) void {
-        self.backend = .{};
-        self.server = .init(gpa, io, &self.backend, .{});
-        self.sink = .init(&self.sink_buf);
-    }
-
-    pub fn deinit(self: *Transport) void {
-        self.server.deinit();
-    }
-
-    pub fn step(self: *Transport, t: *Timings) !void {
-        for (0..rounds) |_| for (lines) |line| {
-            try self.server.handleMessage(line, &self.sink.writer);
-            // handleMessage clears the server's timings per message; fold
-            // them into the iteration.
-            for (0..stage_count) |s| {
-                t.ns[s] += self.server.timings.ns[s];
-                t.allocs[s] += self.server.timings.allocs[s];
-                if (self.server.timings.used[s]) t.used[s] = true;
-            }
+/// `Stub` is the fake backend (`src/backend/fake.zig`): the scenario times
+/// the dispatcher alone, whatever the platform.
+pub fn Transport(comptime Stub: type) type {
+    return struct {
+        const Self = @This();
+        pub const name = "transport";
+        pub const default_iterations = 2000;
+        pub const rounds = transport_rounds;
+        const Server = mcp.Server(Stub, tools.all);
+        const lines = [_][]const u8{
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"key\",\"arguments\":{\"text\":\"ctrl+s\",\"repeat\":0,\"observe\":\"none\"}}}",
         };
-    }
-};
+
+        backend: Stub = .{},
+        server: Server,
+        sink_buf: [64 * 1024]u8 = undefined,
+        sink: Io.Writer.Discarding,
+
+        pub fn init(self: *Self, gpa: std.mem.Allocator, io: Io) void {
+            self.backend = .{};
+            self.server = .init(gpa, io, &self.backend, .{});
+            self.sink = .init(&self.sink_buf);
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.server.deinit();
+        }
+
+        pub fn step(self: *Self, t: *Timings) !void {
+            for (0..rounds) |_| for (lines) |line| {
+                try self.server.handleMessage(line, &self.sink.writer);
+                // handleMessage clears the server's timings per message; fold
+                // them into the iteration.
+                for (0..stage_count) |s| {
+                    t.ns[s] += self.server.timings.ns[s];
+                    t.allocs[s] += self.server.timings.allocs[s];
+                    if (self.server.timings.used[s]) t.used[s] = true;
+                }
+            };
+        }
+    };
+}
 
 // ---------------------------------------------------------------- diff scenario
 
@@ -343,7 +349,15 @@ pub fn check(arena: std.mem.Allocator, baseline_json: []const u8, results: []con
     for (results) |r| {
         const ok = switch (r.outcome) {
             .ok => |ok| ok,
-            .unsupported => continue,
+            // A scenario the baseline holds must run: skipping it would
+            // pass the gate on nothing (US-073).
+            .unsupported => |why| {
+                if (refs.get(r.name) != null or medians.get(r.name) != null) {
+                    violations += 1;
+                    try log.print("bench: {s} is in the baseline but did not run on this host: {s}\n", .{ r.name, why });
+                }
+                continue;
+            },
         };
         for (budgets) |b| if (std.mem.eql(u8, b.scenario, r.name)) {
             if (b.stage) |stage| {
@@ -533,9 +547,31 @@ fn statOf(r: Result, i: usize) ?Stats {
 /// order: per stage the worst p95 and the worst p50 (so the 110 % rule
 /// flags regressions rather than jitter), and the p95 of every pass, from
 /// which `check` draws the limit of the stage's own noise.
-pub fn writeBaseline(passes: []const []const Result, w: *Io.Writer) !void {
+/// The OS a baseline was measured on: its `os` key, Windows without one
+/// (bench/baseline.json predates the key, US-073).
+pub fn baselineOs(arena: std.mem.Allocator, baseline_json: []const u8) ![]const u8 {
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, baseline_json, .{});
+    if (v != .object) return "windows";
+    const os = v.object.get("os") orelse return "windows";
+    return if (os == .string) os.string else "windows";
+}
+
+/// The refusal of a baseline measured on another OS than `host`, or null.
+pub fn osMismatch(arena: std.mem.Allocator, baseline_json: []const u8, host: []const u8) !?[]const u8 {
+    const os = try baselineOs(arena, baseline_json);
+    if (std.mem.eql(u8, os, host)) return null;
+    return try std.fmt.allocPrint(arena, "Baseline {s} sur un hôte {s} : utilise bench/baseline-linux.json sous Linux, bench/baseline.json sous Windows.", .{ os, host });
+}
+
+/// Writes the baseline of `passes`, measured on `os`: a Windows baseline
+/// has no `os` key, as bench/baseline.json.
+pub fn writeBaseline(passes: []const []const Result, os: []const u8, w: *Io.Writer) !void {
     var s: std.json.Stringify = .{ .writer = w, .options = .{ .whitespace = .indent_2 } };
     try s.beginObject();
+    if (!std.mem.eql(u8, os, "windows")) {
+        try s.objectField("os");
+        try s.write(os);
+    }
     const Kind = enum { reference_p95_us, reference_p50_us, passes_p95_us };
     inline for (@typeInfo(Kind).@"enum".field_names) |name| {
         const kind = @field(Kind, name);
@@ -581,7 +617,8 @@ pub const app_scenarios = [_][]const u8{ "notepad", "notepad-menu", "explorer", 
 
 /// Runs `which` ("all" or one scenario name). Platform scenarios come from
 /// `Backend.benchScenario`; a backend without them reports them unsupported.
-pub fn run(comptime Backend: type, gpa: std.mem.Allocator, io: Io, which: []const u8, iterations: ?usize) ![]Result {
+/// `Stub` is the fake backend the `transport` scenario runs on.
+pub fn run(comptime Backend: type, comptime Stub: type, gpa: std.mem.Allocator, io: Io, which: []const u8, iterations: ?usize) ![]Result {
     var results: std.ArrayList(Result) = .empty;
     var known = std.mem.eql(u8, which, "all");
     for (scenario_names ++ app_scenarios, 0..) |name, index| {
@@ -590,7 +627,8 @@ pub fn run(comptime Backend: type, gpa: std.mem.Allocator, io: Io, which: []cons
         known = true;
         var counter: CountingAllocator = .init(gpa);
         const outcome: Outcome = if (std.mem.eql(u8, name, "transport")) blk: {
-            const t = try gpa.create(Transport);
+            const T = Transport(Stub);
+            const t = try gpa.create(T);
             defer gpa.destroy(t);
             t.init(counter.allocator(), io);
             defer t.deinit();
@@ -599,7 +637,7 @@ pub fn run(comptime Backend: type, gpa: std.mem.Allocator, io: Io, which: []cons
                 var scratch: Timings = .{};
                 try t.step(&scratch);
             }
-            break :blk try measure(gpa, io, t, iterations orelse Transport.default_iterations, &counter);
+            break :blk try measure(gpa, io, t, iterations orelse T.default_iterations, &counter);
         } else if (std.mem.eql(u8, name, "diff")) blk: {
             const d = try gpa.create(Diff);
             defer gpa.destroy(d);

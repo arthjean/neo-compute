@@ -9,7 +9,7 @@ const t = @import("tools_test.zig");
 const a11y = @import("a11y.zig");
 const display = @import("display.zig");
 const uitree = @import("uitree.zig");
-const fake = @import("../backend/fake.zig");
+const fake = @import("fake");
 const Element = uitree.Element;
 
 const gone_e8 = "Élément e8 introuvable : rappelle ui_tree";

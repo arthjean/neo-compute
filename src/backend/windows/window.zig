@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const w = @import("win32");
-const display = @import("../../core/display.zig");
+const display = @import("core").display;
 const input = @import("input.zig");
 const indicator = @import("indicator.zig");
 
@@ -388,8 +388,8 @@ fn style(hwnd: w.HWND) u32 {
 /// asks for no taskbar button, so another top-level window of the same
 /// process (a second browser window) is never one. The desktop and the
 /// taskbar have none.
-pub fn extraRoots(arena: std.mem.Allocator, target_handle: ?u64) []const @import("../../core/uitree.zig").RootWindow {
-    const RootWindow = @import("../../core/uitree.zig").RootWindow;
+pub fn extraRoots(arena: std.mem.Allocator, target_handle: ?u64) []const @import("core").uitree.RootWindow {
+    const RootWindow = @import("core").uitree.RootWindow;
     const target: w.HWND = if (target_handle) |h| @ptrFromInt(h) else w.GetForegroundWindow();
     if (target == null or w.IsWindow(target) == 0) return &.{};
     var cbuf: [64:0]u16 = undefined;

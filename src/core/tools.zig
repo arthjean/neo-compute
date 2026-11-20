@@ -258,8 +258,6 @@ pub const wait = struct {
 
 pub const ui_tree = struct {
     pub const name = "ui_tree";
-    pub const description = "Accessibility tree of the foreground window, one line per element id; since=last: changes only.";
-    pub const background_description = "Accessibility tree of the target window (window, else the last one named or launched), one line per element id; since=last: changes only.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .always_load = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -291,7 +289,6 @@ pub const ui_tree = struct {
 
 pub const ui_find = struct {
     pub const name = "ui_find";
-    pub const description = "Find elements: name words, \"exact name\", role:<role>, state:<state>, value:<text>; at most 20 lines. id:<id> alone reads that element again.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -318,7 +315,6 @@ pub const ui_find = struct {
 
 pub const ui_act = struct {
     pub const name = "ui_act";
-    pub const description = "Act on an element id from ui_tree or ui_find; the first line says whether the effect was read back.";
     pub const annotations = .{ .always_load = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -355,7 +351,6 @@ fn optionalHandle(ctx: anytype, text: ?[]const u8) union(enum) { ok: ?u64, err: 
 
 pub const window_list = struct {
     pub const name = "window_list";
-    pub const description = "Visible top-level windows: handle, title, process, rectangle.";
     pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -370,7 +365,6 @@ pub const window_list = struct {
 
 pub const window_focus = struct {
     pub const name = "window_focus";
-    pub const description = "Bring a window to the foreground, restoring it.";
     pub const annotations = .{ .intrusion = .foreground };
     pub const extension = true;
     pub const Args = struct {
@@ -397,7 +391,6 @@ pub const window_focus = struct {
 
 pub const window_set = struct {
     pub const name = "window_set";
-    pub const description = "Move, resize, minimize, maximize or close a window; rect [x, y, w, h] in screenshot pixels of display (default: the window's).";
     pub const annotations = .{ .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -430,7 +423,6 @@ pub const window_set = struct {
 
 pub const app_launch = struct {
     pub const name = "app_launch";
-    pub const description = "Start a Start menu app (name or AUMID) or open a document or folder in its default app; returns the window and its tree.";
     pub const annotations = .{ .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -448,7 +440,6 @@ pub const app_launch = struct {
 
 pub const clipboard = struct {
     pub const name = "clipboard";
-    pub const description = "Read (get) or write (set) the clipboard's text; content marked secret by its app is refused, and set keeps it out of the history and cloud.";
     pub const annotations = .{ .intrusion = .none };
     pub const background = true;
     pub const extension = true;
@@ -465,7 +456,9 @@ pub const clipboard = struct {
 
 pub const registry_read = struct {
     pub const name = "registry_read";
-    pub const description = "Read a registry value (name; empty for the default) or a key's values and subkeys, 64-bit view; never writes. path: HKCU\\..., HKLM, HKCR, HKU or HKCC.";
+    /// Windows only (decision 0014, D6): listed when the backend reads
+    /// the registry.
+    pub const requires = "registryValue";
     pub const annotations = .{ .read_only = true, .idempotent = true, .intrusion = .none };
     pub const background = true;
     pub const extension = true;

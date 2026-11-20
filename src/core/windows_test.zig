@@ -11,7 +11,7 @@ const audit = @import("audit.zig");
 const display = @import("display.zig");
 const apps = @import("apps.zig");
 const t = @import("tools_test.zig");
-const Fake = @import("../backend/fake.zig").Fake;
+const Fake = @import("fake").Fake;
 const Harness = t.Harness;
 const isError = t.isError;
 const text = t.text;
@@ -467,7 +467,7 @@ test "notifications/cancelled stops the window wait and suppresses the response"
 }
 
 test "the new tools are deferred and their schemas carry the PRD parameters" {
-    const Reg = @import("registry.zig").Registry(@import("tools.zig").all);
+    const Reg = mcp.Server(@import("fake").Fake, @import("tools.zig").all).Reg;
     try testing.expect(!Reg.alwaysLoaded("window_set"));
     try testing.expect(!Reg.alwaysLoaded("app_launch"));
     try testing.expect(Reg.isAction("window_set"));

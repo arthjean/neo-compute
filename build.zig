@@ -4,27 +4,38 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const test_filter = b.option([]const u8, "test-filter", "Run only tests whose name contains this string");
+    const fake_backend = b.option(bool, "fake-backend", "Build the server on the fake backend of the tests, for any target") orelse false;
+    const os = target.result.os.tag;
+    // A target without a backend fails here rather than building a server
+    // that drives no desktop (US-068).
+    if (!fake_backend and os != .windows and os != .linux)
+        std.process.fatal("Aucun backend pour {t} : neo-compute se construit pour windows et linux, ou avec -Dfake-backend=true pour les tests.", .{os});
+    const filters: []const []const u8 = if (test_filter) |f| &.{f} else &.{};
 
-    const nupkg = fetchNupkg(b);
-    const win32 = addBindings(b, target, optimize, nupkg);
-    b.step("bindings", "Generate the Win32/COM bindings").dependOn(win32.step);
+    var win32: Win32 = .{ .b = b };
+    b.step("bindings", "Generate the Win32/COM bindings").dependOn(win32.gen().step);
 
-    const exe = addServer(b, target, optimize, false, win32.module);
+    const exe = addServer(b, &win32, target, optimize, fake_backend);
     b.installArtifact(exe);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run neo-compute").dependOn(&run.step);
 
-    // Unit and integration tests of the portable core against the fake backend.
-    const tests = b.addTest(.{
-        .root_module = serverModule(b, target, optimize, true, null),
-        .filters = if (test_filter) |f| &.{f} else &.{},
-    });
-    tests.root_module.addAnonymousImport("toolset_fixture", .{ .root_source_file = b.path("tests/fixtures/toolset_20260801.json") });
+    // Unit and integration tests of the portable core against the fake
+    // backend: the `core` module with the `fake` module, which imports it
+    // back.
+    const core_test = coreModule(b, target, optimize, buildOptions(b, true).createModule());
+    core_test.addImport("fake", fakeModule(b, target, optimize, core_test, textsModules(b, target, optimize, core_test)));
+    core_test.addAnonymousImport("toolset_fixture", .{ .root_source_file = b.path("tests/fixtures/toolset_20260801.json") });
     // `tools/list` of the a11y and vision modes as it was before the
     // background mode (US-041): neither may change.
-    tests.root_module.addAnonymousImport("tools_list_a11y", .{ .root_source_file = b.path("tests/fixtures/tools_list_a11y.json") });
-    tests.root_module.addAnonymousImport("tools_list_vision", .{ .root_source_file = b.path("tests/fixtures/tools_list_vision.json") });
+    core_test.addAnonymousImport("tools_list_a11y", .{ .root_source_file = b.path("tests/fixtures/tools_list_a11y.json") });
+    core_test.addAnonymousImport("tools_list_vision", .{ .root_source_file = b.path("tests/fixtures/tools_list_vision.json") });
+    // initialize and tools/list of the Windows server before US-071.
+    core_test.addAnonymousImport("windows_texts", .{ .root_source_file = b.path("tests/fixtures/windows_texts.json") });
+    core_test.addAnonymousImport("baseline_windows", .{ .root_source_file = b.path("bench/baseline.json") });
+    core_test.addAnonymousImport("baseline_linux", .{ .root_source_file = b.path("bench/baseline-linux.json") });
+    const tests = b.addTest(.{ .root_module = core_test, .filters = filters });
     const test_step = b.step("test", "Run unit and integration tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
@@ -50,41 +61,21 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&bad.step);
     }
 
-    // The generated bindings compile and link in full.
-    const bindings_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/bindings_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "win32", .module = win32.module }},
-        }),
-        .filters = if (test_filter) |f| &.{f} else &.{},
+    // The module boundaries (US-069): src/core/ imports no file of
+    // src/backend/, and neither OS backend imports the other.
+    const imports_tests = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/imports_test.zig"), .target = b.graph.host, .optimize = .Debug }),
+        .filters = filters,
     });
-    test_step.dependOn(&b.addRunArtifact(bindings_tests).step);
-
-    // Struct layouts against the C compiler's sizeof/offsetof on mingw-w64.
-    const layout_c = b.addExecutable(.{
-        .name = "layout_c",
-        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
-    });
-    layout_c.root_module.addCSourceFile(.{ .file = b.path("tests/layout/layout.c"), .flags = &.{"-std=c11"} });
-    const layout_ref = b.addRunArtifact(layout_c).captureStdOut(.{});
-    const layout_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/layout_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "win32", .module = win32.module }},
-        }),
-        .filters = if (test_filter) |f| &.{f} else &.{},
-    });
-    layout_tests.root_module.addAnonymousImport("layout_c", .{ .root_source_file = layout_ref });
-    test_step.dependOn(&b.addRunArtifact(layout_tests).step);
+    const imports_run = b.addRunArtifact(imports_tests);
+    imports_run.setCwd(b.path("."));
+    imports_run.has_side_effects = true;
+    test_step.dependOn(&imports_run.step);
 
     // A name absent from the metadata fails generation and names the closest one.
-    const missing = b.addRunArtifact(win32.generator);
+    const missing = b.addRunArtifact(win32.gen().generator);
     missing.addFileArg(b.path("tests/fixtures/missing_api.zon"));
-    missing.addFileArg(nupkg);
+    missing.addFileArg(win32.gen().nupkg);
     _ = missing.addOutputFileArg("unused.zig");
     missing.expectExitCode(1);
     missing.expectStdErrMatch("`CoInitializeExx` not found in Windows.Win32.winmd; closest existing name: `CoInitializeEx`");
@@ -93,33 +84,109 @@ pub fn build(b: *std.Build) void {
     // Lifecycle checks against the real binary (startup and EOF exit times).
     const test_options = b.addOptions();
     test_options.addOptionPath("server_exe", exe.getEmittedBin());
+    // The server on the fake backend, which logs its inputs on stderr
+    // (US-072: release on a stop signal).
+    test_options.addOptionPath("fake_server_exe", addServer(b, &win32, target, optimize, true).getEmittedBin());
     const process_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/process_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
-        .filters = if (test_filter) |f| &.{f} else &.{},
+        .filters = filters,
     });
     process_tests.root_module.addOptions("test_options", test_options);
+    process_tests.root_module.addAnonymousImport("toolset_fixture", .{ .root_source_file = b.path("tests/fixtures/toolset_20260801.json") });
     const process_run = b.addRunArtifact(process_tests);
     process_run.has_side_effects = true;
     test_step.dependOn(&process_run.step);
 
-    // The core must stay free of Windows dependencies: build it for Linux
-    // with the fake backend.
-    const cross = addServer(b, b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu }), optimize, true, null);
-    b.step("cross", "Compile the core with the fake backend for x86_64-linux-gnu").dependOn(&cross.step);
+    if (os == .linux and !fake_backend) {
+        // The Linux backend's own tests (window handles, US-071).
+        const linux_tests = b.addTest(.{ .root_module = serverModule(b, &win32, target, optimize, false).import_table.get("backend_linux").?, .filters = filters });
+        test_step.dependOn(&b.addRunArtifact(linux_tests).step);
+    }
+
+    if (os == .windows) {
+        // The generated bindings compile and link in full.
+        const bindings_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/bindings_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "win32", .module = win32.module(target, optimize) }},
+            }),
+            .filters = filters,
+        });
+        test_step.dependOn(&b.addRunArtifact(bindings_tests).step);
+
+        // Struct layouts against the C compiler's sizeof/offsetof on mingw-w64.
+        const layout_c = b.addExecutable(.{
+            .name = "layout_c",
+            .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+        });
+        layout_c.root_module.addCSourceFile(.{ .file = b.path("tests/layout/layout.c"), .flags = &.{"-std=c11"} });
+        const layout_ref = b.addRunArtifact(layout_c).captureStdOut(.{});
+        const layout_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/layout_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "win32", .module = win32.module(target, optimize) }},
+            }),
+            .filters = filters,
+        });
+        layout_tests.root_module.addAnonymousImport("layout_c", .{ .root_source_file = layout_ref });
+        test_step.dependOn(&b.addRunArtifact(layout_tests).step);
+
+        // The import tables of the shipped PE image.
+        const pe_tests = b.addTest(.{
+            .root_module = b.createModule(.{ .root_source_file = b.path("tests/pe_test.zig"), .target = target, .optimize = optimize }),
+            .filters = filters,
+        });
+        pe_tests.root_module.addOptions("test_options", test_options);
+        const pe_run = b.addRunArtifact(pe_tests);
+        pe_run.has_side_effects = true;
+        test_step.dependOn(&pe_run.step);
+    }
+
+    // The server of the other OS compiles (US-069): from Linux the Windows
+    // server and its probes, from Windows the Linux server for both
+    // architectures at the glibc 2.28 floor (decision 0014, P7). Installed
+    // under zig-out/cross/<triple>/.
+    const cross = b.step("cross", "Compile the server of the other OS (Windows from Linux, Linux x86_64 and aarch64 from Windows)");
+    const glibc: std.SemanticVersion = .{ .major = 2, .minor = 28, .patch = 0 };
+    const cross_queries: []const std.Target.Query = if (os == .windows) &.{
+        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu, .glibc_version = glibc },
+        .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu, .glibc_version = glibc },
+    } else &.{
+        .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu },
+    };
+    for (cross_queries) |q| {
+        const other = b.resolveTargetQuery(q);
+        const dir: std.Build.InstallDir = .{ .custom = b.fmt("cross/{t}-{t}-{t}", .{ other.result.cpu.arch, other.result.os.tag, other.result.abi }) };
+        var artifacts: [3]*std.Build.Step.Compile = undefined;
+        var count: usize = 0;
+        artifacts[count] = addServer(b, &win32, other, optimize, false);
+        count += 1;
+        if (q.os_tag == .windows) {
+            const probes = addProbes(b, other, optimize, win32.module(other, optimize));
+            artifacts[count] = probes[0];
+            artifacts[count + 1] = probes[1];
+            count += 2;
+        }
+        for (artifacts[0..count]) |art|
+            cross.dependOn(&b.addInstallArtifact(art, .{ .dest_dir = .{ .override = dir } }).step);
+    }
 
     // Bench on an optimized build: `zig build bench -- --check bench/baseline.json`.
-    const bench_win32 = addBindings(b, target, .ReleaseFast, nupkg).module;
-    const bench_exe = addServer(b, target, .ReleaseFast, false, bench_win32);
+    const bench_exe = addServer(b, &win32, target, .ReleaseFast, fake_backend);
     const bench_run = b.addRunArtifact(bench_exe);
     bench_run.addArgs(&.{ "bench", "all" });
     bench_run.addPassthruArgs();
     bench_run.has_side_effects = true;
     // The explorer scenario runs the C witness probe from zig-out/bin.
-    bench_run.step.dependOn(b.getInstallStep());
+    if (os == .windows) bench_run.step.dependOn(b.getInstallStep());
     b.step("bench", "Run the benchmark scenarios (ReleaseFast)").dependOn(&bench_run.step);
 
     // Developer-only: measures the bytes/token ratio through Claude Code
@@ -138,7 +205,17 @@ pub fn build(b: *std.Build) void {
     calibrate.has_side_effects = true;
     b.step("calibrate-tokens", "Calibrate text bytes/token through Claude Code (claude -p)").dependOn(&calibrate.step);
 
-    addProbes(b, target, optimize, win32.module);
+    // The US-001 probes exist for a Windows target only.
+    if (os == .windows) {
+        const probes = addProbes(b, target, optimize, win32.module(target, optimize));
+        const probe_run = b.addRunArtifact(probes[0]);
+        probe_run.addPassthruArgs();
+        b.step("probe", "Run the US-001 COM probe").dependOn(&probe_run.step);
+        const probe_c_run = b.addRunArtifact(probes[1]);
+        probe_c_run.addPassthruArgs();
+        b.step("probe-c", "Run the US-001 C witness probe").dependOn(&probe_c_run.step);
+        for (probes) |p| b.installArtifact(p);
+    }
 }
 
 fn buildOptions(b: *std.Build, fake_backend: bool) *std.Build.Step.Options {
@@ -160,19 +237,100 @@ fn readTokenRatio(b: *std.Build) f64 {
     return parsed.text_bytes_per_token;
 }
 
-/// `win32` is the generated bindings module, required by the Windows backend
-/// and absent from fake-backend builds.
-fn serverModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, fake_backend: bool, win32: ?*std.Build.Module) *std.Build.Module {
+/// The portable core (src/core/, root `core.zig`) with the C libraries it
+/// links. A module may import no file outside its own directory, so the
+/// compiler itself keeps src/core/ out of src/backend/.
+fn coreModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, options: *std.Build.Module) *std.Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/core/core.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addImport("build_options", options);
+    addJpeg(b, mod, target);
+    addPixelHash(b, mod, target);
+    return mod;
+}
+
+/// The texts of each OS (decision 0014, D7): `texts_windows`
+/// (src/backend/windows/texts.zig) and `texts_linux`
+/// (src/backend/linux/texts.zig), modules of their own so the fake backend
+/// can read both while each file stays in one module.
+const Texts = struct { windows: *std.Build.Module, linux: *std.Build.Module };
+
+fn textsModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, core: *std.Build.Module) Texts {
+    var out: Texts = undefined;
+    inline for (.{ "windows", "linux" }) |os| @field(out, os) = b.createModule(.{
+        .root_source_file = b.path("src/backend/" ++ os ++ "/texts.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "core", .module = core }},
+    });
+    return out;
+}
+
+/// The fake backend (src/backend/fake.zig), the executable specification
+/// of the backend contract, on `core`; it speaks with the Windows texts and
+/// carries the Linux ones for their compile-time checks.
+fn fakeModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, core: *std.Build.Module, texts: Texts) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("src/backend/fake.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "core", .module = core },
+            .{ .name = "texts_windows", .module = texts.windows },
+            .{ .name = "texts_linux", .module = texts.linux },
+        },
+    });
+}
+
+/// The server: src/main.zig on `core`, `fake` (the transport bench and
+/// `-Dfake-backend`) and the backend module of the target's OS,
+/// `backend_windows` (src/backend/windows.zig and windows/, with the
+/// generated bindings) or `backend_linux` (src/backend/linux.zig and
+/// linux/).
+fn serverModule(b: *std.Build, win32: *Win32, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, fake_backend: bool) *std.Build.Module {
+    // One module for both: a file belongs to one module only.
+    const options = buildOptions(b, fake_backend).createModule();
+    const core = coreModule(b, target, optimize, options);
+    const texts = textsModules(b, target, optimize, core);
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .imports = &.{
+            .{ .name = "core", .module = core },
+            .{ .name = "fake", .module = fakeModule(b, target, optimize, core, texts) },
+        },
     });
-    mod.addOptions("build_options", buildOptions(b, fake_backend));
-    if (win32) |m| mod.addImport("win32", m);
-    addJpeg(b, mod, target);
-    addPixelHash(b, mod, target);
+    mod.addImport("build_options", options);
+    if (!fake_backend) switch (target.result.os.tag) {
+        .windows => mod.addImport("backend_windows", b.createModule(.{
+            .root_source_file = b.path("src/backend/windows.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "core", .module = core },
+                .{ .name = "texts_windows", .module = texts.windows },
+                .{ .name = "win32", .module = win32.module(target, optimize) },
+            },
+        })),
+        .linux => mod.addImport("backend_linux", b.createModule(.{
+            .root_source_file = b.path("src/backend/linux.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "core", .module = core },
+                .{ .name = "texts_linux", .module = texts.linux },
+            },
+        })),
+        else => unreachable,
+    };
     return mod;
 }
 
@@ -197,8 +355,9 @@ fn addPixelHash(b: *std.Build, mod: *std.Build.Module, target: std.Build.Resolve
 fn addJpeg(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     const upstream = b.dependency("libjpeg_turbo", .{});
     const version = "3.1.4.1";
-    // The archive keeps its top-level directory.
-    const src = upstream.path("libjpeg-turbo-" ++ version ++ "/src");
+    // The fetch strips the archive's single top-level directory, so the
+    // package root is the source tree itself on every host.
+    const src = upstream.path("src");
     const jconfig = b.addConfigHeader(.{ .style = .{ .cmake = src.path(b, "jconfig.h.in") }, .include_path = "jconfig.h" }, .{
         .JPEG_LIB_VERSION = 62,
         .VERSION = version,
@@ -272,14 +431,16 @@ const jpeg_sources: []const []const u8 = &.{
     "wrapper/jutils-12.c",   "wrapper/jutils-16.c",
 };
 
-fn addServer(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, fake_backend: bool, win32: ?*std.Build.Module) *std.Build.Step.Compile {
+fn addServer(b: *std.Build, win32: *Win32, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, fake_backend: bool) *std.Build.Step.Compile {
     return b.addExecutable(.{
         .name = "neo-compute",
-        .root_module = serverModule(b, target, optimize, fake_backend, win32),
+        .root_module = serverModule(b, win32, target, optimize, fake_backend),
     });
 }
 
-fn addProbes(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, win32: *std.Build.Module) void {
+/// The US-001 probes, `probe` (generated bindings) and `probe_c` (the C
+/// witness), for a Windows target.
+fn addProbes(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, win32: *std.Build.Module) [2]*std.Build.Step.Compile {
     const probe = b.addExecutable(.{
         .name = "probe",
         .root_module = b.createModule(.{
@@ -289,11 +450,6 @@ fn addProbes(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
             .imports = &.{.{ .name = "win", .module = win32 }},
         }),
     });
-    const probe_run = b.addRunArtifact(probe);
-    probe_run.addPassthruArgs();
-    b.step("probe", "Run the US-001 COM probe").dependOn(&probe_run.step);
-    b.installArtifact(probe);
-
     const probe_c = b.addExecutable(.{
         .name = "probe_c",
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
@@ -301,10 +457,7 @@ fn addProbes(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
     probe_c.root_module.addCSourceFile(.{ .file = b.path("probe/probe_c.c"), .flags = &.{"-std=c11"} });
     for ([_][]const u8{ "ole32", "oleaut32", "user32" }) |lib|
         probe_c.root_module.linkSystemLibrary(lib, .{});
-    const probe_c_run = b.addRunArtifact(probe_c);
-    probe_c_run.addPassthruArgs();
-    b.step("probe-c", "Run the US-001 C witness probe").dependOn(&probe_c_run.step);
-    b.installArtifact(probe_c);
+    return .{ probe, probe_c };
 }
 
 /// The pinned win32metadata package, downloaded once into the build cache
@@ -321,21 +474,42 @@ fn fetchNupkg(b: *std.Build) std.Build.LazyPath {
     return out;
 }
 
-/// Generates win32.zig from bindings/windows.zon and the pinned
-/// win32metadata package. The run step is cached on its inputs.
-fn addBindings(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, nupkg: std.Build.LazyPath) struct { module: *std.Build.Module, step: *std.Build.Step, generator: *std.Build.Step.Compile } {
-    const gen = b.addExecutable(.{
-        .name = "winmdgen",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/winmdgen/main.zig"),
-            .target = b.graph.host,
-            .optimize = .ReleaseFast,
-        }),
-    });
-    const run = b.addRunArtifact(gen);
-    run.addFileArg(b.path("bindings/windows.zon"));
-    run.addFileArg(nupkg);
-    const out = run.addOutputFileArg("win32.zig");
-    const module = b.createModule(.{ .root_source_file = out, .target = target, .optimize = optimize });
-    return .{ .module = module, .step = &run.step, .generator = gen };
-}
+/// win32.zig, generated from bindings/windows.zon and the pinned
+/// win32metadata package on first use: a build that needs no Windows code
+/// downloads nothing. The run step is cached on its inputs, and each
+/// target and mode gets its own module of the one generated file.
+const Win32 = struct {
+    b: *std.Build,
+    generated: ?Generated = null,
+
+    const Generated = struct {
+        out: std.Build.LazyPath,
+        step: *std.Build.Step,
+        generator: *std.Build.Step.Compile,
+        nupkg: std.Build.LazyPath,
+    };
+
+    fn gen(self: *Win32) Generated {
+        if (self.generated) |g| return g;
+        const b = self.b;
+        const generator = b.addExecutable(.{
+            .name = "winmdgen",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/winmdgen/main.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseFast,
+            }),
+        });
+        const nupkg = fetchNupkg(b);
+        const run = b.addRunArtifact(generator);
+        run.addFileArg(b.path("bindings/windows.zon"));
+        run.addFileArg(nupkg);
+        const out = run.addOutputFileArg("win32.zig");
+        self.generated = .{ .out = out, .step = &run.step, .generator = generator, .nupkg = nupkg };
+        return self.generated.?;
+    }
+
+    fn module(self: *Win32, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
+        return self.b.createModule(.{ .root_source_file = self.gen().out, .target = target, .optimize = optimize });
+    }
+};

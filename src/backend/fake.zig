@@ -2,15 +2,15 @@
 //! every input it receives and serves synthetic displays and windows.
 
 const std = @import("std");
-const display = @import("../core/display.zig");
-const input = @import("../core/input.zig");
-const keys = @import("../core/keys.zig");
-const uitree = @import("../core/uitree.zig");
-const Control = @import("../core/control.zig").Control;
-const guard = @import("../core/guard.zig");
-const apps = @import("../core/apps.zig");
-const clipboard = @import("../core/clipboard.zig");
-const regread = @import("../core/regread.zig");
+const display = @import("core").display;
+const input = @import("core").input;
+const keys = @import("core").keys;
+const uitree = @import("core").uitree;
+const Control = @import("core").control.Control;
+const guard = @import("core").guard;
+const apps = @import("core").apps;
+const clipboard = @import("core").clipboard;
+const regread = @import("core").regread;
 
 pub const displays_fixture = [_]display.Display{
     .{ .rect = .{ .x = 0, .y = 0, .w = 2560, .h = 1440 }, .name = "FAKE-1" },
@@ -121,8 +121,16 @@ pub const reg_fixture = [_]RegKey{
 };
 
 pub const Fake = struct {
+    /// The core's tests speak Windows: the texts of the Windows server.
+    pub const texts = @import("texts_windows");
+    /// The Linux texts, for their compile-time and content checks.
+    pub const linux_texts = @import("texts_linux");
+
     /// Inputs currently held (keys or buttons), as a count.
     held: u32 = 0,
+    /// Each key event and release on stderr: set by the `-Dfake-backend`
+    /// server of the process tests (US-072), never in-process.
+    trace: bool = false,
     release_calls: u32 = 0,
 
     displays_len: usize = displays_fixture.len,
@@ -418,6 +426,7 @@ pub const Fake = struct {
     reg_reads: u32 = 0,
 
     pub fn releaseAllInputs(self: *Fake) void {
+        if (self.trace) std.debug.print("fake: release all ({d} held)\n", .{self.held});
         self.held = 0;
         self.release_calls += 1;
     }
@@ -551,6 +560,7 @@ pub const Fake = struct {
             .press => self.held += 1,
             .release => self.held -|= 1,
         }
+        if (self.trace) std.debug.print("fake: key {t}\n", .{action});
         if (action == .press and self.trip_on_press) if (self.control) |c| {
             self.trip_on_press = false;
             _ = c.trip();

@@ -4,8 +4,8 @@
 
 const std = @import("std");
 const w = @import("win32");
-const core_input = @import("../../core/input.zig");
-const keys = @import("../../core/keys.zig");
+const core_input = @import("core").input;
+const keys = @import("core").keys;
 const InputError = core_input.InputError;
 
 /// SendInput calls made by this process: the background selftest proves

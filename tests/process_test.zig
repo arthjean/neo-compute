@@ -2,6 +2,7 @@
 //! process creation to the `initialize` response, and exit after stdin EOF.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const options = @import("test_options");
 
@@ -70,8 +71,10 @@ test "initialize is answered within 50 ms of process creation, and EOF exits wit
 
 // ---------------------------------------------------------------- EP-004 on the shipped binary
 
-/// A server process whose LOCALAPPDATA and APPDATA point at a test
-/// directory, so its audit log and default policy stay out of the profile.
+/// A server process whose policy, audit and lock folders point at a test
+/// directory (APPDATA and LOCALAPPDATA on Windows; XDG_CONFIG_HOME,
+/// XDG_STATE_HOME and XDG_RUNTIME_DIR on Linux), so they stay out of the
+/// profile and away from a server of the real session.
 const Server = struct {
     child: std.process.Child = undefined,
     wbuf: [4096]u8 = undefined,
@@ -105,6 +108,10 @@ fn testEnv(gpa: std.mem.Allocator, home: []const u8) !std.process.Environ.Map {
     var env = try std.process.Environ.createMap(testing.environ, gpa);
     try env.put("LOCALAPPDATA", home);
     try env.put("APPDATA", home);
+    try env.put("XDG_CONFIG_HOME", home);
+    try env.put("XDG_STATE_HOME", home);
+    try env.put("XDG_RUNTIME_DIR", home);
+    try env.put("WAYLAND_DISPLAY", "wayland-nc-test");
     return env;
 }
 
@@ -159,145 +166,287 @@ test "an invalid --policy file is named with its line in the instructions" {
     try testing.expect(std.mem.indexOf(u8, init, "limited to observe") != null);
 }
 
-const Imports = struct {
-    dlls: []const []const u8,
-    /// Functions imported by name, of every DLL.
-    functions: []const []const u8,
+// ---------------------------------------------------------------- US-069 on the Linux server
 
-    fn deinit(self: Imports, gpa: std.mem.Allocator) void {
-        gpa.free(self.dlls);
-        gpa.free(self.functions);
-    }
-};
-
-/// Names of the DLLs a PE32+ image imports, directly or delay-loaded.
-fn importedDlls(gpa: std.mem.Allocator, image: []const u8) ![]const []const u8 {
-    const imports = try importsOf(gpa, image);
-    gpa.free(imports.functions);
-    return imports.dlls;
+fn call(comptime id: u32, comptime tool: []const u8, comptime args: []const u8) []const u8 {
+    return std.fmt.comptimePrint("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\",\"arguments\":{s}}}}}\n", .{ id, tool, args });
 }
 
-/// The DLLs and the functions a PE32+ image imports, directly or
-/// delay-loaded; functions imported by ordinal have no name and are left
-/// out.
-fn importsOf(gpa: std.mem.Allocator, image: []const u8) !Imports {
-    if (image.len < 0x40 or !std.mem.eql(u8, image[0..2], "MZ")) return error.NotPe;
-    const pe = std.mem.readInt(u32, image[0x3c..][0..4], .little);
-    if (!std.mem.eql(u8, image[pe..][0..4], "PE\x00\x00")) return error.NotPe;
-    const coff = pe + 4;
-    const sections = std.mem.readInt(u16, image[coff + 2 ..][0..2], .little);
-    const opt_size = std.mem.readInt(u16, image[coff + 16 ..][0..2], .little);
-    const opt = coff + 20;
-    if (std.mem.readInt(u16, image[opt..][0..2], .little) != 0x20b) return error.NotPe32Plus;
-    const dirs = opt + 112;
-    const Sections = struct {
-        image: []const u8,
-        table: usize,
-        count: u16,
-        fn offset(self: @This(), rva: u32) ?usize {
-            for (0..self.count) |i| {
-                const s = self.table + i * 40;
-                const va = std.mem.readInt(u32, self.image[s + 12 ..][0..4], .little);
-                const size = std.mem.readInt(u32, self.image[s + 16 ..][0..4], .little);
-                const raw = std.mem.readInt(u32, self.image[s + 20 ..][0..4], .little);
-                if (rva >= va and rva < va + size) return raw + (rva - va);
-            }
-            return null;
-        }
-    };
-    const map: Sections = .{ .image = image, .table = opt + opt_size, .count = sections };
-    var names: std.ArrayList([]const u8) = .empty;
-    errdefer names.deinit(gpa);
-    var functions: std.ArrayList([]const u8) = .empty;
-    errdefer functions.deinit(gpa);
-    // Data directory 1: import table (20-byte descriptors, name at +12,
-    // name table at +0, address table at +16 when the name table is 0).
-    // Data directory 13: delay import table (32-byte descriptors, name at
-    // +4, name table at +16).
-    for ([_][5]u32{ .{ 1, 20, 12, 0, 16 }, .{ 13, 32, 4, 16, 16 } }) |d| {
-        const rva = std.mem.readInt(u32, image[dirs + d[0] * 8 ..][0..4], .little);
-        if (rva == 0) continue;
-        var at = map.offset(rva) orelse return error.BadImportTable;
-        while (true) : (at += d[1]) {
-            const name_rva = std.mem.readInt(u32, image[at + d[2] ..][0..4], .little);
-            if (name_rva == 0) break;
-            const off = map.offset(name_rva) orelse return error.BadImportTable;
-            try names.append(gpa, std.mem.sliceTo(image[off..], 0));
-            var table = std.mem.readInt(u32, image[at + d[3] ..][0..4], .little);
-            if (table == 0) table = std.mem.readInt(u32, image[at + d[4] ..][0..4], .little);
-            if (table == 0) continue;
-            // 8-byte entries; the high bit marks an ordinal, otherwise the
-            // RVA of a 2-byte hint and the name.
-            var entry = map.offset(table) orelse return error.BadImportTable;
-            while (true) : (entry += 8) {
-                const v = std.mem.readInt(u64, image[entry..][0..8], .little);
-                if (v == 0) break;
-                if (v & (1 << 63) != 0) continue;
-                const hint = map.offset(@truncate(v)) orelse return error.BadImportTable;
-                try functions.append(gpa, std.mem.sliceTo(image[hint + 2 ..], 0));
-            }
-        }
-    }
-    const dlls = try names.toOwnedSlice(gpa);
-    errdefer gpa.free(dlls);
-    return .{ .dlls = dlls, .functions = try functions.toOwnedSlice(gpa) };
-}
-
-/// Prefixes of every function that writes to the registry (advapi32's
-/// `Reg*` and their kernelbase forwards, shlwapi's `SH*` helpers, ntdll's
-/// key calls), in their A and W forms (US-036).
-const registry_writes = [_][]const u8{
-    "RegSetValue",   "RegSetKeyValue", "RegCreateKey",      "RegDeleteKey",        "RegDeleteValue",       "RegDeleteTree",
-    "RegCopyTree",   "RegRenameKey",   "RegRestoreKey",     "RegLoadKey",          "RegLoadAppKey",        "RegUnLoadKey",
-    "RegReplaceKey", "RegSaveKey",     "RegSetKeySecurity", "RegFlushKey",         "RegOverridePredefKey", "SHSetValue",
-    "SHDeleteKey",   "SHDeleteValue",  "SHDeleteEmptyKey",  "SHRegSet",            "SHRegWrite",           "SHRegCreate",
-    "SHRegDelete",   "SHCopyKey",      "NtSetValueKey",     "ZwSetValueKey",       "NtCreateKey",          "ZwCreateKey",
-    "NtDeleteKey",   "ZwDeleteKey",    "NtDeleteValueKey",  "ZwDeleteValueKey",    "NtRenameKey",          "NtSaveKey",
-    "NtRestoreKey",  "NtLoadKey",      "NtReplaceKey",      "NtSetInformationKey",
-};
-
-test "the shipped binary imports no registry write function, and the read ones registry_read uses" {
+test "the Linux server lists the 17 toolset tools and refuses what it cannot do yet, then keeps answering" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const io = testing.io;
-    const image = try std.Io.Dir.cwd().readFileAlloc(io, options.server_exe, testing.allocator, .limited(64 << 20));
-    defer testing.allocator.free(image);
-    const imports = try importsOf(testing.allocator, image);
-    defer imports.deinit(testing.allocator);
-    var reads: usize = 0;
-    for (imports.functions) |f| {
-        for (registry_writes) |p| if (std.mem.startsWith(u8, f, p)) {
-            std.debug.print("{s} imports {s}\n", .{ options.server_exe, f });
-            return error.RegistryWriteImport;
-        };
-        if (std.mem.startsWith(u8, f, "Reg")) reads += 1;
-    }
-    // The parser reads the real name tables: registry_read's own calls are
-    // there.
-    for ([_][]const u8{ "RegOpenKeyExW", "RegQueryValueExW", "RegEnumValueW", "RegEnumKeyExW", "RegQueryInfoKeyW", "RegCloseKey" }) |want| {
-        for (imports.functions) |f| {
-            if (std.mem.eql(u8, f, want)) break;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    var s: Server = .{};
+    try s.start(io, &env, &.{});
+    defer s.stop(io);
+    _ = try s.send(init_line);
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const listed = try std.json.parseFromSliceLeaky(std.json.Value, a, try s.send("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n"), .{ .allocate = .alloc_always });
+    const fixture = try std.json.parseFromSliceLeaky(std.json.Value, a, @embedFile("toolset_fixture"), .{});
+    for (fixture.object.get("tools").?.array.items) |want| {
+        const name = want.object.get("name").?.string;
+        for (listed.object.get("result").?.object.get("tools").?.array.items) |t| {
+            if (std.mem.eql(u8, t.object.get("name").?.string, name)) break;
         } else {
-            std.debug.print("{s} does not import {s}\n", .{ options.server_exe, want });
-            return error.MissingImport;
+            std.debug.print("tools/list lacks {s}\n", .{name});
+            return error.MissingTool;
         }
     }
-    std.debug.print("process: {d} imported functions, {d} registry reads, no registry write\n", .{ imports.functions.len, reads });
+
+    const shot = try s.send(call(3, "screenshot", "{}"));
+    try testing.expect(std.mem.indexOf(u8, shot, "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, shot, "Linux : screenshot n'est pas encore disponible dans ce build. Aucune action exécutée.") != null);
+    const click = try s.send(call(4, "left_click", "{\"coordinate\":[5,5]}"));
+    try testing.expect(std.mem.indexOf(u8, click, "Linux : left_click n'est pas encore disponible dans ce build. Aucune action exécutée.") != null);
+    const pong = try s.send("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"ping\"}\n");
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{}}", pong);
 }
 
-test "the shipped binary imports no network DLL (ws2_32, winhttp, wininet)" {
+test "the Linux server speaks Linux in every mode and does not know registry_read" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const io = testing.io;
-    const image = try std.Io.Dir.cwd().readFileAlloc(io, options.server_exe, testing.allocator, .limited(64 << 20));
-    defer testing.allocator.free(image);
-    const dlls = try importedDlls(testing.allocator, image);
-    defer testing.allocator.free(dlls);
-    var has_kernel32 = false;
-    for (dlls) |dll| {
-        has_kernel32 = has_kernel32 or std.ascii.eqlIgnoreCase(dll, "kernel32.dll");
-        for ([_][]const u8{ "ws2_32.dll", "winhttp.dll", "wininet.dll" }) |net| if (std.ascii.eqlIgnoreCase(dll, net)) {
-            std.debug.print("{s} imports {s}\n", .{ options.server_exe, dll });
-            return error.NetworkImport;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    for ([_][]const u8{ "a11y", "vision", "background" }) |mode| {
+        var s: Server = .{};
+        try s.start(io, &env, &.{ "--mode", mode });
+        defer s.stop(io);
+        // Each reply lives in the reader's buffer until the next one.
+        const init = try testing.allocator.dupe(u8, try s.send(init_line));
+        defer testing.allocator.free(init);
+        const list = try s.send("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
+        try testing.expect(std.mem.indexOf(u8, init, "neo-compute ") != null);
+        for ([_][]const u8{ "Windows", "Start menu", "AUMID", "HKCU", "registry" }) |word| for ([_][]const u8{ init, list }) |text| {
+            if (std.mem.indexOf(u8, text, word) != null) {
+                std.debug.print("--mode {s} names `{s}`\n", .{ mode, word });
+                return error.WindowsWord;
+            }
         };
+        const unknown = try s.send(call(3, "registry_read", "{\"path\":\"HKCU\\\\Software\"}"));
+        try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: registry_read\"}}", unknown);
     }
-    // The parser reads the real table: kernel32 is always there.
-    try testing.expect(has_kernel32);
-    std.debug.print("process: {d} imported DLLs, none of them a network library\n", .{dlls.len});
+}
+
+test "the Linux server answers an unknown window handle with the closed-window message" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    var s: Server = .{};
+    try s.start(io, &env, &.{});
+    defer s.stop(io);
+    _ = try s.send(init_line);
+    const closed = "{\"type\":\"text\",\"text\":\"Fenêtre fermée : rappelle window_list\"}],\"isError\":true}}";
+    const focus = try s.send(call(3, "window_focus", "{\"window\":\"0x1a2b\"}"));
+    try testing.expect(std.mem.endsWith(u8, focus, closed));
+    const set = try s.send(call(4, "window_set", "{\"window\":\"0x1a2b\",\"state\":\"minimized\"}"));
+    try testing.expect(std.mem.endsWith(u8, set, closed));
+}
+
+// ---------------------------------------------------------------- US-070 on the Linux server
+
+test "the Linux server reads its policy and writes its audit at the XDG places, the folder in mode 0700" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    // An invalid default policy: global observe, as on Windows, named in
+    // the instructions; the refused action is in the audit log.
+    try tmp.dir.createDirPath(io, "cfg/neo-compute");
+    try tmp.dir.writeFile(io, .{ .sub_path = "cfg/neo-compute/policy.json", .data = "{\n  \"default\": \"full\",\n  \"apps\": { \"keepassxc\": \"wirte\" }\n}\n" });
+    const cfg = try std.fs.path.join(testing.allocator, &.{ home, "cfg" });
+    defer testing.allocator.free(cfg);
+    const state = try std.fs.path.join(testing.allocator, &.{ home, "state" });
+    defer testing.allocator.free(state);
+    try env.put("XDG_CONFIG_HOME", cfg);
+    try env.put("XDG_STATE_HOME", state);
+    {
+        var s: Server = .{};
+        try s.start(io, &env, &.{});
+        defer s.stop(io);
+        const init = try s.send(init_line);
+        try testing.expect(std.mem.indexOf(u8, init, "is invalid at line 3") != null);
+        try testing.expect(std.mem.indexOf(u8, init, "limited to observe") != null);
+        const launch = try s.send(call(3, "app_launch", "{\"name\":\"calculator\"}"));
+        try testing.expect(std.mem.indexOf(u8, launch, "Politique : app_launch est désactivé (system.app_launch dans policy.json)") != null);
+    }
+    var buf: [4096]u8 = undefined;
+    const log = try tmp.dir.readFile(io, "state/neo-compute/audit.jsonl", &buf);
+    try testing.expect(std.mem.indexOf(u8, log, "\"tool\":\"app_launch\"") != null);
+    try testing.expect(std.mem.indexOf(u8, log, "\"result\":\"denied\"") != null);
+    const st = try tmp.dir.statFile(io, "state/neo-compute", .{});
+    try testing.expectEqual(@as(u32, 0o700), @as(u32, @intCast(st.permissions.toMode() & 0o777)));
+}
+
+test "without XDG_CONFIG_HOME and XDG_STATE_HOME the Linux server uses ~/.config and ~/.local/state" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    _ = env.swapRemove("XDG_CONFIG_HOME");
+    try env.put("XDG_STATE_HOME", "");
+    try env.put("HOME", home);
+    // A valid policy that turns app_launch off: it was read.
+    try tmp.dir.createDirPath(io, ".config/neo-compute");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".config/neo-compute/policy.json", .data = "{\"system\": {\"app_launch\": \"deny\"}}\n" });
+    {
+        var s: Server = .{};
+        try s.start(io, &env, &.{});
+        defer s.stop(io);
+        const init = try s.send(init_line);
+        try testing.expect(std.mem.indexOf(u8, init, "invalid") == null);
+        const launch = try s.send(call(3, "app_launch", "{\"name\":\"calculator\"}"));
+        try testing.expect(std.mem.indexOf(u8, launch, "Politique : app_launch est désactivé") != null);
+    }
+    var buf: [4096]u8 = undefined;
+    const log = try tmp.dir.readFile(io, ".local/state/neo-compute/audit.jsonl", &buf);
+    try testing.expect(std.mem.indexOf(u8, log, "\"tool\":\"app_launch\"") != null);
+}
+
+// ---------------------------------------------------------------- US-072 on Linux
+
+/// Reads lines of `r` until one contains `needle`.
+fn waitLine(r: *std.Io.Reader, needle: []const u8) !void {
+    while (try r.takeDelimiter('\n')) |line| {
+        if (std.mem.indexOf(u8, line, needle) != null) return;
+    }
+    return error.EndOfStream;
+}
+
+test "SIGINT, SIGTERM and SIGHUP release a held key within 50 ms and exit with code 0" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    for ([_]std.posix.SIG{ .INT, .TERM, .HUP }) |sig| {
+        var child = try std.process.spawn(io, .{ .argv = &.{options.fake_server_exe}, .stdin = .pipe, .stdout = .pipe, .stderr = .pipe });
+        errdefer child.kill(io);
+        var wbuf: [512]u8 = undefined;
+        var w = child.stdin.?.writerStreaming(io, &wbuf);
+        var rbuf: [16 * 1024]u8 = undefined;
+        var r = child.stdout.?.readerStreaming(io, &rbuf);
+        var ebuf: [4096]u8 = undefined;
+        var e = child.stderr.?.readerStreaming(io, &ebuf);
+        try w.interface.writeAll(init_line);
+        try w.interface.flush();
+        _ = (try r.interface.takeDelimiter('\n')) orelse return error.NoResponse;
+        // The tool holds shift for 30 s: no answer comes before the signal.
+        try w.interface.writeAll(call(2, "hold_key", "{\"text\":\"shift\",\"duration\":30}"));
+        try w.interface.flush();
+        try waitLine(&e.interface, "fake: key press");
+        const t0 = nowNs(io);
+        try std.posix.kill(child.id.?, sig);
+        try waitLine(&e.interface, "fake: key release");
+        const released = nowNs(io) - t0;
+        try waitLine(&e.interface, "held inputs released, exiting");
+        const term = try child.wait(io);
+        std.debug.print("process: {t}: key released {d} us after the signal\n", .{ sig, @divTrunc(released, 1000) });
+        try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
+        try testing.expect(released < 50 * std.time.ns_per_ms);
+    }
+}
+
+test "a stop signal writes the audit line of the running tool" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    var s: Server = .{};
+    try s.start(io, &env, &.{});
+    _ = try s.send(init_line);
+    try s.w.interface.writeAll(call(2, "wait", "{\"duration\":30}"));
+    try s.w.interface.flush();
+    // The wait is running once the dispatcher took it.
+    try std.Io.sleep(io, .fromMilliseconds(100), .awake);
+    try std.posix.kill(s.child.id.?, .TERM);
+    const term = try s.child.wait(io);
+    try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
+    var buf: [4096]u8 = undefined;
+    const log = try tmp.dir.readFile(io, "neo-compute/audit.jsonl", &buf);
+    try testing.expect(std.mem.indexOf(u8, log, "\"tool\":\"wait\"") != null);
+    try testing.expect(std.mem.indexOf(u8, log, "\"result\":\"cancelled\"") != null);
+}
+
+const left_up_linux = "Linux : left_mouse_up n'est pas encore disponible dans ce build. Aucune action exécutée.";
+
+test "the Linux lock is per display, and a killed server leaves it to the next one" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+
+    var first: Server = .{};
+    try first.start(io, &env, &.{});
+    _ = try first.send(init_line);
+    // Another display: not blocked (its action reaches the backend).
+    var other_env = try testEnv(testing.allocator, home);
+    defer other_env.deinit();
+    try other_env.put("WAYLAND_DISPLAY", "wayland-nc-other");
+    {
+        var other: Server = .{};
+        try other.start(io, &other_env, &.{});
+        defer other.stop(io);
+        _ = try other.send(init_line);
+        try testing.expect(std.mem.indexOf(u8, try other.send(left_up), left_up_linux) != null);
+    }
+    // The same display after SIGKILL of the first: the lock is free again.
+    first.child.kill(io);
+    var next: Server = .{};
+    try next.start(io, &env, &.{});
+    defer next.stop(io);
+    _ = try next.send(init_line);
+    const answer = try next.send(left_up);
+    try testing.expect(std.mem.indexOf(u8, answer, "Une autre session neo-compute") == null);
+    try testing.expect(std.mem.indexOf(u8, answer, left_up_linux) != null);
+}
+
+test "without XDG_RUNTIME_DIR the Linux server refuses every action and says why" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [1024]u8 = undefined;
+    const home = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    var env = try testEnv(testing.allocator, home);
+    defer env.deinit();
+    _ = env.swapRemove("XDG_RUNTIME_DIR");
+    var s: Server = .{};
+    try s.start(io, &env, &.{});
+    defer s.stop(io);
+    _ = try s.send(init_line);
+    for ([_][]const u8{ left_up, call(3, "key", "{\"text\":\"Return\"}"), call(4, "app_launch", "{\"name\":\"calculator\"}") }) |line| {
+        const answer = try s.send(line);
+        try testing.expect(std.mem.indexOf(u8, answer, "XDG_RUNTIME_DIR absent : impossible de garantir une seule instance. Lance neo-compute depuis une session graphique.") != null);
+        try testing.expect(std.mem.indexOf(u8, answer, "\"isError\":true") != null);
+    }
 }

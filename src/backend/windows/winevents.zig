@@ -22,7 +22,7 @@ const w = @import("win32");
 const indicator = @import("indicator.zig");
 const window = @import("window.zig");
 const hooks = @import("hooks.zig");
-const guard = @import("../../core/guard.zig");
+const guard = @import("core").guard;
 
 const msg_watch = w.WM_APP + 1;
 /// Period of the timer that waits for a foreground change to take effect,

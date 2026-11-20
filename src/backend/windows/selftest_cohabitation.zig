@@ -24,10 +24,10 @@ const Violation = fixture.Violation;
 const hooks = @import("hooks.zig");
 const input = @import("input.zig");
 const Windows = @import("../windows.zig").Windows;
-const control = @import("../../core/control.zig");
-const core_indicator = @import("../../core/indicator.zig");
-const a11y = @import("../../core/a11y.zig");
-const display = @import("../../core/display.zig");
+const control = @import("core").control;
+const core_indicator = @import("core").indicator;
+const a11y = @import("core").a11y;
+const display = @import("core").display;
 
 const qpcUs = selftest.qpcUs;
 

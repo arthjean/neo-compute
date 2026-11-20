@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const w = @import("win32");
-const regread = @import("../../core/regread.zig");
+const regread = @import("core").regread;
 
 fn rootKey(r: regread.Root) w.HKEY {
     return switch (r) {

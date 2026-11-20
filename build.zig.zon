@@ -8,7 +8,7 @@
         // build.zig without SIMD (no NASM).
         .libjpeg_turbo = .{
             .url = "https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.1.4.1.tar.gz",
-            .hash = "N-V-__8AAGEjlwAuFcV7FYX4l2qoSol64Bg7hBxuAUzmAu_6",
+            .hash = "N-V-__8AAGEjlwDyirWNxFwRIKPfk-1_fvF02GlhH9fhhz0J",
         },
     },
     .paths = .{

@@ -4,18 +4,28 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const mcp = @import("core/mcp.zig");
-const tools = @import("core/tools.zig");
-const bench = @import("core/bench.zig");
-const display = @import("core/display.zig");
-const policy = @import("core/policy.zig");
-const audit = @import("core/audit.zig");
-const keys = @import("core/keys.zig");
+const mcp = @import("core").mcp;
+const tools = @import("core").tools;
+const bench = @import("core").bench;
+const display = @import("core").display;
+const policy = @import("core").policy;
+const audit = @import("core").audit;
+const keys = @import("core").keys;
+const stop_signals = if (builtin.os.tag == .linux) @import("stop_signals.zig") else struct {
+    pub fn name() []const u8 {
+        return "";
+    }
+};
 
-pub const Backend = if (builtin.os.tag == .windows and !build_options.fake_backend)
-    @import("backend/windows.zig").Windows
-else
-    @import("backend/fake.zig").Fake;
+/// The platform backend, one module per OS (build.zig); `-Dfake-backend`
+/// builds the server on the fake backend of the tests.
+pub const Backend = if (build_options.fake_backend)
+    @import("fake").Fake
+else switch (builtin.os.tag) {
+    .windows => @import("backend_windows").Windows,
+    .linux => @import("backend_linux").Linux,
+    else => @compileError("no backend for " ++ @tagName(builtin.os.tag)),
+};
 
 pub const Server = mcp.Server(Backend, tools.all);
 
@@ -171,27 +181,41 @@ fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, re
     const env = init.environ_map;
     var options = base;
 
-    // US-017: %APPDATA%\neo-compute\policy.json unless --policy names a file.
-    const path = policy_path orelse if (env.get("APPDATA")) |d| try std.fs.path.join(arena, &.{ d, "neo-compute", "policy.json" }) else null;
-    const pol: policy.Policy = if (path) |p| policy.load(arena, init.io, p, policy_path != null) else policy.defaults;
+    // Where this OS keeps the policy file and the audit log (US-017,
+    // US-019, US-070): the backend reads its own environment.
+    const places: audit.Places = if (@hasDecl(Backend, "places")) try Backend.places(arena, init.io, env) else .{};
+
+    // US-017: the backend's policy file unless --policy names one, over
+    // the built-in rules of the OS.
+    const path = policy_path orelse places.policy;
+    var pol: policy.Policy = if (path) |p| policy.load(arena, init.io, p, policy_path != null) else policy.defaults;
+    if (@hasDecl(Backend, "policy_rules")) pol.builtin = Backend.policy_rules;
     if (pol.problem) |why| std.debug.print("neo-compute: {s}: every application is limited to observe\n", .{why});
     options.policy = &pol;
     options.rearm = rearm;
 
-    // US-019: %LOCALAPPDATA%\neo-compute\audit.jsonl.
+    // US-019: audit.jsonl in the backend's state folder.
     var log: ?audit.Audit = null;
-    if (env.get("LOCALAPPDATA")) |d| {
-        log = audit.Audit.open(init.io, try std.fs.path.join(arena, &.{ d, "neo-compute" })) catch |err| blk: {
+    if (places.audit) |d| {
+        log = audit.Audit.open(init.io, d) catch |err| blk: {
             std.debug.print("neo-compute: audit log unavailable ({t}): tool calls are not recorded\n", .{err});
             break :blk null;
         };
-    } else std.debug.print("neo-compute: LOCALAPPDATA is not set: tool calls are not recorded\n", .{});
+    } else std.debug.print("neo-compute: {s}\n", .{places.audit_unset});
     defer if (log) |*l| l.deinit();
     if (log) |*l| options.audit = l;
 
     // FR-14: one instance controls the desktop; a second one observes.
-    options.exclusive = if (@hasDecl(Backend, "acquireInstance")) Backend.acquireInstance() else true;
-    if (!options.exclusive) std.debug.print("neo-compute: another neo-compute controls this desktop: this instance refuses actions\n", .{});
+    const instance = acquireInstance(env);
+    options.exclusive = instance == .exclusive;
+    switch (instance) {
+        .exclusive => {},
+        .second => std.debug.print("neo-compute: another neo-compute controls this desktop: this instance refuses actions\n", .{}),
+        .refused => |why| {
+            options.instance_refusal = why;
+            std.debug.print("neo-compute: {s}\n", .{why});
+        },
+    }
 
     // Longest accepted line; longer lines are answered with -32700.
     const in_buf = try init.gpa.alloc(u8, 1024 * 1024);
@@ -200,7 +224,9 @@ fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, re
     var stdin = std.Io.File.stdin().readerStreaming(init.io, in_buf);
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &out_buf);
 
-    var backend: Backend = if (@hasDecl(Backend, "init")) .init(init.gpa) else .{};
+    var backend: Backend = initBackend(init.gpa, init.io);
+    // The server of the process tests logs the fake's inputs on stderr.
+    if (build_options.fake_backend) backend.trace = true;
     defer if (@hasDecl(Backend, "deinit")) backend.deinit();
     var server: Server = .init(init.gpa, init.io, &backend, options);
     defer server.deinit();
@@ -210,8 +236,31 @@ fn serve(init: std.process.Init, base: mcp.Options, policy_path: ?[]const u8, re
     defer if (@hasDecl(Backend, "stopIndicator")) backend.stopIndicator();
     if (options.exclusive and @hasDecl(Backend, "startKillSwitch")) backend.startKillSwitch(&server.control, rearm);
     defer if (@hasDecl(Backend, "stopKillSwitch")) backend.stopKillSwitch();
-    try server.serve(&stdin.interface, &stdout.interface);
+    // US-072: under Linux, SIGINT, SIGTERM and SIGHUP stop the server the
+    // way the end of stdin does.
+    var stop_buf: [16]u8 = undefined;
+    var stop_reader: ?std.Io.File.Reader = if (builtin.os.tag == .linux)
+        if (stop_signals.install()) |f| f.readerStreaming(init.io, &stop_buf) else null
+    else
+        null;
+    try server.serveUntil(&stdin.interface, &stdout.interface, if (stop_reader) |*r| &r.interface else null);
+    if (server.stopped.load(.acquire)) std.debug.print("neo-compute: {s}: held inputs released, exiting\n", .{stop_signals.name()});
     return 0;
+}
+
+/// The single-instance rule of the backend (FR-14): Windows answers with a
+/// bool, Linux reads its environment and may refuse (US-072).
+fn acquireInstance(env: *const std.process.Environ.Map) mcp.Instance {
+    if (!@hasDecl(Backend, "acquireInstance")) return .exclusive;
+    if (@typeInfo(@TypeOf(Backend.acquireInstance)).@"fn".param_types.len == 1) return Backend.acquireInstance(env);
+    return if (Backend.acquireInstance()) .exclusive else .second;
+}
+
+/// A backend that reads files takes the process's `Io` (Linux, US-070).
+fn initBackend(gpa: std.mem.Allocator, io: std.Io) Backend {
+    if (!@hasDecl(Backend, "init")) return .{};
+    if (@typeInfo(@TypeOf(Backend.init)).@"fn".param_types.len == 2) return .init(gpa, io);
+    return .init(gpa);
 }
 
 fn benchCommand(init: std.process.Init, args: []const [:0]const u8) !u8 {
@@ -250,7 +299,19 @@ fn benchCommand(init: std.process.Init, args: []const [:0]const u8) !u8 {
         }
     }
 
-    const results = bench.run(Backend, arena, init.io, which, iterations) catch |err| switch (err) {
+    // A baseline of another OS holds nothing of this host (US-073): refused
+    // before any scenario runs.
+    const cwd = std.Io.Dir.cwd();
+    const baseline: ?[]const u8 = if (check_path) |path| cwd.readFileAlloc(init.io, path, arena, .limited(1 << 20)) catch |err| {
+        std.debug.print("neo-compute bench: cannot read {s}: {t}\n", .{ path, err });
+        return 2;
+    } else null;
+    if (baseline) |json| if (try bench.osMismatch(arena, json, @tagName(builtin.os.tag))) |why| {
+        std.debug.print("neo-compute bench: {s}\n", .{why});
+        return 1;
+    };
+
+    const results = bench.run(Backend, @import("fake").Fake, arena, init.io, which, iterations) catch |err| switch (err) {
         error.UnknownScenario => {
             std.debug.print("neo-compute bench: unknown scenario `{s}`\n{s}", .{ which, usage });
             return 2;
@@ -263,25 +324,20 @@ fn benchCommand(init: std.process.Init, args: []const [:0]const u8) !u8 {
     try bench.writeReport(results, &stdout.interface);
     try stdout.interface.flush();
 
-    const cwd = std.Io.Dir.cwd();
     if (baseline_out) |path| {
         // The references and the noise limits come from several runs (see
         // writeBaseline).
         var passes: [bench.baseline_runs][]const bench.Result = undefined;
         passes[0] = results;
-        for (passes[1..]) |*p| p.* = try bench.run(Backend, arena, init.io, which, iterations);
+        for (passes[1..]) |*p| p.* = try bench.run(Backend, @import("fake").Fake, arena, init.io, which, iterations);
         var buf: std.Io.Writer.Allocating = .init(arena);
-        try bench.writeBaseline(&passes, &buf.writer);
+        try bench.writeBaseline(&passes, @tagName(builtin.os.tag), &buf.writer);
         try cwd.writeFile(init.io, .{ .sub_path = path, .data = buf.written() });
     }
     if (check_path) |path| {
-        const baseline = cwd.readFileAlloc(init.io, path, arena, .limited(1 << 20)) catch |err| {
-            std.debug.print("neo-compute bench: cannot read {s}: {t}\n", .{ path, err });
-            return 2;
-        };
         var err_buf: [4096]u8 = undefined;
         var stderr = std.Io.File.stderr().writerStreaming(init.io, &err_buf);
-        const violations = try bench.check(arena, baseline, results, &stderr.interface);
+        const violations = try bench.check(arena, baseline.?, results, &stderr.interface);
         if (violations > 0)
             try stderr.interface.print("bench: {d} regression(s) against {s}\n", .{ violations, path })
         else
@@ -314,36 +370,4 @@ fn selftestCommand(init: std.process.Init, background: bool) !u8 {
     }
     try stderr.interface.print("selftest: all subtests passed\n", .{});
     return 0;
-}
-
-test {
-    _ = @import("core/mcp_test.zig");
-    _ = @import("core/registry_test.zig");
-    _ = @import("core/bench_test.zig");
-    _ = @import("core/tokens.zig");
-    _ = @import("core/display.zig");
-    _ = @import("core/image.zig");
-    _ = @import("core/marks.zig");
-    _ = @import("core/jpeg.zig");
-    _ = @import("core/keys.zig");
-    _ = @import("core/tools_test.zig");
-    _ = @import("core/uitree.zig");
-    _ = @import("core/a11y_test.zig");
-    _ = @import("core/perception_test.zig");
-    _ = @import("core/lag_test.zig");
-    _ = @import("core/act_test.zig");
-    _ = @import("core/policy.zig");
-    _ = @import("core/control.zig");
-    _ = @import("core/guard.zig");
-    _ = @import("core/indicator.zig");
-    _ = @import("core/audit.zig");
-    _ = @import("core/security_test.zig");
-    _ = @import("core/apps.zig");
-    _ = @import("core/launch.zig");
-    _ = @import("core/windows_test.zig");
-    _ = @import("core/clipboard.zig");
-    _ = @import("core/regread.zig");
-    _ = @import("core/system_test.zig");
-    _ = @import("core/background_test.zig");
-    _ = @import("core/capture_test.zig");
 }
