@@ -106,6 +106,12 @@ $bgTasks = @($bgRuns | Select-Object -ExpandProperty task -Unique).Count
 $exFull = $exTasks -ge 20 -and $reps -ge 3
 $paFull = $paTasks -ge 8 -and $reps -ge 3
 $bgFull = $bgTasks -ge 8 -and $reps -ge 3
+# The tasks of a set that hold three kept runs in one mode: a campaign is
+# complete for Q10 only when each mode it compares covers its suite, not when
+# one mode reached three repetitions and another stopped at one.
+function Covered($Set, [string]$Mode) {
+    @($Set | Where-Object { $_.mode -eq $Mode } | Group-Object task | Where-Object { $_.Count -ge 3 }).Count
+}
 $scope = @(
     "tâches existantes : $exTasks$(if (-not $exFull -and $exTasks) { ' (pilote)' })"
     "tâches de parité : $paTasks$(if (-not $paFull -and $paTasks) { ' (pilote)' })"
@@ -319,7 +325,7 @@ if ($bgRuns) {
     $lines.Add('')
     $lines.Add('## Q10 : l''arrière-plan devient-il le mode par défaut ?')
     $lines.Add('')
-    $complete = $bgFull -and $exFull -and $own -and $ref -and $a11y
+    $complete = (Covered $bgRuns 'background') -ge 8 -and (Covered $bgRuns 'agent-desktop') -ge 8 -and (Covered $existing 'a11y') -ge 20
     $blockers = [System.Collections.Generic.List[string]]::new()
     if (-not $own) { $blockers.Add('aucune exécution en mode background') } else {
         if ($own.violations -gt 0) { $blockers.Add("$($own.violations) exécution(s) avec violation de non-interférence en mode background") }
