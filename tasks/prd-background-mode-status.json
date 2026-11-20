@@ -57,10 +57,10 @@
     {
       "id": "EP-018",
       "title": "Vérité des verdicts sur Chromium recouvert",
-      "status": "IN_REVIEW",
+      "status": "DONE",
       "priority": "P1",
       "stories_total": 2,
-      "stories_done": 0
+      "stories_done": 1
     },
     {
       "id": "EP-016",
@@ -376,13 +376,13 @@
       "id": "US-066",
       "title": "Verdicts vrais sur Chromium recouvert",
       "epic": "EP-018",
-      "status": "IN_REVIEW",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-055", "US-059", "US-065"],
       "started_at": "2026-11-20",
-      "completed_at": null,
-      "reviewed_at": null
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-062",
