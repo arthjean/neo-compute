@@ -78,7 +78,11 @@ param(
     # Stamp of an interrupted campaign under evals/results: its recorded runs
     # are skipped, harness failures and skipped tasks excepted, and the new
     # ones appended.
-    [string]$Resume
+    [string]$Resume,
+    # Unattended runs (evals/night.ps1): a locked session or a physical input
+    # during a run makes that run a harness failure and ends the campaign
+    # with exit code 3, to resume with -Resume. Without it a run goes on.
+    [switch]$StopOnDisturbance
 )
 $ErrorActionPreference = 'Stop'
 if ($Solve -and -not $DryRun) { throw '-Solve needs -DryRun' }
@@ -172,6 +176,25 @@ if ($background) { . "$PSScriptRoot/windows/lib.ps1" }
 Add-Type -Namespace Evals -Name Input -MemberDefinition @'
 [StructLayout(LayoutKind.Sequential)] public struct LastInput { public uint cbSize; public uint dwTime; }
 [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LastInput l);
+'@
+
+# A locked session moves input to the Winlogon desktop: the user's desktop can
+# no longer be opened as the input desktop, and every run on it would fail
+# for a reason that is not the model's.
+Add-Type -Namespace Evals -Name Session -MemberDefinition @'
+[DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+[DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr h);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetUserObjectInformationW(IntPtr h, int index, System.Text.StringBuilder info, int length, out int needed);
+public static bool Locked() {
+    IntPtr h = OpenInputDesktop(0, false, 0x0001);
+    if (h == IntPtr.Zero) return true;
+    try {
+        var name = new System.Text.StringBuilder(64);
+        int needed;
+        if (!GetUserObjectInformationW(h, 2, name, name.Capacity * 2, out needed)) return true;
+        return !string.Equals(name.ToString(), "Default", StringComparison.OrdinalIgnoreCase);
+    } finally { CloseDesktop(h); }
+}
 '@
 
 # A run starts on a desktop nobody touched for 10 s: a person at the keyboard
@@ -571,7 +594,8 @@ function Read-Transcript([string]$Path) {
 $runs = Join-Path $out 'runs.jsonl'
 $mustCatch = $false
 $harnessFailures = [System.Collections.Generic.List[string]]::new()
-foreach ($task in $selected) {
+$stopped = $null
+:tasks foreach ($task in $selected) {
     $script = Join-Path $PSScriptRoot "windows/$($task.id).ps1"
     $taskSuite = Get-Suite $task
     $phases = @(Get-Phases $script)
@@ -596,10 +620,16 @@ foreach ($task in $selected) {
                 Write-Host "eval: $name skipped ($absent)"
                 continue
             }
+            if ($StopOnDisturbance -and [Evals.Session]::Locked()) {
+                $stopped = "session verrouillée avant $name"
+                break tasks
+            }
             if (-not $DryRun) { Wait-IdleDesktop }
             $decoy = $null
             $witness = $null
             $seen = $null
+            $guard = $null
+            $disturbed = $null
             try {
                 & $script -Phase setup -Work $work
                 $before = & $script -Phase verify -Work $work
@@ -665,7 +695,15 @@ foreach ($task in $selected) {
                     $auditDir = Join-Path $work 'localappdata'
                     Write-McpConfig $mode $config $auditDir
                     $transcript = Join-Path $out "$name.jsonl"
+                    # Unattended, a task without the witness still counts the
+                    # physical input of its run, with the witness's hooks.
+                    if ($StopOnDisturbance -and -not $watched) { $guard = Start-Witness }
                     $run = Invoke-Claude "$instructions`n`n$($task.prompt)" $config $cwd $transcript
+                    $physical = 0
+                    if ($guard) {
+                        $physical = (Stop-Witness $guard).physical
+                        $guard = $null
+                    }
                     if ($watched) {
                         $seen = Stop-Witness $witness
                         $witness = $null
@@ -673,8 +711,14 @@ foreach ($task in $selected) {
                         $decoy = $null
                         Start-Sleep -Milliseconds 800
                         $record.witness = $seen
-                        Assert-Undisturbed $seen
+                        $physical = $seen.physical
                     }
+                    if ($StopOnDisturbance) {
+                        if ([Evals.Session]::Locked()) { $disturbed = 'session verrouillée pendant la tâche' }
+                        elseif ($physical -gt 0) { $disturbed = "entrée physique pendant la tâche ($physical événements)" }
+                        if ($disturbed) { throw "$disturbed : exécution non valide, à rejouer avec -Resume" }
+                    }
+                    if ($watched) { Assert-Undisturbed $seen }
                     $stats = Read-Transcript $transcript
                     if ($stats.answer) { [System.IO.File]::WriteAllText((Join-Path $work 'answer.txt'), $stats.answer) }
                     $after = Test-Final $script $work $seen
@@ -701,6 +745,7 @@ foreach ($task in $selected) {
                 $harnessFailures.Add("$name : $_")
             } finally {
                 if ($witness) { [void](Stop-Witness $witness) }
+                if ($guard) { [void](Stop-Witness $guard) }
                 if ($global:NeoEvalsDesk) { Stop-Desk $global:NeoEvalsDesk; $global:NeoEvalsDesk = $null }
                 if ($decoy) { Stop-Decoy $decoy }
                 try { & $script -Phase cleanup -Work $work } catch { Write-Host "eval: cleanup $name : $_" }
@@ -708,10 +753,19 @@ foreach ($task in $selected) {
             }
             ($record | ConvertTo-Json -Compress -Depth 5) | Add-Content $runs
             Write-Host ("eval: {0} success={1} cause={2} calls={3} turns={4} input={5} s={6}{7}" -f $name, $record.success, $record.cause, $record.tool_calls, $record.turns, $record.input_tokens, $record.seconds, $(if ($record.cause -eq 'harness') { " ($($record.detail))" } elseif ($record.witness) { " témoin=$(if (Test-Violation $record.witness) { Format-Witness $record.witness } else { "intact sur $($record.witness.samples) échantillons" })" }))
+            if ($StopOnDisturbance) {
+                if ($disturbed) { $stopped = "$disturbed ($name)" }
+                elseif ([Evals.Session]::Locked()) { $stopped = "session verrouillée après $name" }
+                if ($stopped) { break tasks }
+            }
         }
     }
 }
 Write-Host "eval: results in $runs"
+if ($stopped) {
+    Write-Host "eval: stopped: $stopped ; resume with -Resume $(Split-Path $out -Leaf)"
+    exit 3
+}
 if ($DryRun -and $Solve -and $background -and $Modes -contains 'background' -and -not $mustCatch) {
     $harnessFailures.Add('aucune solution scriptée acceptée : le contrôle du témoin (curseur déplacé, premier plan perdu) n''a pas été joué')
 }

@@ -156,12 +156,25 @@ if ($bgRuns) {
         $alerts.Add("> **Cible manquée, médiane de tokens par delta après action (≤ 150) :** $($deltaMisses -join ' ; '). Ouvrir une story de correction dans ``$prd``.")
     }
 }
+# A night campaign (evals/night.ps1) leaves the verdicts of the desktop gates
+# it ran first. A failed bench did not stop the night, so it heads the report.
+$gatesFile = Join-Path $Results 'gates.json'
+$gates = if (Test-Path $gatesFile) { Get-Content $gatesFile -Raw | ConvertFrom-Json } else { $null }
+if ($gates -and $gates.bench -and -not $gates.bench.ok) {
+    $alerts.Add("> **Bench en échec la nuit de la campagne :** $($gates.bench.regressions) régression(s) contre ``bench/baseline.json`` (``gate-bench.txt`` du dossier de résultats). Comparer avec une copie de la base en séries alternées avant de certifier.")
+}
 foreach ($a in $alerts) { $lines.Add($a); $lines.Add('') }
 
 $tick = '`'
 $commits = @($all | ForEach-Object { $_.tasks_commit } | Where-Object { $_ } | Select-Object -Unique | ForEach-Object { $tick + $_.Substring(0, 7) + $tick })
 $commitText = if ($commits) { ', tâches du commit ' + ($commits -join ', ') } else { '' }
 $lines.Add("Résultats ``evals/results/$stamp`` ($scope), modèle $(@($runs.model | Where-Object { $_ } | Select-Object -Unique) -join ', '), via ``claude -p`` sur l'abonnement Claude Code$commitText. Médianes sur toutes les exécutions ; « entrée (succès) » et « appels (succès) » sur les exécutions réussies. Les tokens d'entrée comptent le cache (création et lecture).")
+if ($gates) {
+    $names = [ordered]@{ selftest = 'selftest'; selftest_background = 'selftest --background'; bench = 'bench'; dry_run = 'dry run' }
+    $said = @(foreach ($k in $names.Keys) { if ($gates.$k) { "$($names[$k]) $(if ($gates.$k.ok) { 'ok' } else { 'en échec' })" } })
+    $lines.Add('')
+    $lines.Add("Gates de bureau joués la même nuit, avant la campagne : $($said -join ', ').")
+}
 if ($harness) {
     $lines.Add('')
     $lines.Add("Exécutions écartées (échec du harnais, pas du modèle) : $($harness.Count), $(@($harness | ForEach-Object { "$($_.task)/$($_.mode)/r$($_.rep)" }) -join ', ').")
