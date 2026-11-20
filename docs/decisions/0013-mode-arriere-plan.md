@@ -500,3 +500,93 @@ La voie native décidée le 2026-11-13 (« Exploration ») est écrite ; aucun o
 - **Nom porté par deux entrées.** Une `ListBox` montre ses entrées dans l'arbre : le message de US-053 donne leurs ids (lus par UI Automation, sans rien ouvrir). Une liste déroulante fermée n'en montre aucune : le message donne leurs positions, « Une liste déroulante ne les distingue que par leur position : aucune n'est choisie. Aucune action exécutée. »
 - **Avis non pris.** `SendMessageTimeout` avec `SMTO_ABORTIFHUNG` ne distingue pas une fenêtre figée d'un gestionnaire qui travaille plus de 200 ms. Le résultat est une erreur qui ne se dit jamais réussie : « select <id> : sélection posée, mais l'application n'a pas pris l'avis du changement en 200 ms (fenêtre figée ou occupée) : elle peut l'ignorer. Relis l'arbre avant de rejouer. »
 - **Preuves** : tests du cœur dans `src/core/act_test.zig` (section US-064) ; au selftest d'arrière-plan, `bg-select-native` (dont le p95 de 30 sélections, budget 5 ms), `bg-select-notify` et `bg-select-winforms` (fenêtre WinForms compilée par le `csc` du .NET Framework, `skipped` sans lui). Les contrôles de bureau et le bench se jouent au créneau d'Arthur ou dans les gates de la nuit de US-063.
+
+## Sonde A23 et implémentation de US-065 (2026-11-20)
+
+### Mesure de A23
+
+`occlusion-probe a23` (build Debug, deux passes, sortie dans `docs/decisions/0013-occlusion-probe-a23-run.txt`) : Chrome ouvert sur deux onglets de `bench/pages/a23.html`, arbre construit fenêtre en vue, puis fenêtre entièrement sous le leurre (« nothing in view, decoy in front », ligne « Fenêtre recouverte » présente). 20 `ui_act` par cellule par un serveur `--mode background`, chacune demandée contre l'état lu juste avant elle, donc un « vérifié » est un « vérifié » avec changement d'état.
+
+| Action | Document web (passe 1 / passe 2) | Interface du navigateur, hors document |
+|---|---|---|
+| `toggle` | 19 / 19 vérifiées sur 20 (`CVVV…`) | aucun élément de l'interface n'a le pattern Toggle |
+| `set_value` | 13 / 14 vérifiées, le reste « délivré, valeur reformatée » | 20 sur 20 vérifiées (barre d'adresse) |
+| `expand` (et `collapse`) | 19 / 19 vérifiées (`CVVV…`) | 0 : ExpandCollapse échoue (`hr=0x80004005`) sur le premier élément qui l'a |
+| `select` | 7 / 7 vérifiées, 13 contredites (`CVCVCCV…`) | 20 sur 20 vérifiées (onglets) |
+
+**A23 est infirmée pour les quatre actions.** Seule la première action après le recouvrement est contredite ; ensuite l'arbre relu suit l'action. US-058 mesurait autre chose : un arbre dont le premier contact a lieu fenêtre recouverte ne se construit jamais (0 sur 20). Un arbre construit en vue, lui, reste à jour sous le recouvrement une fois la première action passée : la ligne « Fenêtre recouverte » est donc trop large pour Chrome dans ce cas, et une action vérifiée ne distingue pas une application qui désactive le calcul d'occlusion d'un Chrome dont l'arbre a été construit en vue.
+
+Conformément au critère de US-065, la story passe `BLOCKED` et rien n'est appris : la règle est écrite et testée, mais `RendersCovered.learning` vaut `false` par défaut. Le comportement livré est celui d'avant US-065 : `Code.exe` marqué dès le départ, aucune marque posée ni retirée.
+
+### Ce qui est écrit
+
+- **Table de session** `RendersCovered` dans `src/core/session.zig` : 8 exécutables comparés sans casse par un hachage de leur nom, le plus ancien remplacé, `Code.exe` au départ, aucune allocation ni écriture disque. `occlusionIn` (`src/core/a11y.zig`) la consulte à la place de la liste `renders_covered`, supprimée.
+- **Règle** `learnRendering` dans `a11y.zig`, appelée à la fin de chaque `ui_act` : un verdict « vérifié » dont l'état relu diffère de l'état lu avant (`Outcome.changed`), sur un élément sous un document web d'une fenêtre `Chrome_WidgetWin_*` recouverte selon les règles de Chromium (`coveredIn` avec `chromium_rules`), marque l'exécutable ; deux « contredit » de suite sur une fenêtre recouverte d'une application marquée retirent la marque. L'audit enregistre `"renders_covered":"set"` ou `"removed"`.
+- **Appartenance au document web** lue dans le dernier arbre montré : `underDocument` dans `src/core/uitree.zig`, conservée dans `Ids.Owner.web` par `ui_tree`, `ui_find` et `ui_tree root` (qui n'ajoute que le drapeau, faute de voir les ancêtres de sa racine). Seul un élément web d'une fenêtre Chromium paie la lecture de l'ordre Z ; aucune autre fenêtre n'en paie (test sur `layer_reads`).
+- **Coût mesuré** sur Chrome recouvert : ordre Z et règles de Chromium 49 à 79 µs au p95, lecture de la valeur avant `set_value` 533 à 672 µs au p95, somme 582 à 735 µs, sous le budget de 1 ms. Cette lecture n'a lieu que lorsque `learning` est vrai.
+
+### Vérification de la règle (`occlusion-probe learn unmarked`, apprentissage allumé dans le serveur de la sonde)
+
+- VS Code lancé sans sa marque, recouvert : ligne présente avant l'action, `toggle` vérifié, ligne absente ensuite, `Code.exe` marqué.
+- Chrome recouvert : première action contredite, ligne gardée, Chrome non marqué. Une deuxième action l'aurait marqué (mesure A23 ci-dessus).
+- VS Code Insiders : `skipped`, absent. Cursor : installé, mais la fenêtre ouverte par la sonde dans le processus déjà lancé par Arthur ne montre pas le bouton du panneau : non mesuré.
+
+### Selftests (2026-11-20, après l'implémentation)
+
+`selftest` passe en entier. `selftest --background` : 50 contrôles sur 52 passent, dont `bg-occluded`, `bg-occlusion-cost`, `bg-verdict` et `bg-select-native` ; `bg-guard-restore` (7 restaurations sur 100 avec le focus changé) et `bg-launch` (Calculatrice au premier plan) échouent, comme sur `41edd6f` le matin même, hors du chemin modifié. Le bench (`bg-act`) se joue dans les gates de la nuit de US-063.
+
+### Question soumise à Arthur
+
+A23 étant infirmée, trois voies : (1) laisser l'apprentissage éteint et la liste `Code.exe` seule (état livré) ; (2) restreindre la ligne « Fenêtre recouverte » de Chrome au cas mesuré par US-058, un arbre jamais construit en vue, puisque l'arbre construit en vue suit les actions ; (3) chercher un autre signal d'apprentissage qui sépare VS Code de Chrome (par exemple un arbre qui se construit au premier contact fenêtre recouverte). Décision d'Arthur avant toute reprise de US-065.
+
+### Décision d'Arthur (2026-11-20)
+
+Réponse d'Arthur à la recommandation (« Ok vas-y ») : ni la voie 1 ni la voie 2. L'apprentissage porte sur la **fenêtre** et non plus sur l'exécutable : une action vérifiée avec changement d'état sous le document web d'une fenêtre recouverte prouve l'arbre de cette fenêtre à jour, pas celui des autres fenêtres de l'application. `Code.exe` reste marqué d'office pour toutes ses fenêtres. Une fenêtre minimisée, ou jamais lue ainsi, garde la ligne ; deux « contredit » de suite retirent la marque. L'apprentissage ne s'allume qu'après une mesure de durée sous le recouvrement (actions après 10 s, 60 s et 180 s d'inactivité, puis après un cycle découvert puis recouvert) : si l'arbre se fige de nouveau, la marque expire ou l'apprentissage reste éteint. PRD 1.7 : A23 reformulée, critères de US-065, FR-47, risque 15 et cas 27.
+
+### Mesure de durée et correction de la lecture de A23 (2026-11-20)
+
+`occlusion-probe durable` (sortie dans `docs/decisions/0013-occlusion-probe-a23-run.txt`), Chrome sur la page A23, arbre construit en vue, `toggle` sur la case recouverte, puis la fenêtre remise en vue pour lire la vérité :
+
+- Première action après chaque recouvrement : « contredit », et l'effet ne paraît pas dans l'arbre en 3 s.
+- Chaque action suivante est lue « vérifié » en 62 à 67 ms, y compris après 10 s, 60 s et 180 s sans requête, mais **avec l'état d'avant** : en vue, la vérité est « décoché » quand la dernière lecture recouverte disait « coché », puis « coché » contre « décoché ». Toutes les actions sont délivrées (la vérité est celle que donnerait chaque bascule).
+- L'arbre d'un Chrome recouvert a donc **une action de retard** : une action pousse l'effet de la précédente. Les « vérifié » de la sonde A23 étaient cet artefact, et la conclusion « l'arbre construit en vue suit les actions » écrite plus haut est fausse. A23 dans sa forme 1.4 tient en substance : aucune lecture sur un Chrome recouvert ne dit l'état courant.
+- `occlusion-probe learn unmarked`, apprentissage par fenêtre allumé dans la sonde : VS Code est lu « vérifié » dès sa première action, ligne retirée ; Chrome est marqué à sa deuxième action, à tort, puisque son arbre est en retard ; une seconde fenêtre Chrome garde la ligne. Cursor : aucune nouvelle fenêtre en 15 s, non mesuré.
+
+Critère de US-065 (PRD 1.7) : aucune inactivité ne laisse l'arbre à jour, donc l'apprentissage reste éteint (`RendersCovered.learning = false`, marque par fenêtre écrite et testée) et la question revient à Arthur. Le comportement livré reste celui d'avant US-065.
+
+**Défaut préexistant mis au jour (US-055, US-059), non corrigé :** sur un Chrome recouvert, un `ui_act` lu « vérifié » rapporte l'état de l'action précédente, sans la ligne « Fenêtre recouverte », qui ne suit qu'un verdict contredit. `check` et `uncheck` lisent l'état avant d'agir : sur cet état en retard, ils peuvent conclure « déjà coché » sans agir, ou basculer dans le mauvais sens. Corriger change le contrat des verdicts : décision d'Arthur.
+
+### Décision d'Arthur : amendement de EP-018 (2026-11-20, PRD 1.8)
+
+Réponse d'Arthur à la recommandation (« Ok vas-y ») : EP-018 est amendé plutôt qu'un epic terminé rouvert. Il devient « Vérité des verdicts sur Chromium recouvert ». US-065 est annulée (aucun verdict ne distingue un arbre à jour d'un arbre en retard d'une action) ; son code reste, éteint et testé. US-066 cherche d'abord, en temps borné, un appel UI Automation sans effet visible qui pousse l'effet en attente, pour des verdicts vrais sans déplacer la fenêtre ; à défaut, le verdict sur un élément web d'une fenêtre Chromium recouverte devient « délivré, effet non vérifiable » avec la ligne « Fenêtre recouverte », et `check`/`uncheck` y sont refusés. US-063 attend US-066 : la tâche Chrome de la campagne en dépend.
+
+### Sonde de poussée et implémentation de US-066 (2026-11-20)
+
+`occlusion-probe flush`, `pending` et `flush=<nom>` (sorties dans `docs/decisions/0013-occlusion-probe-a23-run.txt`, chiffres dans `bench/apps.md`) : Chrome sur la page A23, arbre construit en vue, puis recouvert ; pour chaque appel candidat, 20 bascules de la case, l'appel après chacune, puis la case lue et comparée à la vérité lue fenêtre en vue.
+
+- Relecture 300 ms plus tard, relecture de tout l'arbre, arbre lu avec le texte web : 0 sur 20 (témoins).
+- `ScrollItem.ScrollIntoView` sur la case déjà en vue : 18 puis 8 sur 20.
+- `SetScrollPercent` du document à la position lue, `SetScrollPercent(NoScroll, NoScroll)`, `Scroll(NoAmount, NoAmount)` : 20 sur 20, 1,2 à 1,6 ms au p95.
+- `TextPattern.DocumentRange.GetBoundingRectangles`, une pure lecture : 0 sur 20.
+- `Collapse` sur un `<details>` replié : l'appel échoue. `SetValue` du champ à sa propre valeur : 20 sur 20, mais il déclenche les événements de saisie de la page.
+
+Contrôle de l'effet visible : un défilement laissé en attente sous le recouvrement est **annulé** par chacun des trois appels de défilement (position en vue 0 % après l'appel, 28,7 % sans appel), puisqu'ils reposent la position périmée de l'arbre. Aucun candidat ne pousse l'arbre sans effet visible : le critère « au moins 19 sur 20 sans rien changer de visible » n'est tenu par aucun, et US-066 prend sa seconde branche.
+
+Implémentation (`src/core/a11y.zig`) :
+
+- `act` décide une fois, avant toute lecture : un élément sous le document web (`Owner.web`, posé par `ui_tree`, `ui_find` et `ui_tree root`) d'une fenêtre Chromium recouverte dont l'arbre n'est pas connu à jour (`lagsBehind`, la même règle que la ligne « Fenêtre recouverte », `Code.exe` excepté) est `lagging`. L'ordre Z n'est lu que pour un tel élément.
+- `check` et `uncheck` sont refusés avant toute action avec le message du critère.
+- Toute autre action part ; son verdict devient « délivré, effet non vérifiable », suivi de la ligne « Fenêtre recouverte », jamais « vérifié » ni « contredit ». Un appel qui n'a rien à faire garde son texte et reçoit la ligne.
+- La relecture du verdict lit une seule fois au lieu de sonder 400 ms : attendre montrerait l'effet de l'action précédente.
+- Le défilement part même quand la position lue dit le bout atteint : cette position n'est pas celle de la page.
+- Le code de US-065 (table `RendersCovered`, règle `learnRendering`, `Outcome.changed`, champ d'audit `renders_covered`) est retiré ; `underDocument` et `Owner.web` restent, c'est sur eux que repose la décision.
+
+Relecture par `ui_act` (`occlusion-probe a23 durable`) : 80 actions sur le document web recouvert (toggle, set_value, expand, select) et 8 bascules de `durable`, après un cycle découvert-recouvert et après 10, 60 et 180 s sans requête, rendent toutes « délivré, effet non vérifiable », 0 verdict tiré de l'arbre ; la vérité en vue montre les 8 bascules délivrées ; un `uncheck` recouvert est refusé et la case garde son état. L'interface du navigateur ne change pas (set_value et select 20 sur 20 vérifiés). Coût de la décision : 43 µs médiane, 88 µs au p95, sous le budget de 1 ms.
+
+Ce qui reste ouvert : un verdict vrai sur Chrome recouvert supposerait un appel qui pousse l'arbre sans effet visible, que ni UI Automation ni les essais ci-dessus ne donnent ; une bande de 16 px en vue reste la seule voie qui rend l'arbre à jour.
+
+### Revue de EP-018 (2026-11-20)
+
+Défaut corrigé : l'élément `document` lui-même n'était pas compté dans sa page (`underDocument` ne marquait que ses descendants). Or c'est lui qui fait défiler la page, et sa position vient du même arbre en retard (défilement en attente lu 28,7 % ci-dessus). Un `ui_act scroll` sur le document d'un Chrome recouvert disait donc « déjà en bas » sans rien envoyer, ou rendait un verdict tiré de l'arbre. `underDocument` compte désormais le document, et un identifiant que `ui_act` attribue à une entrée ou à un conteneur défilable d'un élément web hérite du drapeau. Test de régression : `a scroll leaves even where the lagging tree says the end is reached` couvre le document dans `src/core/lag_test.zig`.
+
+Reste à prouver par les gates de bureau de la nuit (`evals/night.ps1`) : `bg-act` contre sa référence (critère de US-066), `selftest` et `selftest --background`.

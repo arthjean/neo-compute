@@ -30,7 +30,7 @@ const usage =
     \\       neo-compute bg-probe [dump] [autofocus=on|off] [only=PRIMITIVE]
     \\                            [window|show|launch|notepad|calculator|settings|explorer|chrome|vscode]...
     \\       neo-compute events-probe [window|notepad|calculator|settings|explorer|chrome|vscode|churn]...
-    \\       neo-compute occlusion-probe [chrome|vscode|wpf]... [reps=N] [sit=visible|covered|strip|other_display|minimized]
+    \\       neo-compute occlusion-probe [chrome|vscode|wpf|a23|durable|flush|flush=NAME|pending]... [reps=N] [sit=visible|covered|strip|other_display|minimized]
     \\       neo-compute --version
     \\
 ;
@@ -330,6 +330,7 @@ test {
     _ = @import("core/uitree.zig");
     _ = @import("core/a11y_test.zig");
     _ = @import("core/perception_test.zig");
+    _ = @import("core/lag_test.zig");
     _ = @import("core/act_test.zig");
     _ = @import("core/policy.zig");
     _ = @import("core/control.zig");

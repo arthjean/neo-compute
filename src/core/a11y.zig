@@ -37,6 +37,17 @@ const Snap = struct {
     sub: bool = false,
     /// What to do when the tree may be frozen (US-059): see `occlusion`.
     frozen: ?[]const u8 = null,
+    /// The root of a subtree lies under a web document (US-066).
+    web_base: bool = false,
+
+    /// Records for element `index` of root `ri`, id `id`, whether it
+    /// belongs to a web document of a Chromium window (US-066). A subtree does
+    /// not see its root's ancestors: it only adds the flag.
+    fn markWeb(s: *const Snap, ids: *uitree.Ids, under: []const bool, index: usize, ri: usize, id: u32) void {
+        const web = under[index] and s.roots[ri].chromium;
+        if (s.sub and !web) return;
+        ids.setWeb(id, web);
+    }
 
     /// Root index of element `index`.
     fn rootOf(s: *const Snap, index: u32) usize {
@@ -67,7 +78,10 @@ pub fn imageNote(ctx: anytype, window: u64) []const u8 {
 
 /// Electron applications measured to keep rendering while covered: they
 /// turn Chromium's occlusion calculation off (VS Code, US-058). Minimized,
-/// they stop like any Chromium window.
+/// they stop like any Chromium window. Which others do is not learned from
+/// verdicts: a covered Chrome's tree is one action behind, so its reads
+/// look current from the second action on (US-065 cancelled, decision
+/// 0013).
 const renders_covered = [_][]const u8{"Code.exe"};
 
 pub const Occlusion = struct {
@@ -89,34 +103,48 @@ pub fn occlusion(ctx: anytype, window: u64) Occlusion {
 /// `occlusion` among `layers`, read once for several windows: the desktop's
 /// z-order costs one enumeration, whatever the number of windows judged.
 pub fn occlusionIn(ctx: anytype, layers: []const display.Layer, window: u64) Occlusion {
-    const at = for (layers, 0..) |l, i| {
-        if (l.handle == window) break i;
-    } else return .{};
+    const at = layerIndex(layers, window) orelse return .{};
     const target = layers[at];
     // Minimized, every Chromium window stops rendering, those that turn the
     // occlusion calculation off too: VS Code showed 0 effect of 20 (US-058).
     if (target.minimized) return .{ .frozen = if (target.chromium) frozen_minimized else null };
     // An Electron application may turn the calculation off: it is then a
     // window like any other, covered or not, whose tree stays current.
-    const tracks = target.chromium and blk: {
-        const ref = ctx.backend.windowRef(window) orelse break :blk true;
-        const exe = policy.resolve(ctx, ref).exe();
-        for (renders_covered) |name| if (std.ascii.eqlIgnoreCase(exe, name)) break :blk false;
-        break :blk true;
-    };
-    const area = if (tracks) target.outer else target.rect;
-    const covers = ctx.arena.alloc(display.Rect, at) catch return .{};
+    const tracks = target.chromium and !rendersCovered(ctx, window);
+    const occluded = coveredIn(ctx.arena, layers, at, ctx.backend.displays(), tracks);
+    return .{ .occluded = occluded, .frozen = if (occluded and tracks) frozen_covered else null };
+}
+
+pub fn layerIndex(layers: []const display.Layer, window: u64) ?usize {
+    for (layers, 0..) |l, i| if (l.handle == window) return i;
+    return null;
+}
+
+fn rendersCovered(ctx: anytype, window: u64) bool {
+    const ref = ctx.backend.windowRef(window) orelse return false;
+    const exe = policy.resolve(ctx, ref).exe();
+    for (renders_covered) |name| if (std.ascii.eqlIgnoreCase(exe, name)) return true;
+    return false;
+}
+
+/// Whether layer `at` is entirely covered by the layers above it. With
+/// `chromium_rules`, as Chromium's occlusion tracker judges it: window
+/// rectangles, without the popups and tool windows it ignores; otherwise
+/// on visible frames, every opaque window above.
+pub fn coveredIn(arena: std.mem.Allocator, layers: []const display.Layer, at: usize, displays: []const display.Display, chromium_rules: bool) bool {
+    const target = layers[at];
+    const area = if (chromium_rules) target.outer else target.rect;
+    const covers = arena.alloc(display.Rect, at) catch return false;
     var n: usize = 0;
     for (layers[0..at]) |l| {
-        if (l.minimized or !l.solid or (tracks and !l.counted)) continue;
-        const r = if (tracks) l.outer else l.rect;
+        if (l.minimized or !l.solid or (chromium_rules and !l.counted)) continue;
+        const r = if (chromium_rules) l.outer else l.rect;
         if (!r.intersects(area)) continue;
         covers[n] = r;
         n += 1;
     }
-    if (n == 0) return .{};
-    const occluded = display.hidden(ctx.arena, area, ctx.backend.displays(), covers[0..n]);
-    return .{ .occluded = occluded, .frozen = if (occluded and tracks) frozen_covered else null };
+    if (n == 0) return false;
+    return display.hidden(arena, area, displays, covers[0..n]);
 }
 
 pub const target_missing = "Aucune fenêtre cible : passe window (handle de window_list) ou lance l'application avec app_launch.";
@@ -200,6 +228,7 @@ fn snapshot(ctx: anytype, window: ?u64, record: bool, text: bool) union(enum) { 
     for (roots) |*root| {
         const o = occlusionIn(ctx, layers, root.handle);
         root.occluded = o.occluded;
+        root.chromium = if (layerIndex(layers, root.handle)) |i| layers[i].chromium else false;
         if (frozen == null) frozen = o.frozen;
     }
     const maps = ctx.arena.alloc(display.Mapping, roots.len) catch return .{ .err = oom };
@@ -327,15 +356,17 @@ fn subtree(ctx: anytype, id_text: []const u8, o: TreeOptions) Result {
     const roots = ctx.arena.alloc(uitree.Root, 1) catch return Result.err(oom);
     const maps = ctx.arena.alloc(display.Mapping, 1) catch return Result.err(oom);
     const viewports = ctx.arena.alloc(display.Rect, 1) catch return Result.err(oom);
-    const covered = occlusion(ctx, owner.window);
-    roots[0] = .{ .start = 0, .handle = owner.window, .occluded = covered.occluded };
+    const layers = ctx.backend.windowLayers(ctx.arena);
+    const covered = occlusionIn(ctx, layers, owner.window);
+    const chromium = if (layerIndex(layers, owner.window)) |i| layers[i].chromium else false;
+    roots[0] = .{ .start = 0, .handle = owner.window, .occluded = covered.occluded, .chromium = chromium };
     maps[0] = space.map;
     viewports[0] = space.viewport;
     ctx.session.recordShot(maps[0]);
     // The ids keep the window whose tree listed the element.
     snap.window = owner.tree;
     snap.roots = &.{};
-    const s: Snap = .{ .snap = snap, .roots = roots, .maps = maps, .viewports = viewports, .sub = true, .frozen = covered.frozen };
+    const s: Snap = .{ .snap = snap, .roots = roots, .maps = maps, .viewports = viewports, .sub = true, .frozen = covered.frozen, .web_base = owner.web };
     if (!o.marks) return treeText(ctx, s, false, false, null, o.depth) catch Result.err(oom);
     var labels: std.ArrayList(screen.Mark) = .empty;
     const r = treeText(ctx, s, false, false, &labels, o.depth) catch return Result.err(oom);
@@ -428,8 +459,10 @@ fn treeText(ctx: anytype, s: Snap, foreground: bool, since_last: bool, labels: ?
     const p = try pruneRoots(a, s);
     const ids = try a.alloc(u32, p.kept.len);
     const shown = try a.alloc(uitree.Shown, p.kept.len);
+    const under = try uitree.underDocument(a, els, s.web_base);
     for (p.kept, p.root_of, 0..) |k, ri, i| {
         ids[i] = try ui.ids.assignIn(gpa, els[k.index].key, s.roots[ri].handle, win);
+        s.markWeb(&ui.ids, under, k.index, ri, ids[i]);
         shown[i] = uitree.shownOf(ids[i], els[k.index], s.maps[ri]);
     }
     const handles = try a.alloc(u64, s.roots.len);
@@ -827,6 +860,7 @@ fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap, found_aft
     try w.writeByte('\n');
     var matched: usize = 0;
     var current: usize = 0;
+    const under = try uitree.underDocument(ctx.arena, s.snap.elements, s.web_base);
     for (s.snap.elements, 0..) |e, i| {
         if (!try q.matches(ctx.arena, e)) continue;
         matched += 1;
@@ -838,6 +872,7 @@ fn findText(ctx: anytype, q: uitree.Query, query: []const u8, s: Snap, found_aft
             current = ri;
         }
         const id = try ctx.session.ui.ids.assignIn(ctx.session.gpa, e.key, s.roots[ri].handle, s.snap.window);
+        s.markWeb(&ctx.session.ui.ids, under, i, ri, id);
         try uitree.writeLine(w, 0, id, e, s.maps[ri]);
     }
     if (matched == 0) try w.print("Aucun élément ne correspond à `{s}` : essaie un autre nom, role:<rôle>, state:<état> ou ui_tree.\n", .{query});
@@ -888,8 +923,10 @@ pub fn windowOf(ctx: anytype, id_text: []const u8) ?u64 {
 }
 
 /// The element an action works on: its root window, which the backend
-/// reaches it through, the window whose tree listed it, and its id.
-const Elem = struct { window: u64, key: u64, tree: u64, name: []const u8 };
+/// reaches it through, the window whose tree listed it, and its id; `web`:
+/// the last tree put it under a web document of a Chromium window.
+/// `lagging`: its window's tree is one action behind (US-066).
+const Elem = struct { window: u64, key: u64, tree: u64, name: []const u8, web: bool = false, lagging: bool = false };
 
 /// What the first line of the result says of the action (US-055).
 pub const Verdict = enum {
@@ -908,7 +945,11 @@ const Outcome = struct {
     /// The state read back, or what a call with nothing to do found.
     state: []const u8 = "",
     /// What an unverifiable action says.
-    delivered: []const u8 = "délivré, effet non vérifiable",
+    delivered: []const u8 = unverifiable_text,
+    /// The element lies under the web document of a covered Chromium
+    /// window whose tree is not known current (US-066): that tree is one
+    /// action behind (A23), no state read in it is the element's own.
+    lagging: bool = false,
     notes: [4][]const u8 = undefined,
     n: u8 = 0,
 
@@ -931,9 +972,21 @@ const Outcome = struct {
         // A read-back that a cancellation or a pause cut short denies
         // nothing: the action left and its effect was not read.
         if (o.verdict == .contradicted and ctx.cancelled()) o = .{ .notes = self.notes, .n = self.n };
+        // A state read in a tree one action behind tells nothing of this
+        // action (US-066): delivered, its effect unknown, with the line
+        // that says how to make the tree current. A call with nothing to do
+        // keeps its text and gets the line.
+        if (o.lagging and o.verdict != .noop) {
+            o.verdict = .unverifiable;
+            o.delivered = unverifiable_text;
+        }
         ctx.audit_detail.verdict = @tagName(o.verdict);
         var out: std.Io.Writer.Allocating = .init(ctx.arena);
         o.write(&out.writer, t, action) catch return Result.err(oom);
+        if (o.lagging) {
+            out.writer.print("\n{s}", .{frozen_covered}) catch return Result.err(oom);
+            return Result.text(out.written());
+        }
         if (o.verdict != .contradicted) return Result.text(out.written());
         // The state read back may come from a tree that is not current: on
         // a covered Chrome every action was delivered and none showed
@@ -971,9 +1024,11 @@ fn goneResult(ctx: anytype, t: Elem) Result {
     return Result.err(fmt(ctx.arena, "Élément {s} introuvable : rappelle ui_tree", .{t.name}));
 }
 
-/// The id of element `key`, which `t`'s tree listed or holds.
+/// The id of element `key`, which `t`'s tree listed or holds. An entry or
+/// scroll host of a web element belongs to the same page (US-066).
 fn idText(ctx: anytype, t: Elem, key: u64) []const u8 {
     const id = ctx.session.ui.ids.assignIn(ctx.session.gpa, key, t.window, t.tree) catch return "?";
+    if (t.web) ctx.session.ui.ids.setWeb(id, true);
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
     uitree.writeId(&out.writer, id) catch return "?";
     return out.written();
@@ -1028,9 +1083,15 @@ pub fn act(ctx: anytype, id_text: []const u8, action: uitree.Action, value: ?[]c
         return Result.err(fmt(ctx.arena, "value `{s}` invalide pour scroll : formes acceptées {s}. Aucune action exécutée.", .{ value orelse "", uitree.ScrollSpec.forms }));
     // Writing a value is typing; every other pattern is a click (US-017).
     if (policy.requireWindow(ctx, owner.window, if (action == .set_value) .full else .click)) |r| return r;
-    const t: Elem = .{ .window = owner.window, .key = owner.key, .tree = owner.tree, .name = name };
+    // US-066: the tree of a covered Chromium page is one action behind
+    // (A23). An action that decides from the state it reads would decide
+    // from the previous one: refused. Only a web element of a Chromium
+    // window pays the z-order read.
+    const lagging = owner.web and lagsBehind(ctx, owner.window);
+    const t: Elem = .{ .window = owner.window, .key = owner.key, .tree = owner.tree, .name = name, .web = owner.web, .lagging = lagging };
     ctx.session.verify_ns = 0;
-    var out: Outcome = .{};
+    if (lagging and (action == .check or action == .uncheck)) return Result.err(fmt(ctx.arena, lag_refusal, .{name}));
+    var out: Outcome = .{ .lagging = lagging };
     const live = switch (ready(ctx, t, action, &out)) {
         .ok => |l| l,
         .stop => |r| return r,
@@ -1048,6 +1109,16 @@ pub fn act(ctx: anytype, id_text: []const u8, action: uitree.Action, value: ?[]c
         .focus => sent(ctx, t, live, &out, .focus, opOn(ctx, t.window, t.key, .focus), fallback_click),
     };
     return early orelse out.result(ctx, t, action);
+}
+
+const unverifiable_text = "délivré, effet non vérifiable";
+const lag_refusal = "Précondition non remplie : {s} est dans une page Chromium recouverte, dont l'arbre a une action de retard : son état lu n'est pas le sien. Laisse une bande d'au moins 16 px visible avec window_set, puis réessaie. Aucune action exécutée.";
+
+/// Whether `window` is a covered Chromium window whose tree is not known
+/// current (US-066): the case of the frozen-tree line.
+fn lagsBehind(ctx: anytype, window: u64) bool {
+    const o = occlusion(ctx, window);
+    return o.occluded and o.frozen != null;
 }
 
 const Ready = union(enum) { ok: uitree.Live, stop: Result };
@@ -1104,7 +1175,9 @@ const ReadBack = struct { live: uitree.Live, met: bool };
 
 /// Reads `read` of `t` again until `want.met`, every 50 ms for 400 ms at most
 /// (US-055). The first read comes at once: an effect readable by then costs
-/// one round trip. Null when the element can no longer be read.
+/// one round trip. Null when the element can no longer be read. A tree one
+/// action behind (US-066) is read once: waiting would show the previous
+/// action's effect, not this one's.
 fn readBack(ctx: anytype, t: Elem, read: uitree.LiveRead, want: anytype) ?ReadBack {
     const ms = std.time.ns_per_ms;
     const start = timing.now(ctx.io);
@@ -1119,6 +1192,7 @@ fn readBack(ctx: anytype, t: Elem, read: uitree.LiveRead, want: anytype) ?ReadBa
             },
             else => break,
         }
+        if (t.lagging) break;
         if (timing.now(ctx.io) - start >= @as(i96, ctx.session.verify_ms) * ms) break;
         polls += 1;
         if (!sleepUntil(ctx, start + @as(i96, polls) * verify_poll_ms * ms)) break;
@@ -1409,7 +1483,7 @@ fn selectByName(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, wanted:
         if (entries.len > max_entry_names) names.writer.print(", … {d} autres", .{entries.len - max_entry_names}) catch {};
         return Result.err(fmt(a, "Aucune entrée « {s} » dans {s}. Entrées : {s}. {s}", .{ wanted, t.name, names.written(), restored }));
     }
-    const entry: Elem = .{ .window = t.window, .key = found.?.key, .tree = t.tree, .name = idText(ctx, t, found.?.key) };
+    const entry: Elem = .{ .window = t.window, .key = found.?.key, .tree = t.tree, .name = idText(ctx, t, found.?.key), .web = t.web, .lagging = t.lagging };
     // Brought into view first: some providers select only what they show.
     switch (liveOf(ctx, entry.window, entry.key, .all)) {
         .ok => |l| if (l.offscreen) {
@@ -1627,9 +1701,12 @@ fn doScroll(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, spec: uitre
     const pos: ?f32 = if (vertical) sc.v else sc.h;
     // An axis that does not scroll shows all of its content: both ends are
     // in view.
-    const at_end = if (pos) |p| (if (forward) p >= 100 else p <= 0) else true;
+    // A position read in a tree one action behind (US-066) is not the
+    // page's: the scroll leaves whatever it says.
+    const stale = t.lagging and pos != null;
+    const at_end = if (pos) |p| !stale and (if (forward) p >= 100 else p <= 0) else true;
     switch (spec) {
-        .percent => |p| if (pos == null or @abs(pos.? - p) < 0.5) {
+        .percent => |p| if (pos == null or (!stale and @abs(pos.? - p) < 0.5)) {
             out.set(.noop, if (pos == null) "pas de défilement vertical, tout est déjà en vue" else fmt(a, "déjà à {s}%", .{numberText(a, p)}));
             return null;
         },

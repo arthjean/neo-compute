@@ -12,6 +12,8 @@
 | 1.4 | 2026-11-13 | Arthur Jean | Après la revue de EP-014 (décision 0013, « Revue de EP-014 ») : ligne « Fenêtre minimisée » gardée pour toute fenêtre Chromium (US-059) ; Q18 tranchée, la liste déroulante de la tâche Chrome de US-062 devient une liste Win32 ; EP-018 et US-065, gel appris des applications Chromium (A23, FR-47, risque 15, cas 27) |
 | 1.5 | 2026-11-13 | Arthur Jean | Après la revue de EP-015 (décision 0013, « Décisions d'Arthur après la revue de EP-015 ») : capture de fenêtre refusée quand le masque des mots de passe n'est pas garanti (balayage en échec, fenêtre élevée), conseil du refus « arbre web non construit » réécrit, `observe: screenshot` admis en mode arrière-plan avec l'image de la fenêtre cible (US-061, FR-42) |
 | 1.6 | 2026-11-20 | Arthur Jean | EP-016 devient l'epic final, après EP-017 et EP-018 : la campagne de US-063 se rejoue une fois tout le reste livré, lancée par Arthur une nuit par `evals/night.ps1` (gates de bureau d'abord, machine gardée éveillée, arrêt propre et reprise) ; la campagne du 2026-11-15 reste une mesure intermédiaire ; Q16 tranchée ; US-063 passe à M (3 pts) |
+| 1.7 | 2026-11-20 | Arthur Jean | Après la sonde A23 (décision 0013, « Sonde A23 et implémentation de US-065 ») : A23 infirmée, un Chrome dont l'arbre a été construit en vue suit les actions sous le recouvrement une fois la première passée ; US-065 apprend par fenêtre et non plus par exécutable, `Code.exe` reste marqué d'office, et l'apprentissage ne s'allume qu'après une mesure de durée sous le recouvrement (A23 reformulée, FR-47, risque 15, cas 27) |
+| 1.8 | 2026-11-20 | Arthur Jean | Après la mesure de durée (décision 0013, « Mesure de durée et correction de la lecture de A23 ») : l'arbre d'un Chrome recouvert a une action de retard, un verdict y rapporte l'état précédent ; EP-018 devient « Vérité des verdicts sur Chromium recouvert », US-065 annulée, US-066 (pousser l'effet en attente, sinon verdict honnête et `check`/`uncheck` refusés) ; US-063 bloquée par US-066 ; A23, FR-47, risque 15 et cas 27 réécrits |
 
 ## Problem Statement
 
@@ -41,7 +43,7 @@ Décisions de contrat proposées, à confirmer par Arthur dans la décision 0013
 4. `ui_act` reçoit trois actions et étend `value` ; `ui_tree`, `ui_find`, `screenshot` et `zoom` reçoivent des paramètres optionnels.
 5. Les modes `a11y` et `vision` gardent leur kill switch, leur indicateur, leur stabilisation et leur liste d'outils.
 
-Périmètre : 8 epics, 27 stories, 79 points, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014, EP-017 et EP-018 (parité d'actions, perception, sélection native et gel appris, 30 points). Livraison 3 : EP-015, puis EP-016 (passe visuelle et mesure, 13 points). EP-016 est l'epic final : sa campagne de nuit mesure tous les autres et ne se joue qu'après eux.
+Périmètre : 8 epics, 28 stories dont une annulée (US-065), 79 points actifs, en trois livraisons. Livraison 1 : EP-011 et EP-012 (sans interférence, 36 points). Livraison 2 : EP-013, EP-014, EP-017 et EP-018 (parité d'actions, perception, sélection native et vérité des verdicts sur Chromium recouvert, 30 points). Livraison 3 : EP-015, puis EP-016 (passe visuelle et mesure, 13 points). EP-016 est l'epic final : sa campagne de nuit mesure tous les autres et ne se joue qu'après eux.
 
 ## Goals
 
@@ -115,7 +117,7 @@ Key findings that informed this PRD:
 - **A20 :** `PrintWindow` avec `PW_RENDERFULLCONTENT` rend une image non noire d'une fenêtre entièrement recouverte pour au moins 5 des 6 applications de référence. Cua rapporte du noir sur les fenêtres DirectComposition. Validé par US-060.
 - **A21 :** les trois actions nouvelles de `ui_act` et les paramètres `root` et `depth` de `ui_tree` gardent les définitions `alwaysLoad` sous 1 500 tokens estimés. Vérifié à la compilation par le budget existant.
 - **A22 :** les messages `CB_*` et `LB_*` lisent les entrées et changent la sélection d'une liste d'un autre processus sans l'ouvrir et sans changer le premier plan ni le focus, et un `WM_COMMAND` envoyé au parent lui fait voir le changement. Validé le 2026-11-13 sur une fenêtre de test (décision 0013, « Exploration ») ; les applications qui reflètent `WM_COMMAND` (WinForms) sont vérifiées dans US-064.
-- **A23 :** sur une fenêtre Chromium recouverte dont l'arbre est figé, aucune action de `ui_act` sur un élément du document web n'est lue « vérifié » avec un changement d'état : une telle lecture prouve donc que l'application rend recouverte. US-058 l'a mesuré pour `toggle` sur Chrome (0 sur 20). Les autres actions et les éléments hors document (interface du navigateur) sont mesurés par US-065.
+- **A23 (reformulée en 1.8) :** l'arbre d'accessibilité d'une fenêtre Chrome recouverte, construit en vue, a une action de retard : la première action après le recouvrement ne s'y lit jamais (3 s), chaque action suivante y pousse l'effet de la précédente, à toute durée mesurée (10 s, 60 s, 180 s sans requête), et toutes sont délivrées (vérité lue fenêtre remise en vue, sonde `durable` du 2026-11-20). Un verdict lu dans cet arbre rapporte donc l'état précédent. Les formes 1.4 et 1.7 reposaient sur des lectures « vérifié » qui étaient cet artefact. VS Code, qui désactive le calcul d'occlusion, se lit à jour dès la première action. US-066 cherche un appel sans effet visible qui pousse l'effet en attente.
 
 ### Hard Constraints
 - Zig 0.17.0, bindings générés depuis `bindings/windows.zon`, aucune vtable écrite à la main, aucun type WinRT (absent de win32metadata).
@@ -623,14 +625,16 @@ Changer la sélection d'une liste Win32 classique sans l'ouvrir, en prévenant l
 - [ ] Le selftest ajoute `bg-select-native` (liste déroulante de la fenêtre de test : sélection changée, `CBN_SELCHANGE` reçu, aucun `CBN_DROPDOWN`, session inchangée) et `bg-select-notify` (`LBN_SELCHANGE` reçu pour une entrée de la `LISTBOX`).
 - [ ] Les tests du cœur couvrent sur le backend factice : voie native prise, repli sur UI Automation, nom introuvable, doublon, fenêtre figée.
 
-### EP-018: Gel appris des applications Chromium
+### EP-018: Vérité des verdicts sur Chromium recouvert
 
-Savoir, sans liste de noms à tenir, quelles applications Chromium continuent de rendre fenêtre recouverte, pour ne plus avertir à tort d'un arbre figé. Livraison 2.
+Ne jamais rapporter comme vrai un état lu dans l'arbre d'une fenêtre Chromium recouverte, qui a une action de retard (A23, PRD 1.8), et ne jamais agir sur un tel état. L'objectif d'origine (apprendre quelles applications rendent recouvertes, pour retirer l'avertissement) est abandonné avec US-065. Livraison 2.
 
-**Definition of Done:** une application Electron absente de `renders_covered`, recouverte, cesse de recevoir la ligne « Fenêtre recouverte » après sa première action vérifiée ; Chrome recouvert la garde. La sonde a rendu son verdict sur A23.
+**Definition of Done:** aucun `ui_act` sur un élément du document web d'une fenêtre Chromium recouverte dont l'arbre n'est pas connu à jour ne se dit « vérifié » ou « contredit » sur un état en retard, ni n'agit sur un état lu en retard ; la sonde `durable` le vérifie contre la vérité lue fenêtre en vue.
 
-#### US-065: Apprendre qu'une application Chromium rend recouverte
-**Description:** En tant que Claude Code, je veux que l'avertissement d'arbre figé cesse pour une application qui prouve qu'elle rend recouverte afin de ne pas déplacer sa fenêtre sans raison.
+#### US-065: Apprendre qu'une application Chromium rend recouverte (annulée)
+**Statut :** annulée le 2026-11-20 (PRD 1.8). Aucun verdict ne distingue un arbre à jour d'un arbre en retard d'une action : la deuxième action sur un Chrome recouvert se lit déjà « vérifié » avec l'état précédent, et marquerait la fenêtre à tort. La table par fenêtre et la règle sont retirées du code (décision 0013) ; `underDocument` et `Owner.web` restent, la décision de US-066 repose sur eux ; `Code.exe` reste marqué d'office. Les critères ci-dessous sont gardés pour l'historique.
+
+**Description:** En tant que Claude Code, je veux que l'avertissement d'arbre figé cesse pour une fenêtre dont une action prouve l'arbre à jour afin de ne pas la déplacer sans raison.
 
 **Contexte (US-058 et revue de EP-014, décision 0013) :** Chrome recouvert fige son arbre : 0 action sur 20 se lit dans l'arbre, toutes sont pourtant délivrées. VS Code désactive le calcul d'occlusion et reste à jour (95 à 100 %). Le code ne connaît cette différence que par une liste de noms (`renders_covered` dans `src/core/a11y.zig`, `Code.exe` seul) : toute autre application Electron qui fait de même (VS Code Insiders, Cursor) reçoit à tort la ligne « Fenêtre recouverte ». Le principe repris est celui de l'abonnement UI Automation appris de US-048 : observer plutôt que lister.
 
@@ -639,23 +643,44 @@ Savoir, sans liste de noms à tenir, quelles applications Chromium continuent de
 **Dependencies:** Blocked by US-055, US-058, US-059
 
 **Acceptance Criteria:**
-- [ ] La sonde `occlusion-probe` mesure d'abord A23 sur Chrome recouvert, arbre construit avant le recouvrement : pour `toggle`, `set_value`, `expand` et `select`, sur un élément du document web et sur un élément de l'interface du navigateur (hors document), le nombre de verdicts « vérifié » avec changement d'état sur 20 actions par cellule.
-- [ ] Étant donné 0 verdict « vérifié » sur les éléments du document web pour une action, alors A23 est validée pour cette action. Une action qui en produit un est exclue de l'apprentissage, et le rapport la nomme.
-- [ ] Étant donné A23 infirmée pour toutes les actions, alors la story passe `BLOCKED`, rien n'est appris, et le rapport pose la question à Arthur.
-- [ ] Une action de `ui_act` au verdict « vérifié », dont l'état relu diffère de l'état lu avant l'action, sur un élément situé sous un document web d'une fenêtre `Chrome_WidgetWin_*` recouverte selon les règles de Chromium, marque l'exécutable de cette fenêtre « rend recouverte ».
-- [ ] Une application marquée est traitée comme `Code.exe` aujourd'hui : `{occluded}` jugé sur les cadres visibles, aucune ligne « Fenêtre recouverte » dans `ui_tree`, après un delta ou dans un `ui_act` contredit.
+- [x] La sonde `occlusion-probe` mesure d'abord A23 sur Chrome recouvert, arbre construit avant le recouvrement : pour `toggle`, `set_value`, `expand` et `select`, sur un élément du document web et sur un élément de l'interface du navigateur (hors document), le nombre de verdicts « vérifié » avec changement d'état sur 20 actions par cellule. Mesuré le 2026-11-20 : A23 dans sa forme 1.4 infirmée pour les quatre actions (décision 0013).
+- [x] La sonde mesure la durée sous le recouvrement, arbre construit en vue : verdicts d'actions espacées de 10 s, 60 s et 180 s d'inactivité, puis après un cycle découvert puis recouvert ; pour une action contredite, l'arbre relu 3 s dit si l'effet arrive en retard ou jamais. Étant donné un arbre qui se fige de nouveau après une inactivité, alors la marque expire après la plus longue inactivité mesurée encore à jour, ou, si aucune ne l'est, l'apprentissage reste éteint et la question revient à Arthur. Mesuré le 2026-11-20 : l'arbre d'un Chrome recouvert a une action de retard à toute durée (vérité lue en vue), aucune inactivité ne le laisse à jour ; l'apprentissage reste éteint (décision 0013, « Mesure de durée »).
+- [ ] Une action de `ui_act` au verdict « vérifié », dont l'état relu diffère de l'état lu avant l'action, sur un élément situé sous un document web d'une fenêtre `Chrome_WidgetWin_*` recouverte selon les règles de Chromium, marque **cette fenêtre** (handle et processus) « arbre à jour ».
+- [ ] Une fenêtre marquée est traitée comme une fenêtre de `Code.exe` aujourd'hui : `{occluded}` jugé sur les cadres visibles, aucune ligne « Fenêtre recouverte » dans `ui_tree`, après un delta, dans un `ui_act` contredit ni sur l'image de `screenshot`. Une autre fenêtre de la même application n'hérite pas de la marque.
 - [ ] Ne marquent rien : une action sur une fenêtre visible, une action sans changement d'état (état demandé déjà là), une action sur un élément hors document web, un verdict « non vérifiable ».
-- [ ] Deux verdicts « contredit » de suite sur une fenêtre recouverte d'une application marquée retirent la marque ; une action vérifiée la rend. `Code.exe` part marquée et suit la même règle.
+- [ ] Deux verdicts « contredit » de suite sur une fenêtre marquée recouverte retirent sa marque ; une action vérifiée la rend. Une fenêtre vue minimisée perd sa marque. `Code.exe` reste marqué d'office pour toutes ses fenêtres (il désactive le calcul d'occlusion, US-058).
 - [ ] La ligne « Fenêtre minimisée » ne dépend pas de la marque : toute fenêtre Chromium minimisée la reçoit.
-- [ ] La marque vit dans la session, dans une table de taille fixe (8 exécutables, le plus ancien remplacé), sans écriture sur disque ni allocation en régime établi.
+- [ ] La marque vit dans la session, dans une table de taille fixe (8 fenêtres, la plus ancienne remplacée), sans écriture sur disque ni allocation en régime établi.
 - [ ] L'audit de l'action qui pose ou retire une marque l'enregistre.
 - [ ] Aucun outil, paramètre ni texte de `tools/list` ne change. Le comportement vaut dans les trois modes.
 - [ ] La décision ajoute < 1 ms p95 à une action sur une fenêtre Chromium et rien aux autres ; `bg-act` tient sa référence.
-- [ ] Les tests du cœur couvrent sur le backend factice : marque après une action vérifiée sous un document, les quatre cas qui ne marquent rien, retrait après deux contredits, marque rendue, Chrome figé jamais marqué.
-- [ ] La sonde vérifie sur VS Code lancé sans sa marque initiale (option de sonde) que la ligne disparaît après la première action vérifiée, et sur Chrome qu'elle reste ; VS Code Insiders ou Cursor sont mesurés s'ils sont installés, sinon `skipped`.
+- [ ] Les tests du cœur couvrent sur le backend factice : marque après une action vérifiée sous un document, les quatre cas qui ne marquent rien, retrait après deux contredits, marque rendue, marque propre à la fenêtre, perte à la minimisation, expiration s'il y en a une.
+- [ ] La sonde vérifie sur Chrome que la ligne reste après la première action (contredite) puis disparaît après une action vérifiée, et qu'une seconde fenêtre Chrome la garde ; sur VS Code lancé sans sa marque d'office (option de sonde), qu'elle disparaît après la première action vérifiée ; VS Code Insiders ou Cursor sont mesurés s'ils sont installés, sinon `skipped`.
 - [ ] Les résultats sont ajoutés à `bench/apps.md` et à la décision 0013.
 
 **Note de conception :** l'appartenance à un document web se lit dans le dernier arbre montré de la fenêtre (ancêtre de rôle `document`) ou par un aller-retour vers l'élément ; à choisir à l'implémentation, sous le budget.
+
+
+#### US-066: Verdicts vrais sur Chromium recouvert
+**Description:** En tant que Claude Code, je veux que le verdict d'un `ui_act` sur une page Chromium recouverte dise l'état réel, ou dise qu'il ne le connaît pas, afin de ne jamais conclure ni agir sur un état en retard d'une action.
+
+**Contexte (US-065, décision 0013) :** l'arbre d'un Chrome recouvert a une action de retard. Sur la case de la page A23, la lecture qui suit une bascule montre l'état d'avant, puis la bascule suivante pousse celui-là : « vérifié (décoché) » quand la case est cochée. `check` et `uncheck` lisent l'état avant d'agir et peuvent conclure « déjà coché » sans agir, ou basculer dans le mauvais sens. L'interface du navigateur (barre d'adresse, onglets) est à jour : 20 sur 20.
+
+**Priority:** P1
+**Size:** M (3 pts)
+**Dependencies:** Blocked by US-055, US-059, US-065
+
+**Acceptance Criteria:**
+- [x] La sonde `occlusion-probe flush` mesure d'abord, sur Chrome recouvert, arbre construit en vue, des appels UI Automation candidats à pousser l'effet en attente sans effet visible ni prise de focus ou de premier plan (relecture différée, `ScrollItem` d'un élément déjà en vue, `ScrollPattern` reposé à sa position, lecture du texte du document, et tout autre appel sans effet visible) : pour chacun, sur 20 bascules, combien de lectures qui suivent l'appel égalent la vérité lue fenêtre en vue, et le coût de l'appel au p95. Temps borné : une demi-journée. *(Fait : 9 candidats et 3 témoins, plus le contrôle d'un défilement en attente, `bench/apps.md` et décision 0013.)*
+- [x] Étant donné un appel qui donne au moins 19 lectures justes sur 20 et ne change rien de visible dans la page (position de défilement, focus, sélection relus avant et après), alors `ui_act` l'envoie, sur un élément du document web d'une fenêtre Chromium recouverte dont l'arbre n'est pas connu à jour, avant la lecture qui précède l'action et avant la relecture du verdict : le verdict et l'état lu avant sont vrais, sans déplacer la fenêtre. *(Sans objet : les seuls appels à 20 sur 20 sont des défilements qui annulent un défilement en attente, et `SetValue` déclenche les événements de saisie.)*
+- [x] Étant donné aucun appel qui le fasse, alors, pour un tel élément, le verdict est « délivré, effet non vérifiable », suivi de la ligne « Fenêtre recouverte », jamais « vérifié » ni « contredit » ; `check` et `uncheck` sont refusés avant toute action : « Précondition non remplie : <id> est dans une page Chromium recouverte, dont l'arbre a une action de retard : son état lu n'est pas le sien. Laisse une bande d'au moins 16 px visible avec window_set, puis réessaie. Aucune action exécutée. » ; `set_value`, `invoke`, `toggle`, `expand`, `collapse`, `select` et le défilement partent. *(Fait : `lagsBehind`, `lag_refusal` et `Outcome.lagging` dans `src/core/a11y.zig`.)*
+- [x] Rien ne change pour une fenêtre visible, une bande de 16 px en vue, une fenêtre de `Code.exe`, un élément de l'interface du navigateur (hors document web) et toute fenêtre non Chromium ; la décision ne lit l'ordre Z que pour un élément du document web d'une fenêtre Chromium (`Owner.web`).
+- [x] L'audit enregistre le verdict rendu ; `check` et `uncheck` refusés sont audités comme refus.
+- [x] Aucun outil ni paramètre ne change ; la formulation des verdicts sur Chromium recouvert est celle des deux critères ci-dessus. Le comportement vaut dans les modes `a11y` et `background`.
+- [ ] La voie ajoute < 1 ms p95 à une action sur un élément web d'une fenêtre Chromium recouverte, hors l'appel qui pousse l'effet s'il est retenu (mesuré à part), et rien aux autres ; `bg-act` tient sa référence. *(Décision mesurée à 88 µs au p95 ; `bg-act` reste à prouver par le bench de la nuit.)*
+- [x] Les tests du cœur couvrent sur le backend factice un arbre en retard d'une action : verdict vrai par la voie retenue (ou non vérifiable avec la ligne), `check` et `uncheck` (refusés ou justes), les cas où rien ne change. *(`src/core/lag_test.zig`.)*
+- [x] La sonde `durable` rejouée avec la voie retenue compare chaque verdict à la vérité lue en vue : 0 verdict « vérifié » ou « contredit » faux. *(0 verdict tiré de l'arbre sur 88 actions recouvertes.)*
+- [x] Les résultats sont ajoutés à `bench/apps.md` et à la décision 0013.
 
 ---
 
@@ -689,7 +714,7 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 
 **Priority:** P1
 **Size:** M (3 pts)
-**Dependencies:** Blocked by US-062, US-064, US-065
+**Dependencies:** Blocked by US-062, US-064, US-066
 
 **Acceptance Criteria:**
 - [ ] La campagne ne démarre que lancée par Arthur lui-même (commande de nuit), ou après son accord écrit sur son budget (tâches × répétitions × modes) ; la commande affiche ce budget avant la première exécution.
@@ -723,7 +748,7 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 - FR-44: L'audit de chaque action enregistre le mode, l'issue de la garde de premier plan et le verdict de livraison (étend FR-13).
 - FR-45: Le système ne doit offrir au modèle aucun moyen de quitter le mode arrière-plan ou d'autoriser une action intrusive.
 - FR-46: `select` sur une liste Win32 classique (`ComboBox`, `ListBox`) doit changer la sélection sans ouvrir la liste et prévenir la fenêtre propriétaire (`CBN_SELCHANGE`, `LBN_SELCHANGE`). Les seuls messages natifs envoyés à une application sont ceux de cette sélection.
-- FR-47: L'avertissement d'arbre figé d'une fenêtre Chromium recouverte doit cesser pour une application dont une action vérifiée prouve qu'elle rend recouverte, sans liste de noms à tenir ; ce qui est appris ne dépasse pas la session.
+- FR-47: Un `ui_act` sur un élément du document web d'une fenêtre Chromium recouverte dont l'arbre n'est pas connu à jour ne doit ni rapporter comme vrai un état lu en retard ni agir sur lui : il pousse l'effet en attente avant de lire, ou rend un verdict non vérifiable et refuse les actions qui dépendent de l'état lu (US-066).
 
 ## Non-Functional Requirements
 
@@ -770,7 +795,7 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 | 24 | Seconde instance | Un autre serveur contrôle déjà le bureau | Actions refusées (FR-14) | Message d'instance existant |
 | 25 | Liste sans chaînes | `select` avec un nom sur une liste dessinée par son propriétaire, une `ComboBoxEx32` ou une liste à sélection multiple | Voie UI Automation de US-053, aucun message natif | Résultat de US-053 |
 | 26 | Menu web fenêtre non active | `select` avec un nom sur un `<select>` de Chromium en mode arrière-plan | Aucune sélection, premier plan inchangé | « <conteneur> n'a aucune entrée sélectionnable » ; `expand` : « contredit, état lu replié » |
-| 27 | Application Electron inconnue recouverte | Fenêtre `Chrome_WidgetWin_*` recouverte d'une application jamais vue qui rend recouverte | Ligne d'avertissement tant qu'aucune action n'a été vérifiée, plus aucune ensuite (US-065) | « Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. […] » |
+| 27 | Verdict sur Chromium recouvert | `ui_act` sur un élément du document web d'une fenêtre `Chrome_WidgetWin_*` recouverte, hors `Code.exe` | Effet en attente poussé avant les lectures, ou verdict non vérifiable ; `check` et `uncheck` refusés dans ce second cas (US-066) | « <action> <id> : délivré, effet non vérifiable » suivi de « Fenêtre recouverte : Chromium suspend son rendu, l'arbre peut être figé. […] » |
 
 ## Risks & Mitigations
 
@@ -790,7 +815,7 @@ Prouver sur des tâches écrites avant tout résultat que le mode arrière-plan 
 | 12 | La restauration du premier plan contrarie l'utilisateur qui voulait la fenêtre cible | Low | Low | Aucune restauration si un geste capable de changer la fenêtre de premier plan a été vu (clic hors de sa fenêtre, touche avec Alt ou Win) ; trois restaurations au plus par action |
 | 13 | 27 stories dépassent une livraison | High | Low | Trois livraisons ordonnées ; la livraison 1 est utilisable seule |
 | 14 | Une liste de classe réelle `ComboBox` ou `ListBox` ne suit pas le protocole standard (sous-classée, données à la place du texte) : mauvaise entrée choisie ou application non prévenue | Low | Med | Styles vérifiés avant tout message ; verdict relu par `CB_GETCURSEL` ; repli sur UI Automation ; sonde WinForms dans US-064 |
-| 15 | Une action lue « vérifié » à tort sur un Chrome recouvert marque Chrome « rend recouverte » et supprime l'avertissement (A23) | Low | Med | Sonde A23 avant tout apprentissage ; éléments hors document web et actions sans changement d'état exclus ; marque retirée après deux contredits (US-065) |
+| 15 | Un verdict lu dans l'arbre d'un Chrome recouvert, en retard d'une action, rapporte l'état précédent et fait conclure ou agir à tort (A23) | High | Med | Effet en attente poussé avant les lectures si un appel sans effet visible le fait, sinon verdict non vérifiable et `check`/`uncheck` refusés ; sonde `durable` contre la vérité lue en vue (US-066) |
 
 ## Non-Goals
 

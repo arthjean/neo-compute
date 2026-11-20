@@ -1,4 +1,5 @@
-//! `neo-compute occlusion-probe [chrome|vscode|wpf]... [reps=N] [sit=NAME]`
+//! `neo-compute occlusion-probe [chrome|vscode|wpf|a23|durable|flush|pending]...
+//! [flush=NAME] [reps=N] [sit=NAME]`
 //! (US-058, assumption A19): does the tree of a Chromium or Electron window
 //! stay current while the window is covered?
 //!
@@ -22,8 +23,21 @@
 //! One more launch per application runs `expand` and `select` with a name on
 //! a combo box (a web `<select>`), in view and covered, and looks for the
 //! narrowest visible strip that keeps the tree current. `wpf` reads a WPF
-//! window within the second that follows its creation. Lines go to stderr;
-//! no element name of a live application is printed.
+//! window within the second that follows its creation.
+//!
+//! `a23` (assumption A23), run first: Chrome on `bench/pages/a23.html`,
+//! its tree built in view, then covered; 20 `ui_act` per cell for `toggle`,
+//! `set_value`, `expand` and `select`, on an element of the web document and
+//! on one of the browser's own interface, each asked against the state read
+//! just before it, and the verdicts counted. `durable` (US-066): covered
+//! toggles, after an uncover-cover cycle and after 10, 60 and 180 s without
+//! a request, each verdict counted as read from the covered tree or not,
+//! against the truth read in view; then a refused `check` and the cost of
+//! the decision. `flush` (US-066): calls that might push the covered tree's
+//! pending update without a visible effect, each after 20 toggles, and
+//! whether a scroll left pending survives the scroll calls; `flush=<name>`
+//! runs one, `pending` the scroll check alone. Lines go to stderr; no
+//! element name of a live application is printed.
 
 const std = @import("std");
 const w = @import("win32");
@@ -32,6 +46,7 @@ const uitree = @import("../../core/uitree.zig");
 const display = @import("../../core/display.zig");
 const mcp = @import("../../core/mcp.zig");
 const tools = @import("../../core/tools.zig");
+const a11y = @import("../../core/a11y.zig");
 const window = @import("window.zig");
 const fixture = @import("bg_fixture.zig");
 const bg = @import("bg_probe.zig");
@@ -753,6 +768,629 @@ fn wpf(p: *bg.Probe, at: [2]i32) void {
     }
 }
 
+// ---------------------------------------------------------------- US-065
+
+/// Chrome on the A23 page, a second tab of it for the tab strip's Select.
+const a23_chrome: bg.App = .{
+    .name = "chrome",
+    .argv = &.{ "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check", "--new-window", "{a23_url}", "{a23_url}#onglet-2" },
+    .exe = "chrome.exe",
+    .titles = &.{"neo-compute a23 page"},
+    .title_contains = true,
+    .chromium = true,
+    .steps = &.{},
+};
+
+const a23_box: Target = .{ .name = "chrome", .role = .checkbox, .names = &.{"Case A23"}, .queries = &.{"role:checkbox case a23"}, .needle = " checkbox \"" };
+
+/// The four actions A23 is measured for; `expand` stands for expand and
+/// collapse, which share ExpandCollapse.
+const A23Action = enum { toggle, set_value, expand, select };
+
+const Place = enum {
+    web,
+    browser,
+    fn label(p: Place) []const u8 {
+        return switch (p) {
+            .web => "web document",
+            .browser => "browser interface, outside the document",
+        };
+    }
+};
+
+const a23_actions_per_cell = 20;
+
+const A23Cell = struct {
+    measured: bool = false,
+    absent: []const u8 = "",
+    /// Verified with a change of the state read before the action.
+    verified: u32 = 0,
+    contradicted: u32 = 0,
+    unverifiable: u32 = 0,
+    other: u32 = 0,
+    first_other: [160]u8 = undefined,
+    first_other_len: usize = 0,
+    /// One letter per action, in order: V verified, C contradicted, U
+    /// unverifiable, X other.
+    seq: [a23_actions_per_cell]u8 = @splat('-'),
+    seq_len: usize = 0,
+
+    fn note(c: *A23Cell, letter: u8) void {
+        if (c.seq_len == c.seq.len) return;
+        c.seq[c.seq_len] = letter;
+        c.seq_len += 1;
+    }
+};
+
+/// The element of a cell: one of the page's on the web document, the first
+/// one of the browser's own interface with the pattern outside it.
+fn a23Element(els: []const uitree.Element, under: []const bool, action: A23Action, place: Place, skip_selected: bool) ?uitree.Element {
+    for (els, under) |e, web| {
+        if (web != (place == .web)) continue;
+        const ok = switch (action) {
+            .toggle => e.actions.toggle and (place == .browser or std.mem.indexOf(u8, e.name, "Case A23") != null),
+            .set_value => e.actions.value and e.role == .edit and (place == .browser or std.mem.indexOf(u8, e.name, "Champ A23") != null),
+            .expand => e.actions.expand_collapse and (place == .browser or std.mem.indexOf(u8, e.name, "Détails A23") != null),
+            .select => e.actions.select and (if (place == .web) e.role == .listitem else e.role == .tabitem) and !(skip_selected and e.states.selected),
+        };
+        if (ok) return e;
+    }
+    return null;
+}
+
+/// The id the server gives element `key`, read from a whole tree.
+fn idOfKey(r: *Run, hwnd: u64, key: u64, buf: []u8) ?[]const u8 {
+    const ids = &r.caller.server.session.ui.ids;
+    if (ids.by_key.get(key) == null) _ = r.caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{hwnd}) catch return null;
+    const id = ids.by_key.get(key) orelse return null;
+    var w_: std.Io.Writer = .fixed(buf);
+    uitree.writeId(&w_, id) catch return null;
+    return w_.buffered();
+}
+
+/// One action of a cell, asked against the state read just before it, so
+/// that a verified verdict is one with a change: what US-065 learns from.
+fn a23Act(r: *Run, hwnd: u64, action: A23Action, place: Place, cell: *A23Cell, n: usize) void {
+    const els = r.read(hwnd) orelse {
+        cell.other += 1;
+        return;
+    };
+    const under = uitree.underDocument(r.p.scratch.allocator(), els, false) catch return;
+    const e = a23Element(els, under, action, place, true) orelse {
+        cell.other += 1;
+        return;
+    };
+    var ib: [16]u8 = undefined;
+    const id = idOfKey(r, hwnd, e.key, &ib) orelse {
+        cell.other += 1;
+        return;
+    };
+    const res = switch (action) {
+        .toggle => r.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"toggle\",\"observe\":\"none\"}}", .{id}),
+        .set_value => r.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"set_value\",\"value\":\"{s}\",\"observe\":\"none\"}}", .{ id, if (n % 2 == 0) "deux" else "un" }),
+        .expand => r.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"{s}\",\"observe\":\"none\"}}", .{ id, if (e.states.expanded) "collapse" else "expand" }),
+        .select => r.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"select\",\"observe\":\"none\"}}", .{id}),
+    } catch {
+        cell.other += 1;
+        return;
+    };
+    const line = firstLine(res.text);
+    if (std.mem.indexOf(u8, line, " : vérifié") != null) {
+        cell.verified += 1;
+        cell.note('V');
+    } else if (std.mem.indexOf(u8, line, " : contredit") != null) {
+        cell.contradicted += 1;
+        cell.note('C');
+    } else if (std.mem.indexOf(u8, line, " : délivré") != null) {
+        cell.unverifiable += 1;
+        cell.note('U');
+    } else {
+        cell.other += 1;
+        cell.note('X');
+        if (cell.first_other_len == 0) {
+            cell.first_other_len = @min(line.len, cell.first_other.len);
+            @memcpy(cell.first_other[0..cell.first_other_len], line[0..cell.first_other_len]);
+        }
+    }
+}
+
+/// Assumption A23 (US-065, US-066): on a covered Chrome whose tree was
+/// built in view, the verdicts of each kind of action on the web document
+/// and on the browser's own interface. Since US-066 the web document's
+/// read "délivré, effet non vérifiable": its tree is one action behind.
+fn a23(r: *Run) void {
+    const p = r.p;
+    var arena_state: std.heap.ArenaAllocator = .init(p.gpa);
+    defer arena_state.deinit();
+    _ = r.call_arena.reset(.retain_capacity);
+    const o = r.open(arena_state.allocator(), a23_chrome) orelse return;
+    defer r.close("chrome", o);
+    w.Sleep(load_ms);
+    if (!r.buildInView(o.hwnd, a23_box)) {
+        p.print("chrome | a23 | the page's tree never showed with the window in view: A23 not measured", .{});
+        return;
+    }
+    // Every element read once in view, so the covered tree is the one
+    // built before the covering.
+    _ = r.caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{o.hwnd}) catch return;
+    if (!r.place(o.hwnd, .covered, 0)) return p.print("chrome | a23 | the window cannot be covered: A23 not measured", .{});
+    w.Sleep(settle_ms);
+    var b: [96]u8 = undefined;
+    const tree = r.caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{o.hwnd}) catch return;
+    p.print("chrome | a23 | covered: {s}; frozen-tree line {s}", .{ r.shows(o.hwnd, &b), if (std.mem.indexOf(u8, tree.text, "Chromium suspend son rendu") != null) "present" else "ABSENT" });
+
+    var cells: [2][4]A23Cell = @splat(@splat(.{}));
+    // The tab strip's Select changes the page shown: it runs last.
+    const order = [_]struct { Place, A23Action }{
+        .{ .web, .toggle },     .{ .web, .set_value },     .{ .web, .expand },     .{ .web, .select },
+        .{ .browser, .toggle }, .{ .browser, .set_value }, .{ .browser, .expand }, .{ .browser, .select },
+    };
+    for (order) |cell_of| {
+        if (p.lost) return;
+        const place, const action = cell_of;
+        const cell = &cells[@backingInt(place)][@backingInt(action)];
+        const els = r.read(o.hwnd) orelse continue;
+        const under = uitree.underDocument(p.scratch.allocator(), els, false) catch continue;
+        if (a23Element(els, under, action, place, false) == null) {
+            cell.absent = if (place == .web) "the page's element is not in the tree" else "no element of the browser's interface has the pattern";
+        } else {
+            cell.measured = true;
+            for (0..a23_actions_per_cell) |n| {
+                a23Act(r, o.hwnd, action, place, cell, n);
+                w.Sleep(150);
+            }
+            // An open menu of the browser closes again.
+            if (action == .expand and place == .browser) {
+                var unused: A23Cell = .{};
+                a23Act(r, o.hwnd, .expand, .browser, &unused, 0);
+            }
+        }
+        if (cell.measured) {
+            p.print("chrome | a23 | {t} | {s} | verified with a change: {d} of {d} (contradicted {d}, unverifiable {d}, other {d}{s}{s}) | in order {s} | {s}", .{
+                action,                                            place.label(),                             cell.verified,             a23_actions_per_cell, cell.contradicted, cell.unverifiable, cell.other,
+                if (cell.first_other_len > 0) ", first: " else "", cell.first_other[0..cell.first_other_len], cell.seq[0..cell.seq_len], r.shows(o.hwnd, &b),
+            });
+        } else p.print("chrome | a23 | {t} | {s} | not measured: {s}", .{ action, place.label(), cell.absent });
+        _ = p.decoy.front();
+    }
+    // US-066: on the covered web document no verdict may come from the
+    // tree, which is one action behind.
+    var from_tree: u32 = 0;
+    for (cells[@backingInt(Place.web)]) |c| from_tree += c.verified + c.contradicted;
+    p.print("chrome | a23 | web document: {d} verdict(s) read from the covered tree (US-066 wants 0)", .{from_tree});
+}
+
+/// US-065 (PRD 1.7): whether, and how long, the tree of a covered Chrome
+/// stays current once an action has read back. `toggle` on the A23 page's
+/// box right after the covering, twice more, then the window in view: the
+/// state it shows there is the truth the covered reads are compared with.
+/// Covered again, two actions, then after 10 s, 60 s and 180 s without any
+/// request, and the truth once more. A contradicted verdict is followed by
+/// 3 s of tree reads: the effect late, or never.
+fn durable(r: *Run) void {
+    const p = r.p;
+    var arena_state: std.heap.ArenaAllocator = .init(p.gpa);
+    defer arena_state.deinit();
+    _ = r.call_arena.reset(.retain_capacity);
+    durable_counts = .{};
+    const o = r.open(arena_state.allocator(), a23_chrome) orelse return;
+    defer r.close("chrome", o);
+    w.Sleep(load_ms);
+    if (!r.buildInView(o.hwnd, a23_box)) return p.print("chrome | durable | the page's tree never showed in view: not measured", .{});
+    _ = r.caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{o.hwnd}) catch return;
+    var toggles: u32 = 0;
+    const start = truth(r, o.hwnd, "in view before any action", null, null) orelse return;
+    if (!r.place(o.hwnd, .covered, 0)) return p.print("chrome | durable | the window cannot be covered: not measured", .{});
+    w.Sleep(settle_ms);
+    var last: ?bool = null;
+    for ([_][]const u8{ "first after the covering", "second", "third" }) |label| {
+        if (p.lost) return;
+        last = durableAct(r, o.hwnd, label) orelse last;
+        toggles += 1;
+        w.Sleep(150);
+    }
+    _ = truth(r, o.hwnd, "in view after 3 covered toggles", last, if (toggles % 2 == 0) start else !start);
+    if (!r.place(o.hwnd, .covered, 0)) return;
+    w.Sleep(settle_ms);
+    for ([_][]const u8{ "first after uncovered then covered again", "second after the cycle" }) |label| {
+        if (p.lost) return;
+        last = durableAct(r, o.hwnd, label) orelse last;
+        toggles += 1;
+        w.Sleep(150);
+    }
+    for ([_]u32{ 10, 60, 180 }) |sec| {
+        if (p.lost) return;
+        w.Sleep(sec * 1000);
+        var lb: [48]u8 = undefined;
+        last = durableAct(r, o.hwnd, std.fmt.bufPrint(&lb, "after {d} s without a request", .{sec}) catch "?") orelse last;
+        toggles += 1;
+    }
+    _ = truth(r, o.hwnd, "in view at the end", last, if (toggles % 2 == 0) start else !start);
+    p.print("chrome | durable | {d} covered toggles: {d} verdict(s) read from the covered tree, {d} delivered without a verdict (US-066 wants 0 from the tree)", .{ toggles, durable_counts.from_tree, durable_counts.unverifiable });
+    // `check` decides from the state it reads: refused, nothing sent.
+    const before = truthQuiet(r, o.hwnd);
+    if (!r.place(o.hwnd, .covered, 0)) return;
+    w.Sleep(settle_ms);
+    decisionCost(r, o.hwnd);
+    _ = p.decoy.front();
+    var ib: [16]u8 = undefined;
+    const els = r.read(o.hwnd) orelse return;
+    const box = pick(els, a23_box) orelse return;
+    const id = idOfKey(r, o.hwnd, box.key, &ib) orelse return;
+    const verb: []const u8 = if (before orelse false) "uncheck" else "check";
+    const res = r.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"{s}\",\"observe\":\"none\"}}", .{ id, verb }) catch return;
+    const refused = std.mem.indexOf(u8, res.text, "une action de retard") != null;
+    const after = truthQuiet(r, o.hwnd);
+    p.print("chrome | durable | covered {s}: {s} | truth before {s}, after {s}: {s}", .{
+        verb, if (refused) "refused" else "NOT REFUSED", stateName(before), stateName(after), if (before != null and std.meta.eql(before, after)) "unchanged" else "CHANGED OR UNREAD",
+    });
+}
+
+/// What `durableAct` counted since the start of `durable`.
+var durable_counts: struct { from_tree: u32 = 0, unverifiable: u32 = 0 } = .{};
+
+fn stateName(x: ?bool) []const u8 {
+    return if (x) |v| (if (v) "coché" else "décoché") else "unread";
+}
+
+/// The box's state in view, printed by nobody.
+fn truthQuiet(r: *Run, hwnd: u64) ?bool {
+    if (!(r.place(hwnd, .visible, 0) or r.place(hwnd, .other_display, 0))) return null;
+    w.Sleep(settle_ms);
+    var seen: ?bool = null;
+    const t0 = qpc();
+    while (msSince(t0) < 1500) {
+        if (r.read(hwnd)) |els| if (pick(els, a23_box)) |e| {
+            seen = e.states.checked;
+        };
+        w.Sleep(250);
+    }
+    return seen;
+}
+
+/// The box's state with the window in view (the tree is current there,
+/// US-058), against the last covered read and the state every delivered
+/// toggle would give. The window stays in view.
+fn truth(r: *Run, hwnd: u64, label: []const u8, covered_read: ?bool, delivered_or_null: ?bool) ?bool {
+    const p = r.p;
+    if (!(r.place(hwnd, .visible, 0) or r.place(hwnd, .other_display, 0))) return null;
+    w.Sleep(settle_ms);
+    const t0 = qpc();
+    var seen: ?bool = null;
+    while (msSince(t0) < 2000) {
+        if (r.read(hwnd)) |els| if (pick(els, a23_box)) |e| {
+            seen = e.states.checked;
+        };
+        w.Sleep(250);
+    }
+    const now = seen orelse {
+        p.print("chrome | durable | {s} | the box is not in the tree", .{label});
+        return null;
+    };
+    const name = struct {
+        fn f(x: bool) []const u8 {
+            return if (x) "coché" else "décoché";
+        }
+    }.f;
+    const delivered = delivered_or_null orelse {
+        p.print("chrome | durable | {s} | truth {s}", .{ label, name(now) });
+        return now;
+    };
+    if (covered_read) |c| {
+        p.print("chrome | durable | {s} | truth {s} | last covered read {s}: {s} | every toggle delivered would give {s}: {s}", .{
+            label, name(now), name(c), if (c == now) "current" else "BEHIND", name(delivered), if (delivered == now) "all delivered" else "SOME LOST",
+        });
+    } else p.print("chrome | durable | {s} | truth {s} | no covered read | every toggle delivered would give {s}: {s}", .{ label, name(now), name(delivered), if (delivered == now) "all delivered" else "SOME LOST" });
+    return now;
+}
+
+/// One covered toggle; the state it read back, null when it read none.
+fn durableAct(r: *Run, hwnd: u64, label: []const u8) ?bool {
+    const p = r.p;
+    _ = p.decoy.front();
+    const els = r.read(hwnd) orelse {
+        p.print("chrome | durable | {s} | tree not readable", .{label});
+        return null;
+    };
+    const e = pick(els, a23_box) orelse {
+        p.print("chrome | durable | {s} | the box is not in the tree", .{label});
+        return null;
+    };
+    const was = e.states.checked;
+    var ib: [16]u8 = undefined;
+    const id = idOfKey(r, hwnd, e.key, &ib) orelse {
+        p.print("chrome | durable | {s} | the box has no id", .{label});
+        return null;
+    };
+    const t0 = qpc();
+    const res = r.caller.call("ui_act", "{{\"id\":\"{s}\",\"action\":\"toggle\",\"observe\":\"none\"}}", .{id}) catch return null;
+    const act_ms = msSince(t0);
+    const line = r.call_arena.allocator().dupe(u8, firstLine(res.text)) catch "";
+    var b: [96]u8 = undefined;
+    if (std.mem.indexOf(u8, line, " : vérifié") != null or std.mem.indexOf(u8, line, " : contredit") != null) durable_counts.from_tree += 1;
+    if (std.mem.indexOf(u8, line, " : délivré, effet non vérifiable") != null) {
+        durable_counts.unverifiable += 1;
+        p.print("chrome | durable | {s} | {s} in {d} ms | {s}", .{ label, line, act_ms, r.shows(hwnd, &b) });
+        return null;
+    }
+    const read: ?bool = if (std.mem.indexOf(u8, line, "(décoché)") != null or std.mem.indexOf(u8, line, "lu décoché") != null) false else if (std.mem.indexOf(u8, line, "(coché)") != null or std.mem.indexOf(u8, line, "lu coché") != null) true else null;
+    if (std.mem.indexOf(u8, line, " : vérifié") != null) {
+        p.print("chrome | durable | {s} | {s} in {d} ms | {s}", .{ label, line, act_ms, r.shows(hwnd, &b) });
+        return read;
+    }
+    var late: ?u64 = null;
+    while (msSince(t0) < act_ms + effect_wait_ms) {
+        if (r.read(hwnd)) |now| if (pick(now, a23_box)) |el| if (el.states.checked != was) {
+            late = msSince(t0);
+            break;
+        };
+        w.Sleep(40);
+    }
+    var lb: [48]u8 = undefined;
+    p.print("chrome | durable | {s} | {s} | effect in the tree: {s} | {s}", .{ label, line, if (late) |ms| std.fmt.bufPrint(&lb, "after {d} ms", .{ms}) catch "?" else "NOT within 3 s", r.shows(hwnd, &b) });
+    return if (late != null) !was else read;
+}
+
+/// What the US-066 decision adds to an action on a web element of a
+/// covered Chromium window: the z-order read and judged by Chromium's rules
+/// (< 1 ms p95).
+fn decisionCost(r: *Run, hwnd: u64) void {
+    const p = r.p;
+    var scratch: std.heap.ArenaAllocator = .init(p.gpa);
+    defer scratch.deinit();
+    var judge: [200]u64 = undefined;
+    for (&judge) |*us| {
+        _ = scratch.reset(.retain_capacity);
+        const a = scratch.allocator();
+        const t0 = selftest.qpcUs();
+        const layers = p.backend.windowLayers(a);
+        if (a11y.layerIndex(layers, hwnd)) |at| _ = a11y.coveredIn(a, layers, at, p.backend.displays(), true);
+        us.* = selftest.qpcUs() - t0;
+    }
+    std.mem.sort(u64, &judge, {}, std.sort.asc(u64));
+    const p95 = judge[judge.len * 95 / 100];
+    p.print("chrome | decision cost | z-order and Chromium's rules: median {d} us, p95 {d} us, budget 1000 us: {s}", .{ judge[judge.len / 2], p95, if (p95 < 1000) "within" else "OVER" });
+}
+
+// ---------------------------------------------------------------- US-066
+
+/// Calls that might push a covered Chrome's pending tree update without a
+/// visible effect (US-066). `reread` and `snapshot` are controls.
+const Flush = enum {
+    reread,
+    snapshot,
+    text,
+    scroll_item,
+    scroll_to,
+    scroll_noscroll,
+    scroll_noamount,
+    collapse_collapsed,
+    same_value,
+
+    fn label(f: Flush) []const u8 {
+        return switch (f) {
+            .reread => "control: the box read again 300 ms later",
+            .snapshot => "control: the whole tree read again",
+            .text => "the tree read with the web text (ui_tree text)",
+            .scroll_item => "ScrollItem.ScrollIntoView on the box, already in view",
+            .scroll_to => "ScrollPattern.SetScrollPercent of the document to where it is",
+            .scroll_noscroll => "ScrollPattern.SetScrollPercent(NoScroll, NoScroll) on the document",
+            .scroll_noamount => "ScrollPattern.Scroll(NoAmount, NoAmount) on the document",
+            .collapse_collapsed => "ExpandCollapse.Collapse on the collapsed <details>",
+            .same_value => "ValuePattern.SetValue of the text field to its own value",
+        };
+    }
+};
+
+const flush_toggles = 20;
+/// `flush=<candidate>`: that one alone.
+var flush_only: ?Flush = null;
+
+/// What the page shows in view: the box, the document's scroll position,
+/// the focused element.
+const PageState = struct { box: bool, scroll: ?f32, focused: ?u64 };
+
+fn pageInView(r: *Run, hwnd: u64, box_key: u64, host: ?u64) ?PageState {
+    if (!(r.place(hwnd, .visible, 0) or r.place(hwnd, .other_display, 0))) return null;
+    w.Sleep(settle_ms);
+    var st: ?PageState = null;
+    const t0 = qpc();
+    while (msSince(t0) < 1500) {
+        if (r.read(hwnd)) |els| {
+            var box: ?bool = null;
+            var focused: ?u64 = null;
+            for (els) |e| {
+                if (e.key == box_key) box = e.states.checked;
+                if (e.states.focused) focused = e.key;
+            }
+            const scroll: ?f32 = if (host) |h| switch (r.p.backend.uiLive(r.p.scratch.allocator(), hwnd, h, .all)) {
+                .ok => |l| if (l.scroll) |sc| sc.v else null,
+                else => null,
+            } else null;
+            if (box) |b| st = .{ .box = b, .scroll = scroll, .focused = focused };
+        }
+        w.Sleep(250);
+    }
+    return st;
+}
+
+fn liveBox(r: *Run, hwnd: u64, key: u64) ?bool {
+    return switch (r.p.backend.uiLive(r.p.scratch.allocator(), hwnd, key, .toggle)) {
+        .ok => |l| if (l.toggle) |t| t == .on else null,
+        else => null,
+    };
+}
+
+/// One candidate call; false when it failed or is unavailable.
+fn flushCall(r: *Run, f: Flush, hwnd: u64, box_key: u64, host: ?u64, details: ?u64, field: ?u64, field_value: []const u8) bool {
+    const b = r.p.backend;
+    const a = r.p.scratch.allocator();
+    switch (f) {
+        .reread => w.Sleep(300),
+        .snapshot => _ = b.uiSnapshot(a, hwnd, .{}),
+        .text => _ = b.uiSnapshot(a, hwnd, .{ .text = true }),
+        .scroll_item => return b.uiOp(a, hwnd, box_key, .scroll_item) == .ok,
+        .scroll_to => {
+            const h = host orelse return false;
+            const now: ?f32 = switch (b.uiLive(a, hwnd, h, .all)) {
+                .ok => |l| if (l.scroll) |sc| sc.v else null,
+                else => null,
+            };
+            return now != null and b.uiOp(a, hwnd, h, .{ .scroll_to = .{ .v = now.? } }) == .ok;
+        },
+        .scroll_noscroll => return b.uiOp(a, hwnd, host orelse return false, .{ .scroll_to = .{} }) == .ok,
+        .scroll_noamount => return b.uiOp(a, hwnd, host orelse return false, .{ .scroll = .{ .h = .none, .v = .none } }) == .ok,
+        .collapse_collapsed => return b.uiOp(a, hwnd, details orelse return false, .collapse) == .ok,
+        .same_value => return b.uiOp(a, hwnd, field orelse return false, .{ .set_value = field_value }) == .ok,
+    }
+    return true;
+}
+
+/// A scroll of the covered document left pending, then the candidate: does
+/// the call keep it (the truth in view moved) or put the stale position
+/// back?
+fn pendingScroll(r: *Run, f: Flush, hwnd: u64, box_key: u64, host: u64, in_view: bool) void {
+    const p = r.p;
+    const start = pageInView(r, hwnd, box_key, host) orelse return;
+    if (!in_view) {
+        if (!r.place(hwnd, .covered, 0)) return;
+        w.Sleep(settle_ms);
+    }
+    _ = p.scratch.reset(.retain_capacity);
+    const moved = p.backend.uiOp(p.scratch.allocator(), hwnd, host, .{ .scroll = .{ .h = .none, .v = .large_forward } }) == .ok;
+    const called = flushCall(r, f, hwnd, box_key, host, null, null, "");
+    w.Sleep(200);
+    const read: ?f32 = switch (p.backend.uiLive(p.scratch.allocator(), hwnd, host, .all)) {
+        .ok => |l| if (l.scroll) |sc| sc.v else null,
+        else => null,
+    };
+    const end = pageInView(r, hwnd, box_key, host) orelse return;
+    const kept = !std.meta.eql(start.scroll, end.scroll);
+    p.print("chrome | flush | {s}scroll, then {s} | scroll {s}, call {s} | covered read {d:.1} %, in view before {d:.1} % and after {d:.1} % | {s}", .{
+        if (in_view) "IN VIEW (control) " else "pending covered ",   f.label(), if (moved) "sent" else "FAILED", if (called) "ok" else "FAILED", read orelse -1, start.scroll orelse -1, end.scroll orelse -1,
+        if (kept) "the scroll is kept" else "THE SCROLL WAS UNDONE",
+    });
+    // Back to the top for the next measure.
+    _ = p.backend.uiOp(p.scratch.allocator(), hwnd, host, .{ .scroll_to = .{ .v = 0 } });
+    w.Sleep(300);
+}
+
+/// US-066: the scroll test alone, with its controls: a scroll in view, a
+/// pending covered scroll with no call after it, then each call that sets
+/// no position.
+fn pending(r: *Run) void {
+    const p = r.p;
+    var arena_state: std.heap.ArenaAllocator = .init(p.gpa);
+    defer arena_state.deinit();
+    _ = r.call_arena.reset(.retain_capacity);
+    const o = r.open(arena_state.allocator(), a23_chrome) orelse return;
+    defer r.close("chrome", o);
+    w.Sleep(load_ms);
+    if (!r.buildInView(o.hwnd, a23_box)) return;
+    const els = r.read(o.hwnd) orelse return;
+    const box = pick(els, a23_box) orelse return;
+    const host = p.backend.uiScrollHost(p.scratch.allocator(), o.hwnd, box.key) orelse return p.print("chrome | flush | no scroll host", .{});
+    pendingScroll(r, .reread, o.hwnd, box.key, host, true);
+    pendingScroll(r, .reread, o.hwnd, box.key, host, false);
+    for ([_]Flush{ .scroll_noscroll, .scroll_noamount, .scroll_to }) |f| pendingScroll(r, f, o.hwnd, box.key, host, false);
+}
+
+/// US-066: on a covered Chrome whose tree was built in view, each candidate
+/// call after each of 20 toggles of the A23 box, then the box read back for
+/// 400 ms as `ui_act` does: how many reads equal the truth (every toggle is
+/// delivered, checked in view at the end), what the call costs, and whether
+/// the page's scroll position or focus moved.
+fn flush(r: *Run) void {
+    const p = r.p;
+    var arena_state: std.heap.ArenaAllocator = .init(p.gpa);
+    defer arena_state.deinit();
+    _ = r.call_arena.reset(.retain_capacity);
+    const o = r.open(arena_state.allocator(), a23_chrome) orelse return;
+    defer r.close("chrome", o);
+    w.Sleep(load_ms);
+    if (!r.buildInView(o.hwnd, a23_box)) return p.print("chrome | flush | the page's tree never showed in view: not measured", .{});
+    const hwnd = o.hwnd;
+    const els0 = r.read(hwnd) orelse return;
+    const box = pick(els0, a23_box) orelse return;
+    const box_key = box.key;
+    const under = uitree.underDocument(p.scratch.allocator(), els0, false) catch return;
+    var details: ?u64 = null;
+    var field: ?u64 = null;
+    var field_value: []const u8 = "";
+    for (els0, under) |e, web| {
+        if (!web) continue;
+        if (details == null and e.actions.expand_collapse and std.mem.indexOf(u8, e.name, "Détails A23") != null) details = e.key;
+        if (field == null and e.role == .edit and std.mem.indexOf(u8, e.name, "Champ A23") != null) {
+            field = e.key;
+            field_value = arena_state.allocator().dupe(u8, e.value orelse "") catch "";
+        }
+    }
+    const host = p.backend.uiScrollHost(p.scratch.allocator(), hwnd, box_key);
+    p.print("chrome | flush | scroll host of the box: {s}; <details>: {s}; text field: {s}", .{ if (host != null) "found" else "NONE", if (details != null) "found" else "NONE", if (field != null) "found" else "NONE" });
+
+    for (std.enums.values(Flush)) |f| {
+        if (p.lost) return;
+        if (flush_only) |only| if (only != f) continue;
+        const start = pageInView(r, hwnd, box_key, host) orelse return p.print("chrome | flush | {s} | the page cannot be read in view: not measured", .{f.label()});
+        if (!r.place(hwnd, .covered, 0)) return;
+        w.Sleep(settle_ms);
+        var state = start.box;
+        var right: u32 = 0;
+        var first_right = false;
+        var costs: [flush_toggles]u64 = undefined;
+        var n_cost: usize = 0;
+        var seq: [flush_toggles]u8 = @splat('-');
+        var unsupported = false;
+        for (0..flush_toggles) |i| {
+            _ = r.call_arena.reset(.retain_capacity);
+            _ = p.scratch.reset(.retain_capacity);
+            const a = p.scratch.allocator();
+            if (p.backend.uiOp(a, hwnd, box_key, .toggle) != .ok) {
+                seq[i] = 'X';
+                continue;
+            }
+            state = !state;
+            const t0 = selftest.qpcUs();
+            unsupported = !flushCall(r, f, hwnd, box_key, host, details, field, field_value) or unsupported;
+            if (f != .reread and n_cost < costs.len) {
+                costs[n_cost] = selftest.qpcUs() - t0;
+                n_cost += 1;
+            }
+            // The read-back of `ui_act`: 400 ms at most, every 50 ms.
+            const r0 = qpc();
+            var ok = false;
+            while (true) {
+                if (liveBox(r, hwnd, box_key)) |b| if (b == state) {
+                    ok = true;
+                    break;
+                };
+                if (msSince(r0) >= 400) break;
+                w.Sleep(50);
+            }
+            seq[i] = if (ok) 'R' else 'w';
+            right += @intFromBool(ok);
+            if (i == 0) first_right = ok;
+            w.Sleep(100);
+        }
+        const end = pageInView(r, hwnd, box_key, host) orelse return;
+        std.mem.sort(u64, costs[0..n_cost], {}, std.sort.asc(u64));
+        const p95 = if (n_cost > 0) costs[n_cost * 95 / 100] else 0;
+        const moved_scroll = !std.meta.eql(start.scroll, end.scroll);
+        const moved_focus = start.focused != end.focused;
+        const delivered = end.box == state;
+        p.print("chrome | flush | {s} | reads equal to the truth: {d} of {d} (first after the covering: {s}) | in order {s} | call p95 {d} us | in view at the end: every toggle {s}, scroll {s}, focus {s}{s}", .{
+            f.label(),                                 right,                                                           flush_toggles,                                       if (first_right) "right" else "wrong",
+            seq[0..],                                  p95,                                                             if (delivered) "delivered" else "NOT ALL DELIVERED", if (moved_scroll) "MOVED" else "unchanged",
+            if (moved_focus) "MOVED" else "unchanged", if (unsupported) " | the call FAILED or is unavailable" else "",
+        });
+        _ = p.decoy.front();
+        switch (f) {
+            .scroll_item, .scroll_to, .scroll_noscroll, .scroll_noamount => if (host) |h| pendingScroll(r, f, hwnd, box_key, h, false),
+            else => {},
+        }
+    }
+}
+
 pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, log: *std.Io.Writer, args: []const [:0]const u8) !u8 {
     _ = env;
     var reps: usize = 10;
@@ -771,10 +1409,16 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
                 log.print("occlusion-probe: unknown situation `{s}` (visible, covered, strip, other_display, minimized)\n", .{arg["sit=".len..]}) catch {};
                 return 2;
             };
-        } else if (std.mem.eql(u8, arg, "chrome") or std.mem.eql(u8, arg, "vscode") or std.mem.eql(u8, arg, "wpf")) {
+        } else if (std.mem.startsWith(u8, arg, "flush=")) {
+            flush_only = std.meta.stringToEnum(Flush, arg["flush=".len..]) orelse {
+                log.print("occlusion-probe: unknown flush candidate `{s}`\n", .{arg["flush=".len..]}) catch {};
+                return 2;
+            };
+            try wanted.append(gpa, "flush");
+        } else if (std.mem.eql(u8, arg, "chrome") or std.mem.eql(u8, arg, "vscode") or std.mem.eql(u8, arg, "wpf") or std.mem.eql(u8, arg, "a23") or std.mem.eql(u8, arg, "durable") or std.mem.eql(u8, arg, "flush") or std.mem.eql(u8, arg, "pending")) {
             try wanted.append(gpa, arg);
         } else {
-            log.print("occlusion-probe: unknown argument `{s}` (chrome, vscode, wpf, reps=N, sit=NAME)\n", .{arg}) catch {};
+            log.print("occlusion-probe: unknown argument `{s}` (chrome, vscode, wpf, a23, durable, flush, flush=NAME, pending, reps=N, sit=NAME)\n", .{arg}) catch {};
             return 2;
         }
     }
@@ -821,6 +1465,11 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     defer r.pids.deinit(gpa);
     p.print("decoy 0x{x} of another process in the foreground, visible frame {d},{d} {d}x{d}; target frame {d}x{d}; {d} launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; {d} display(s)", .{ @intFromPtr(decoy.hwnd), frame.x, frame.y, frame.w, frame.h, r.size[0], r.size[1], reps, displays.len });
 
+    // A23 first (US-065): what learning may rely on.
+    if (want(wanted.items, "a23") and !p.lost) a23(&r);
+    if (want(wanted.items, "durable") and !p.lost) durable(&r);
+    if (want(wanted.items, "flush") and !p.lost) flush(&r);
+    if (want(wanted.items, "pending") and !p.lost) pending(&r);
     for (targets) |t| if (!p.lost and want(wanted.items, t.name)) {
         const app = for (bg.reference_apps) |a| {
             if (std.mem.eql(u8, a.name, t.name)) break a;

@@ -144,6 +144,9 @@ pub const Root = struct {
     /// Nothing of the window shows under the windows above it (US-059);
     /// filled by the core.
     occluded: bool = false,
+    /// A Chromium or Electron window (`Chrome_WidgetWin_*`); filled by the
+    /// core from the z-order it reads for `occluded`.
+    chromium: bool = false,
 };
 
 /// What a snapshot reads beyond the target window's tree.
@@ -673,6 +676,26 @@ pub fn writeRootHeader(w: *std.Io.Writer, m: Mapping, root: Root) !void {
     if (root.occluded) try w.writeAll(" {occluded}");
 }
 
+/// Whether each of `elements` (pre-order, with depths) belongs to a web
+/// document: of role `document` or under one (US-066). The document itself
+/// is the page's scroll target, read from the same tree as its
+/// descendants. With `base`, every element does: the elements of a subtree
+/// whose root belongs to one.
+pub fn underDocument(arena: std.mem.Allocator, elements: []const Element, base: bool) ![]bool {
+    const out = try arena.alloc(bool, elements.len);
+    // Depth of the outermost open document; the next element at its depth
+    // or above closes it.
+    var doc: ?u16 = null;
+    for (elements, out) |e, *under| {
+        if (doc) |d| if (e.depth <= d) {
+            doc = null;
+        };
+        if (doc == null and e.role == .document) doc = e.depth;
+        under.* = base or doc != null;
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------- ids
 
 /// Session-stable element ids: an element keeps its id as long as it
@@ -683,8 +706,10 @@ pub const Ids = struct {
 
     /// `window`: the root the element belongs to, which the policy checks
     /// and the action targets; `tree`: the window whose tree listed it,
-    /// which the post-action observation reads (a menu closes once used).
-    pub const Owner = struct { key: u64, window: u64, tree: u64 };
+    /// which the post-action observation reads (a menu closes once used);
+    /// `web`: the last tree that listed it put it in a web document of a
+    /// Chromium window (US-066).
+    pub const Owner = struct { key: u64, window: u64, tree: u64, web: bool = false };
 
     pub fn deinit(self: *Ids, gpa: std.mem.Allocator) void {
         self.by_key.deinit(gpa);
@@ -714,6 +739,12 @@ pub const Ids = struct {
     pub fn owner(self: *const Ids, id: u32) ?Owner {
         if (id == 0 or id > self.owners.items.len) return null;
         return self.owners.items[id - 1];
+    }
+
+    /// Records whether element `id` belongs to a web document (US-066).
+    pub fn setWeb(self: *Ids, id: u32, web: bool) void {
+        if (id == 0 or id > self.owners.items.len) return;
+        self.owners.items[id - 1].web = web;
     }
 };
 

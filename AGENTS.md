@@ -80,7 +80,9 @@ compiles a WinForms window with the .NET Framework `csc` into
 ends with one real click on the decoy; `neo-compute bg-probe` (US-040) does the
 same with the six reference applications, which it opens and closes, as does
 `neo-compute occlusion-probe` (US-058: Chrome, VS Code and a WPF window,
-about 30 min for the 10 launches per situation, `reps=1` for one),
+about 30 min for the 10 launches per situation, `reps=1` for one; `a23`,
+`durable` (about 5 min), `flush` and `pending`, US-066: Chrome on two tabs of
+`bench/pages/a23.html`),
 `neo-compute capture-probe` (US-060: the six applications, each shown in
 view then covered and captured 20 times; `save=DIR` writes the captures as
 JPEG, which show whatever those windows show: never into the repository) and
@@ -215,7 +217,16 @@ cursor by 6 px once. Run them one at a time.
   read back stays as it was, so `ui_act` answers "contredit" for an action
   that worked. A strip of 16 px in view keeps it current; VS Code turns that
   calculation off (`renders_covered` in `a11y.zig`) but stops like Chrome
-  once minimized. The core decides what
+  once minimized. A covered Chrome's tree is one action behind: from its
+  second action on, a read-back shows the state the previous action left
+  (`occlusion-probe durable`). So `ui_act` on an element under the web
+  document of such a window (`Owner.web`, from the last tree shown) answers
+  "délivré, effet non vérifiable" with the frozen-tree line, reads back once,
+  refuses `check` and `uncheck`, and scrolls whatever position it reads
+  (US-066, `lagging` in `a11y.zig`). Every UI Automation call that flushes
+  that tree is a scroll call that undoes a pending scroll (`occlusion-probe
+  flush`, decision 0013). Judge a covered Chromium read against the truth in
+  view, never against the verdict alone. The core decides what
   is occluded (`occlusion` in `a11y.zig`, `hidden` in `display.zig`) from
   one backend primitive, `windowLayers` (the z-order, read once per call;
   `window_list` takes it from the enumeration of its own list, a second

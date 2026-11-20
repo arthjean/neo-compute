@@ -149,3 +149,87 @@ for the whole tree, `ui_find id:` 0.87 ms p95, reading the z-order and the
 occlusion calculation 0.14 ms p95 with 51 windows above the target (62 in
 the z-order). `window_list` with the flag (ReleaseFast bench): `dispatch`
 0.43 to 0.61 ms p95 against a 0.61 ms reference.
+
+## Assumption A23 and learned rendering (US-065)
+
+Measured on 2026-11-20 with `neo-compute occlusion-probe a23 learn unmarked`
+(Debug build, two passes of `a23`), full output in
+`docs/decisions/0013-occlusion-probe-a23-run.txt`. Chrome opens two tabs of
+`bench/pages/a23.html`; its tree is built in view, then the window goes
+entirely under the decoy. 20 `ui_act` per cell through a `--mode background`
+server, each asked against the state read just before it.
+
+| Action | Web document, verified with a change (pass 1 / pass 2) | Browser interface, outside the document |
+|---|---|---|
+| toggle | 19 / 19 of 20, first one contradicted | no element with Toggle |
+| set_value | 13 / 14 of 20, the rest reformatted | 20 of 20 (address bar) |
+| expand, collapse | 19 / 19 of 20, first one contradicted | 0 of 20: ExpandCollapse fails (`hr=0x80004005`) |
+| select | 7 / 7 of 20, 13 contradicted | 20 of 20 (tabs) |
+
+A23 is refuted for all four actions: a tree built in view keeps following
+the actions under the cover once the first one has passed. Learning is
+therefore off by default (`RendersCovered.learning`, US-065 blocked). With it
+on in the probe's server, VS Code started without its mark lost the
+frozen-tree line after one verified toggle, Chrome kept it after its first
+(contradicted) action; VS Code Insiders is not installed and Cursor's window
+did not show the panel button. The decision costs 49 to 79 us p95 for the
+z-order judged by Chromium's rules and 533 to 672 us p95 for the value read
+before a `set_value` on a web element: 582 to 735 us in all, under the 1 ms
+budget.
+
+The `durable` phase of the same probe (2026-11-20) reads the truth with the
+window back in view and shows the verified reads above to be an artifact:
+a covered Chrome's tree is one action behind. The first action after each
+covering reads back contradicted and its effect does not show within 3 s;
+every later one reads back verified in 62 to 67 ms, after 10, 60 and 180 s
+without a request too, but with the state the previous action left (truth
+"décoché" against a last covered read of "coché", then the reverse). Every
+action was delivered. VS Code reads back verified from its first action. A
+verdict therefore cannot tell a current tree on a covered Chrome, and
+learning stays off. US-065 was then cancelled (PRD 1.8) and its table,
+rule and audit field removed; `Code.exe` is again a fixed list in
+`a11y.zig`.
+
+## Flushing a covered Chrome's tree, and honest verdicts (US-066)
+
+Measured on 2026-11-20 with `neo-compute occlusion-probe flush`, `pending`
+and `flush=<name>` (Debug build), full output in
+`docs/decisions/0013-occlusion-probe-a23-run.txt`. Chrome on the A23 page,
+tree built in view, then covered; for each candidate, 20 toggles of the box,
+the candidate called after each, then the box read and compared with the
+truth read in view. A second check leaves a covered scroll pending
+(`Scroll(NoAmount, LargeIncrement)` on the document), calls the candidate
+and reads the position in view.
+
+| Candidate | Reads equal to the truth | Call p95 | Pending scroll |
+|---|---|---|---|
+| reread 300 ms later (control) | 0 of 20 | - | kept (control) |
+| whole tree read again | 0 of 20 | 14.9 ms | - |
+| tree read with the web text | 0 of 20 | 17.0 ms | - |
+| ScrollItem.ScrollIntoView, box in view | 8 of 20 (18 in a first run) | 0.5 ms | undone |
+| SetScrollPercent to the position read | 20 of 20 | 1.6 ms | undone |
+| SetScrollPercent(NoScroll, NoScroll) | 20 of 20 | 1.2 ms | undone |
+| Scroll(NoAmount, NoAmount) | 20 of 20 | 1.2 ms | undone |
+| TextPattern.DocumentRange.GetBoundingRectangles | 0 of 20 | 1.0 ms | kept |
+| Collapse on a collapsed `<details>` | 0 of 20, call fails | 2.8 ms | - |
+| SetValue of the field to its own value | 20 of 20 | 2.4 ms | - (input events) |
+
+Every call that flushes the tree is a scroll call on the document, and
+each one puts back the stale position: a covered scroll still pending is
+undone (in view 0 % after, 28.7 % without the call). SetValue fires input
+events in the page. No candidate flushes without a visible effect, so
+`ui_act` takes the second branch of US-066: on an element under the web
+document of a covered Chromium window whose tree is not known current, the
+verdict is "délivré, effet non vérifiable" with the frozen-tree line,
+`check` and `uncheck` are refused before any action, the read-back reads
+once instead of polling 400 ms, and a scroll leaves even where the stale
+position says the end is reached.
+
+Replay through `ui_act` (`occlusion-probe a23 durable`, same day): on the
+covered web document, 80 actions of `a23` (toggle, set_value, expand,
+select) and 8 toggles of `durable` read "délivré, effet non vérifiable",
+0 verdict from the tree; the truth in view shows all 8 toggles delivered;
+a covered `uncheck` is refused and the box keeps its state. The browser's
+interface is unchanged: set_value 20 of 20 and select 20 of 20 verified.
+The decision (z-order judged by Chromium's rules) costs 43 us median and
+88 us p95, under the 1 ms budget.

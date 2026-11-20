@@ -251,6 +251,11 @@ pub const Fake = struct {
     /// Pattern calls succeed and change nothing: an application that
     /// ignores them.
     ui_stuck: bool = false,
+    /// A covered Chrome's tree (US-066): one action behind. A live read of
+    /// the element of the last pattern call gives it as it was before that
+    /// call; the next call pushes it.
+    ui_lag: bool = false,
+    ui_lagged: ?uitree.Element = null,
     /// The application rewrites the value it is given.
     ui_reformat: bool = false,
     /// Elements with an MSAA default action.
@@ -960,13 +965,15 @@ pub const Fake = struct {
         if (self.ui_enable_at_read) |n| if (self.ui_live_reads >= n) if (self.mutable(key)) |c| {
             c.el.states.disabled = false;
         };
-        const e = self.liveElement(key) orelse return .gone;
+        const now = self.liveElement(key) orelse return .gone;
+        const lagged = if (self.ui_lagged) |old| old.key == key else false;
+        const e = if (lagged) self.ui_lagged.? else now;
         var l: uitree.Live = .{ .enabled = !e.states.disabled, .offscreen = e.states.offscreen or self.unrevealed(key), .password = e.password, .rect = e.rect, .actions = e.actions, .range = e.range, .scroll = e.scroll };
         if (e.actions.toggle) l.toggle = if (e.states.checked) .on else if (e.states.mixed) .mixed else .off;
         if (e.actions.expand_collapse) l.expand = if (e.states.expanded) .expanded else if (e.states.collapsed) .collapsed else .leaf;
         if (e.actions.select) l.selected = e.states.selected;
         if (want_value and e.actions.value and !e.password) {
-            const set = for (self.ui_changed[0..self.ui_changed_len]) |c| {
+            const set = if (lagged) null else for (self.ui_changed[0..self.ui_changed_len]) |c| {
                 if (c.el.key == key) break c.value_hash;
             } else null;
             l.value_hash = set orelse uitree.textHashUtf8(arena, e.value orelse "");
@@ -998,6 +1005,7 @@ pub const Fake = struct {
         if (self.gesture_on_act and self.gesture != null) self.gesture = true;
         if (self.foreground_after_act) |f| self.foregroundEvent(f);
         if (self.ui_stuck) return .ok;
+        if (self.ui_lag) self.ui_lagged = e;
         const c = self.mutable(key) orelse return .ok;
         const s = &c.el.states;
         switch (o) {

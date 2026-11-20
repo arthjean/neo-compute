@@ -640,7 +640,8 @@ const AppLaunchScenario = struct {
 const App = struct {
     name: []const u8,
     /// `{page}` is replaced by the absolute path of bench/pages/reference.html,
-    /// `{page_url}` by its file URL, `{root}` by the repository root and
+    /// `{page_url}` by its file URL (`{a23_url}`: that of bench/pages/a23.html),
+    /// `{root}` by the repository root and
     /// `{profile}` by a scratch directory, `{firefox_profile}` by another.
     argv: []const []const u8,
     /// Executable of the window, compared without case; null for any.
@@ -685,6 +686,7 @@ const firefox_user_js =
 ;
 
 const page = "bench/pages/reference.html";
+const a23_page = "bench/pages/a23.html";
 
 const apps = [_]App{
     .{ .name = "notepad", .argv = &.{"notepad.exe"}, .exe = "notepad.exe" },
@@ -728,6 +730,12 @@ pub fn expandArgs(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8
     const root = std.Io.Dir.cwd().realPathFileAlloc(io, ".", arena) catch return error.PageNotFound;
     for (out) |*a| {
         var arg = a.*;
+        // The page of `occlusion-probe a23` (US-065), with a fragment that
+        // makes a second tab of it.
+        if (std.mem.indexOf(u8, arg, "{a23_url}") != null) {
+            const a23 = std.Io.Dir.cwd().realPathFileAlloc(io, a23_page, arena) catch return error.PageNotFound;
+            arg = try std.mem.replaceOwned(u8, arena, arg, "{a23_url}", try std.fmt.allocPrint(arena, "file:///{s}", .{a23}));
+        }
         arg = try std.mem.replaceOwned(u8, arena, arg, "{page_url}", try std.fmt.allocPrint(arena, "file:///{s}", .{abs}));
         arg = try std.mem.replaceOwned(u8, arena, arg, "{page}", abs);
         arg = try std.mem.replaceOwned(u8, arena, arg, "{firefox_profile}", try std.fmt.allocPrint(arena, "{s}\\.zig-cache\\{s}", .{ root, firefox_profile }));

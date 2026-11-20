@@ -1,0 +1,148 @@
+# occlusion-probe a23 learn unmarked, 2026-11-20 (Debug build), run 2 of 2 for a23
+occlusion-probe: decoy 0x550582 of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | a23 | covered: nothing in view, decoy in front; frozen-tree line present
+occlusion-probe: chrome | a23 | toggle | web document | verified with a change: 19 of 20 (contradicted 1, unverifiable 0, other 0) | in order CVVVVVVVVVVVVVVVVVVV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | set_value | web document | verified with a change: 14 of 20 (contradicted 0, unverifiable 6, other 0) | in order UVVVUVVUVVUVVVVVUVUV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | expand | web document | verified with a change: 19 of 20 (contradicted 1, unverifiable 0, other 0) | in order CVVVVVVVVVVVVVVVVVVV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | select | web document | verified with a change: 7 of 20 (contradicted 13, unverifiable 0, other 0) | in order CVCVCCVCCVCCVCCVCCVC | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | toggle | browser interface, outside the document | not measured: no element of the browser's interface has the pattern
+occlusion-probe: chrome | a23 | set_value | browser interface, outside the document | verified with a change: 20 of 20 (contradicted 0, unverifiable 0, other 0) | in order VVVVVVVVVVVVVVVVVVVV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | expand | browser interface, outside the document | verified with a change: 0 of 20 (contradicted 0, unverifiable 0, other 20, first: UI Automation a échoué (action, hr=0x80004005) : réessaie, ou utilise screenshot et les coordonnées.) | in order XXXXXXXXXXXXXXXXXXXX | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | select | browser interface, outside the document | verified with a change: 20 of 20 (contradicted 0, unverifiable 0, other 0) | in order VVVVVVVVVVVVVVVVVVVV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | toggle: A23 REFUTED (19 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | set_value: A23 REFUTED (14 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | expand: A23 REFUTED (19 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | select: A23 REFUTED (7 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | A23 refuted for every measured action: US-065 goes BLOCKED, nothing is learned; the question goes to Arthur
+occlusion-probe: chrome | a23 | learning off (default) in this server: chrome.exe marked after the measure: no
+
+# occlusion-probe learn unmarked, 2026-11-20 (Debug build, learning on in the probe's server)
+occlusion-probe: decoy 0x8c060c of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | learn | nothing in view, decoy in front | marked at start: no | frozen-tree line before the action: present | toggle: toggle ef : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | after: line present, marked no | as expected
+occlusion-probe: chrome | decision cost | z-order and Chromium's rules: median 40 us, p95 79 us | value read before set_value: median 407 us, p95 599 us | sum of the p95 678 us, budget 1000 us: within
+occlusion-probe: vscode | learn | nothing in view, decoy in front | marked at start: no | frozen-tree line before the action: present | toggle: toggle e1h : vérifié (indéterminé) | after: line absent, marked yes | as expected
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode-insiders | learn | skipped: not installed
+occlusion-probe: cursor | learn | the element never showed with the window in view: not measured
+occlusion-probe: cursor | process 54276 still runs 6 s after its window closed: the next first contact may reach it
+
+# a23, run 1 of 2
+occlusion-probe: chrome | a23 | covered: nothing in view, decoy in front; frozen-tree line present
+occlusion-probe: chrome | a23 | toggle | web document | verified with a change: 19 of 20 (contradicted 1, unverifiable 0, other 0) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | set_value | web document | verified with a change: 13 of 20 (contradicted 0, unverifiable 7, other 0) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | expand | web document | verified with a change: 19 of 20 (contradicted 1, unverifiable 0, other 0) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | select | web document | verified with a change: 7 of 20 (contradicted 13, unverifiable 0, other 0) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | toggle | browser interface, outside the document | not measured: no element of the browser's interface has the pattern
+occlusion-probe: chrome | a23 | set_value | browser interface, outside the document | verified with a change: 20 of 20 (contradicted 0, unverifiable 0, other 0) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | expand | browser interface, outside the document | verified with a change: 0 of 20 (contradicted 0, unverifiable 0, other 20, first: UI Automation a échoué (action, hr=0x80004005) : réessaie, ou utilise screenshot et les coordonnées.) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | select | browser interface, outside the document | verified with a change: 20 of 20 (contradicted 0, unverifiable 0, other 0) | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | toggle: A23 REFUTED (19 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | set_value: A23 REFUTED (13 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | expand: A23 REFUTED (19 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | select: A23 REFUTED (7 verified of 20 on the covered web document): exclude it from learning (`teaches` in src/core/a11y.zig)
+occlusion-probe: chrome | a23 | A23 refuted for every measured action: US-065 goes BLOCKED, nothing is learned; the question goes to Arthur
+occlusion-probe: chrome | a23 | chrome.exe marked after the measure: YES (an action taught it)
+
+# occlusion-probe durable learn unmarked, 2026-11-20 (Debug build, window-keyed learning on in the probe's server)
+occlusion-probe: decoy 0xb05e8 of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | durable | first after the covering | toggle ef : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3 s | nothing in view, decoy in front
+occlusion-probe: chrome | durable | second | toggle ef : vérifié (décoché) in 62 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | third | toggle ef : vérifié (coché) in 65 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 10 s without a request | toggle ef : vérifié (décoché) in 66 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 60 s without a request | toggle ef : vérifié (coché) in 64 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 180 s without a request | toggle ef : vérifié (décoché) in 67 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | first after uncovered then covered again | toggle ef : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3 s | nothing in view, decoy in front
+occlusion-probe: chrome | durable | second after the cycle | toggle ef : vérifié (décoché) in 66 ms | nothing in view, decoy in front
+occlusion-probe: chrome | learn | nothing in view, decoy in front | current at start: no | frozen-tree line before any action: present
+occlusion-probe: chrome | learn | toggle #1: toggle e18 : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | then: line present, window current no | as expected
+occlusion-probe: chrome | learn | toggle #2: toggle e18 : vérifié (décoché) | then: line absent, window current yes | as expected
+occlusion-probe: chrome | decision cost | z-order and Chromium's rules: median 28 us, p95 42 us | value read before set_value: median 384 us, p95 605 us | sum of the p95 647 us, budget 1000 us: within
+occlusion-probe: chrome | learn | second window, same process, never read back: nothing in view, decoy in front | frozen-tree line present | as expected
+occlusion-probe: vscode | learn | nothing in view, decoy in front | current at start: no | frozen-tree line before any action: present
+occlusion-probe: vscode | learn | toggle #1: toggle e33 : vérifié (indéterminé) | then: line absent, window current yes | as expected
+occlusion-probe: vscode | state of the toggled element put back, unmeasured
+occlusion-probe: vscode-insiders | learn | skipped: not installed
+occlusion-probe: cursor | skipped: no new window within 15 s (application absent, or it reused a window)
+
+# occlusion-probe durable with truth reads in view, 2026-11-20
+occlusion-probe: decoy 0x8046e of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | durable | in view before any action | truth coché
+occlusion-probe: chrome | durable | first after the covering | toggle ef : contredit, état lu coché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3 s | nothing in view, decoy in front
+occlusion-probe: chrome | durable | second | toggle ef : vérifié (décoché) in 64 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | third | toggle ef : vérifié (coché) in 64 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | in view after 3 covered toggles | truth décoché | last covered read coché: BEHIND | every toggle delivered would give décoché: all delivered
+occlusion-probe: chrome | durable | first after uncovered then covered again | toggle ef : contredit, état lu décoché. L'action est partie : ne la rejoue pas sans relire l'arbre. | effect in the tree: NOT within 3 s | nothing in view, decoy in front
+occlusion-probe: chrome | durable | second after the cycle | toggle ef : vérifié (coché) in 65 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 10 s without a request | toggle ef : vérifié (décoché) in 62 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 60 s without a request | toggle ef : vérifié (coché) in 64 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 180 s without a request | toggle ef : vérifié (décoché) in 63 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | in view at the end | truth coché | last covered read décoché: BEHIND | every toggle delivered would give coché: all delivered
+
+== US-066: occlusion-probe flush, first run (2026-11-20) ==
+occlusion-probe: decoy 0x1f0454 of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | flush | scroll host of the box: found; <details>: found; text field: found
+occlusion-probe: chrome | flush | control: the box read again 300 ms later | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 0 us | in view at the end: every toggle delivered, scroll unchanged, focus MOVED
+occlusion-probe: chrome | flush | control: the whole tree read again | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 15007 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | the tree read with the web text (ui_tree text) | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 17021 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | ScrollItem.ScrollIntoView on the box, already in view | reads equal to the truth: 18 of 20 (first after the covering: right) | in order RRRRRRRRRwwRRRRRRRRR | call p95 584 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | ScrollPattern.SetScrollPercent of the document to where it is | reads equal to the truth: 20 of 20 (first after the covering: right) | in order RRRRRRRRRRRRRRRRRRRR | call p95 1531 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | ExpandCollapse.Collapse on the collapsed <details> | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 2763 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged | the call FAILED or is unavailable
+occlusion-probe: chrome | flush | ValuePattern.SetValue of the text field to its own value | reads equal to the truth: 20 of 20 (first after the covering: right) | in order RRRRRRRRRRRRRRRRRRRR | call p95 2322 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+
+== US-066: occlusion-probe flush, with the scroll calls that set no position and the pending-scroll check ==
+occlusion-probe: decoy 0x1b03ea of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | flush | scroll host of the box: found; <details>: found; text field: found
+occlusion-probe: chrome | flush | control: the box read again 300 ms later | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 0 us | in view at the end: every toggle delivered, scroll unchanged, focus MOVED
+occlusion-probe: chrome | flush | control: the whole tree read again | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 14903 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | the tree read with the web text (ui_tree text) | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 17044 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | ScrollItem.ScrollIntoView on the box, already in view | reads equal to the truth: 8 of 20 (first after the covering: right) | in order RRRRRRwwwwwwwwwwwwRR | call p95 521 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | pending scroll, then ScrollItem.ScrollIntoView on the box, already in view | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+occlusion-probe: chrome | flush | ScrollPattern.SetScrollPercent of the document to where it is | reads equal to the truth: 20 of 20 (first after the covering: right) | in order RRRRRRRRRRRRRRRRRRRR | call p95 1632 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | pending scroll, then ScrollPattern.SetScrollPercent of the document to where it is | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+occlusion-probe: chrome | flush | ScrollPattern.SetScrollPercent(NoScroll, NoScroll) on the document | reads equal to the truth: 20 of 20 (first after the covering: right) | in order RRRRRRRRRRRRRRRRRRRR | call p95 1233 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | pending scroll, then ScrollPattern.SetScrollPercent(NoScroll, NoScroll) on the document | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+occlusion-probe: chrome | flush | ScrollPattern.Scroll(NoAmount, NoAmount) on the document | reads equal to the truth: 20 of 20 (first after the covering: right) | in order RRRRRRRRRRRRRRRRRRRR | call p95 1221 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+occlusion-probe: chrome | flush | pending scroll, then ScrollPattern.Scroll(NoAmount, NoAmount) on the document | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+occlusion-probe: chrome | flush | ExpandCollapse.Collapse on the collapsed <details> | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 2815 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged | the call FAILED or is unavailable
+occlusion-probe: chrome | flush | ValuePattern.SetValue of the text field to its own value | reads equal to the truth: 20 of 20 (first after the covering: right) | in order RRRRRRRRRRRRRRRRRRRR | call p95 2437 us | in view at the end: every toggle delivered, scroll unchanged, focus unchanged
+
+== US-066: occlusion-probe pending (controls: a scroll in view, a pending covered scroll without a call) ==
+occlusion-probe: decoy 0xe0680 of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | flush | IN VIEW (control) scroll, then control: the box read again 300 ms later | scroll sent, call ok | covered read 28.7 %, in view before 0.0 % and after 28.7 % | the scroll is kept
+occlusion-probe: chrome | flush | pending covered scroll, then control: the box read again 300 ms later | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 28.7 % | the scroll is kept
+occlusion-probe: chrome | flush | pending covered scroll, then ScrollPattern.SetScrollPercent(NoScroll, NoScroll) on the document | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+occlusion-probe: chrome | flush | pending covered scroll, then ScrollPattern.Scroll(NoAmount, NoAmount) on the document | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+occlusion-probe: chrome | flush | pending covered scroll, then ScrollPattern.SetScrollPercent of the document to where it is | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 0.0 % | THE SCROLL WAS UNDONE
+
+== US-066: occlusion-probe flush=text_bounds (TextPattern.DocumentRange.GetBoundingRectangles, a read; the candidate was removed after this run) ==
+occlusion-probe: decoy 0x130478 of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | flush | scroll host of the box: found; <details>: found; text field: found
+occlusion-probe: chrome | flush | TextPattern.DocumentRange.GetBoundingRectangles on the document | reads equal to the truth: 0 of 20 (first after the covering: wrong) | in order wwwwwwwwwwwwwwwwwwww | call p95 961 us | in view at the end: every toggle delivered, scroll unchanged, focus MOVED
+occlusion-probe: chrome | flush | pending covered scroll, then TextPattern.DocumentRange.GetBoundingRectangles on the document | scroll sent, call ok | covered read 0.0 %, in view before 0.0 % and after 28.7 % | the scroll is kept
+
+== US-066: occlusion-probe a23 durable, through ui_act with the honest verdict ==
+occlusion-probe: decoy 0x9e034c of another process in the foreground, visible frame 47,40 1286x993; target frame 1100x800; 10 launch(es) per situation, a cold and a warm `ui_act toggle` each, through a --mode background server; 2 display(s)
+occlusion-probe: chrome | a23 | covered: nothing in view, decoy in front; frozen-tree line present
+occlusion-probe: chrome | a23 | toggle | web document | verified with a change: 0 of 20 (contradicted 0, unverifiable 20, other 0) | in order UUUUUUUUUUUUUUUUUUUU | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | set_value | web document | verified with a change: 0 of 20 (contradicted 0, unverifiable 20, other 0) | in order UUUUUUUUUUUUUUUUUUUU | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | expand | web document | verified with a change: 0 of 20 (contradicted 0, unverifiable 20, other 0) | in order UUUUUUUUUUUUUUUUUUUU | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | select | web document | verified with a change: 0 of 20 (contradicted 0, unverifiable 20, other 0) | in order UUUUUUUUUUUUUUUUUUUU | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | toggle | browser interface, outside the document | not measured: no element of the browser's interface has the pattern
+occlusion-probe: chrome | a23 | set_value | browser interface, outside the document | verified with a change: 20 of 20 (contradicted 0, unverifiable 0, other 0) | in order VVVVVVVVVVVVVVVVVVVV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | expand | browser interface, outside the document | verified with a change: 0 of 20 (contradicted 0, unverifiable 0, other 20, first: UI Automation a échoué (action, hr=0x80004005) : réessaie, ou utilise screenshot et les coordonnées.) | in order XXXXXXXXXXXXXXXXXXXX | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | select | browser interface, outside the document | verified with a change: 20 of 20 (contradicted 0, unverifiable 0, other 0) | in order VVVVVVVVVVVVVVVVVVVV | nothing in view, decoy in front
+occlusion-probe: chrome | a23 | web document: 0 verdict(s) read from the covered tree (US-066 wants 0)
+occlusion-probe: chrome | durable | in view before any action | truth coché | no covered read | every toggle delivered would give décoché: SOME LOST
+occlusion-probe: chrome | durable | first after the covering | toggle e18 : délivré, effet non vérifiable in 417 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | second | toggle e18 : délivré, effet non vérifiable in 64 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | third | toggle e18 : délivré, effet non vérifiable in 65 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | in view after 3 covered toggles | truth décoché | no covered read | every toggle delivered would give décoché: all delivered
+occlusion-probe: chrome | durable | first after uncovered then covered again | toggle e18 : délivré, effet non vérifiable in 415 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | second after the cycle | toggle e18 : délivré, effet non vérifiable in 66 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 10 s without a request | toggle e18 : délivré, effet non vérifiable in 63 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 60 s without a request | toggle e18 : délivré, effet non vérifiable in 65 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | after 180 s without a request | toggle e18 : délivré, effet non vérifiable in 65 ms | nothing in view, decoy in front
+occlusion-probe: chrome | durable | in view at the end | truth coché | no covered read | every toggle delivered would give coché: all delivered
+occlusion-probe: chrome | durable | 8 covered toggles: 0 verdict(s) read from the covered tree, 8 delivered without a verdict (US-066 wants 0 from the tree)
+occlusion-probe: chrome | decision cost | z-order and Chromium's rules: median 43 us, p95 88 us, budget 1000 us: within
+occlusion-probe: chrome | durable | covered uncheck: refused | truth before coché, after coché: unchanged

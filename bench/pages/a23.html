@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>neo-compute a23 page</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; }
+    main { display: grid; gap: 12px; max-width: 420px; }
+  </style>
+</head>
+<body>
+  <!-- Fixed page for occlusion-probe a23 (US-065, assumption A23): one
+       element of the web document per action that reads a state back. -->
+  <main>
+    <label><input type="checkbox" checked> Case A23</label>
+    <label>Champ A23 <input type="text" value="un"></label>
+    <details><summary>Détails A23</summary><p>Contenu replié</p></details>
+    <label>Liste A23
+      <select size="3"><option selected>Alpha</option><option>Beta</option><option>Gamma</option></select>
+    </label>
+  </main>
+  <!-- Room to scroll: the document gets a Scroll pattern (US-066). -->
+  <div style="height: 3000px"></div>
+</body>
+</html>

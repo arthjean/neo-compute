@@ -56,10 +56,10 @@
     },
     {
       "id": "EP-018",
-      "title": "Gel appris des applications Chromium",
-      "status": "TODO",
-      "priority": "P2",
-      "stories_total": 1,
+      "title": "Vérité des verdicts sur Chromium recouvert",
+      "status": "IN_REVIEW",
+      "priority": "P1",
+      "stories_total": 2,
       "stories_done": 0
     },
     {
@@ -364,11 +364,23 @@
       "id": "US-065",
       "title": "Apprendre qu'une application Chromium rend recouverte",
       "epic": "EP-018",
-      "status": "TODO",
+      "status": "CANCELLED",
       "priority": "P2",
       "size": "M",
       "blocked_by": ["US-055", "US-058", "US-059"],
-      "started_at": null,
+      "started_at": "2026-11-20",
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-066",
+      "title": "Verdicts vrais sur Chromium recouvert",
+      "epic": "EP-018",
+      "status": "IN_REVIEW",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": ["US-055", "US-059", "US-065"],
+      "started_at": "2026-11-20",
       "completed_at": null,
       "reviewed_at": null
     },
@@ -391,7 +403,7 @@
       "status": "TODO",
       "priority": "P1",
       "size": "M",
-      "blocked_by": ["US-062", "US-064", "US-065"],
+      "blocked_by": ["US-062", "US-064", "US-066"],
       "started_at": "2026-11-13",
       "completed_at": null,
       "reviewed_at": null
