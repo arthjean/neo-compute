@@ -83,7 +83,7 @@
       "title": "wlroots (sway, labwc)",
       "status": "TODO",
       "priority": "P2",
-      "stories_total": 5,
+      "stories_total": 6,
       "stories_done": 0
     },
     {
@@ -806,8 +806,25 @@
       "priority": "P2",
       "size": "M",
       "blocked_by": [
+        "US-067",
         "US-072",
         "US-110"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-125",
+      "title": "Pause et réarmement sous wlroots",
+      "epic": "EP-028",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "S",
+      "blocked_by": [
+        "US-067",
+        "US-112",
+        "US-121"
       ],
       "started_at": null,
       "completed_at": null,

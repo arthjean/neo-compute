@@ -6,6 +6,7 @@
 | Version | Date | Author | Summary |
 |---------|------|--------|---------|
 | 1.0 | 2026-11-20 | Arthur Jean | Version initiale : portage Linux (GNOME de référence, KDE, wlroots) d'après l'audit `docs/research/2026-11-20-audit-portage-linux.md` et la décision `docs/decisions/0014-portage-linux.md` (D1 à D14), EP-019 à EP-032 |
+| 1.1 | 2026-11-20 | Arthur Jean | P1, P3, P9, P10 et P12 tranchés (décision 0014, « Amendement du PRD Linux ») : pause à la perte de l'extension (US-094) ; evdev limité aux périphériques de pointeur et réarmement par un clic physique sur le libellé sous wlroots (US-121, US-125) ; filtre seccomp étendu à `execve`, `ptrace` et `process_vm_*` (US-119) ; lanceur qui ne reçoit qu'un identifiant `.desktop` (US-099) ; crochets de test absents des builds de release (`-Dtest-hooks`, US-083, US-120) |
 
 ## Problem Statement
 
@@ -69,22 +70,22 @@ Décisions qui portent la conception, chacune tirée de l'audit et de la décisi
 
 ### Décisions de contrat proposées (US-067)
 
-Ces points ne sont pas tranchés par la décision 0014. Ils touchent la sécurité, la politique ou le contrat, donc ils reviennent à Arthur (AGENTS.md, « Boundaries »). US-067 les consigne dans un amendement de 0014. Une story qui en dépend ne démarre pas avant sa réponse.
+Ces points ne sont pas tranchés par les décisions D1 à D14. Ils touchent la sécurité, la politique ou le contrat, donc ils reviennent à Arthur (AGENTS.md, « Boundaries »). P1, P3, P9, P10 et P12 sont tranchés depuis le 2026-11-20 (0014, « Amendement du PRD Linux ») ; US-067 consigne les sept autres. Une story qui dépend d'un point ouvert ne démarre pas avant sa réponse.
 
 | # | Point proposé | Preuve ou raison | Stories qui en dépendent |
 |---|---|---|---|
-| P1 | Sous GNOME, l'entrée réelle exige l'extension, seule source du kill switch par entrée physique. Sans elle, les outils d'entrée sont refusés | D14 exige le kill switch avant l'entrée réelle ; aucune API de Mutter ne distingue l'entrée physique (audit 7, mesuré) | US-090 à US-094 |
+| P1 | **Décidé le 2026-11-20.** Sous GNOME, l'entrée réelle exige l'extension, seule source du kill switch par entrée physique. Sans elle, les outils d'entrée sont refusés. Si l'extension disparaît en cours de session, le serveur relâche tout et se met en pause | D14 exige le kill switch avant l'entrée réelle ; aucune API de Mutter ne distingue l'entrée physique (audit 7, mesuré) ; l'extension seule donne la position des fenêtres pour viser (audit 4.1) | US-090 à US-094 |
 | P2 | Sous KDE, le kill switch se déclenche sur un mouvement physique du pointeur, détecté en retirant de la position du curseur celle que le serveur a injectée, et sur le raccourci de pause. Le serveur refuse d'injecter la combinaison de ce raccourci. Un Échap physique ne déclenche rien | D4 (soustraction) ; KWin ne donne les touches qu'au nom d'Orca, que D5 interdit (audit 4.2) ; A41, validée par US-105 | US-107 |
-| P3 | Sous wlroots, l'entrée réelle n'est possible qu'avec `--physical-input evdev`. Le mode arrière-plan y est refusé | D4 (evdev sur activation explicite) ; D1 (pas d'empilement, audit 4.3) | US-110, US-112, US-121 |
+| P3 | **Décidé le 2026-11-20.** Sous wlroots, l'entrée réelle n'est possible qu'avec `--physical-input evdev`, qui ne lit que les souris et pavés tactiles, jamais un clavier. Un mouvement physique de plus de 8 px met en pause ; Échap ne déclenche rien. Le réarmement se fait par un clic physique sur le libellé « en pause ». Le mode arrière-plan y est refusé | D4 (evdev sur activation explicite) ; lire les claviers donnerait toutes les frappes ; un pointeur virtuel ne crée aucun événement evdev (A42), donc un clic confirmé par evdev ne peut pas venir d'un programme ; D1 (pas d'empilement, audit 4.3) | US-110, US-112, US-121, US-125 |
 | P4 | Les sous-commandes `neo-compute setup` et `neo-compute setup --uninstall`, et ce qu'elles modifient : dossier de l'extension, `enabled-extensions`, rien d'autre | D2 (installation par commande explicite) ; FR-54 | US-082 |
 | P5 | Sous Linux, `selftest` refuse la session réelle sans `--real-session` | Huit des neuf incidents de l'audit viennent de sondes qui ont touché la session réelle (audit 12) | US-081 |
 | P6 | Versions prises en charge : GNOME 50 et 51, Plasma 6.8, sway 1.12, labwc 0.20. Une session X11 est refusée | Versions installées et mesurées (audit 1.2) ; GNOME 50 est celui d'Ubuntu 26.04 LTS (audit 1.1) ; D1 | US-081, US-082 |
 | P7 | Distribution : glibc 2.28 dynamique, x86_64 et aarch64, libpipewire et libxkbcommon chargées à l'exécution | T12 (audit 10, mesuré) | US-069, US-080, US-097, US-120 |
 | P8 | Listes de politique Linux par défaut : gestionnaires de mots de passe en `deny`, terminaux et éditeurs de code en `click`, comme les listes Windows | D8 ; `src/core/policy.zig:98-118` (niveaux `deny` et `click` des listes Windows) | US-070 |
-| P9 | Filtre seccomp contre le réseau. Refus d'agir sur une fenêtre d'un autre uid, pendant un dialogue système modal ou sur un écran verrouillé, sur chaque famille | FR-10 ; l'entrée injectée atteint l'invite de déverrouillage (audit 4.1, mesuré) ; équivalents Linux d'UIPI (audit 7) | US-094, US-107, US-112, US-119 |
-| P10 | En mode serveur, neo-compute n'exécute aucun programme lui-même. Seul `app_launch` fait exécuter une application, sans shell, par un processus lanceur créé au démarrage, qui ne porte pas le filtre seccomp | FR-11 et AGENTS.md (aucun outil de commande) ; un filtre seccomp est hérité par les enfants et conservé à travers `execve` (`seccomp(2)`) : une application lancée par le serveur filtré n'aurait pas de réseau | US-099, US-119 |
+| P9 | **Décidé le 2026-11-20.** Filtre seccomp qui interdit au serveur les sockets réseau, `execve`, `execveat`, `ptrace`, `process_vm_readv` et `process_vm_writev`. Refus d'agir sur une fenêtre d'un autre uid, pendant un dialogue système modal ou sur un écran verrouillé, sur chaque famille | FR-10 ; FR-11 ; l'entrée injectée atteint l'invite de déverrouillage (audit 4.1, mesuré) ; équivalents Linux d'UIPI (audit 7) | US-094, US-107, US-112, US-119 |
+| P10 | **Décidé le 2026-11-20.** En mode serveur, neo-compute n'exécute aucun programme lui-même, ce que le filtre de P9 garantit. Seul `app_launch` fait exécuter une application, sans shell, par un processus lanceur créé au démarrage, qui ne porte pas le filtre. Le serveur ne passe au lanceur qu'un identifiant `.desktop`, des chemins ou des URI et un drapeau d'accessibilité ; le lanceur lit l'entrée et construit la commande | FR-11 et AGENTS.md (aucun outil de commande) ; un filtre seccomp est hérité par les enfants et conservé à travers `execve` (`seccomp(2)`) : une application lancée par le serveur filtré n'aurait pas de réseau | US-099, US-119 |
 | P11 | Les évals Linux tournent dans une session GNOME isolée, et non sur le bureau réel, avec un harnais en Zig | T10 ; P5 | US-116 |
-| P12 | Les gestes physiques simulés (méthode `SimulatePhysical` de l'extension, option `--physical-input simulated`) ne sont acceptés que dans un banc : `NC_SESSION` posé et `XDG_RUNTIME_DIR` sous `/run/user/<uid>/nc-`. Ils remplacent alors la source physique du kill switch | Sans eux, aucun contrôle du kill switch ne tourne sur un banc sans écran, qui n'a aucun périphérique physique (audit 9.2). Un processus local capable de poser ces variables peut déjà injecter des entrées lui-même : la garde vise l'usage accidentel hors banc | US-083, US-110 |
+| P12 | **Décidé le 2026-11-20.** Les gestes physiques simulés (méthode `SimulatePhysical` de l'extension, option `--physical-input simulated`) n'existent que dans un build `-Dtest-hooks=true`, vrai pour `zig build`, les selftests et le bench, faux pour `zig build release`. Ils ne sont alors acceptés que dans un banc : `NC_SESSION` posé et `XDG_RUNTIME_DIR` sous `/run/user/<uid>/nc-` | Sans eux, aucun contrôle du kill switch ne tourne sur un banc sans écran, qui n'a aucun périphérique physique (audit 9.2). Une variable d'environnement se falsifie : les archives livrées n'en contiennent donc pas le code | US-083, US-110, US-120 |
 
 ### Livraisons
 
@@ -92,9 +93,9 @@ Ces points ne sont pas tranchés par la décision 0014. Ils touchent la sécurit
 |---|---|---|
 | 1 : GNOME au premier plan | EP-019 à EP-025 sauf US-097, plus US-119 | 101 |
 | 2 : arrière-plan et mesures GNOME | EP-026, EP-029, EP-030, EP-031, US-097, US-120 | 42 |
-| 3 : KDE et wlroots | EP-027, EP-028 | 31 |
+| 3 : KDE et wlroots | EP-027, EP-028 | 33 |
 
-Périmètre : 14 epics, 58 stories, 174 points. Si la sonde US-095 infirme A25, US-097 devient P0 et passe en livraison 1.
+Périmètre : 14 epics, 59 stories, 176 points. Si la sonde US-095 infirme A25, US-097 devient P0 et passe en livraison 1.
 
 ## Non-Goals
 
@@ -211,7 +212,7 @@ Les sources primaires sont l'audit `docs/research/2026-11-20-audit-portage-linux
 | T6 | Fixtures | Fenêtre GTK 4 en Zig (exige `gtk4-devel`, absent) ; Python et PyGObject (présents) | Python GTK 4, `python3 -I` : PyGObject et GTK 4 sont installés et les sondes s'en sont servies (audit 5.2). `gtk4-devel` est absent (mesuré). |
 | T7 | Confiance entre serveur et extension | Aucune (computer-use-linux) ; pid ; chemin de l'exécutable | L'extension n'accepte qu'un appelant dont `/proc/<pid>/exe` est le binaire enregistré par `setup`. Le serveur vérifie que le nom appartient au propriétaire de `org.gnome.Shell` (audit 11 ; D2). |
 | T8 | Canal KWin | Script chargé et déchargé à chaque requête (1,04 ms) ; script persistant en long-poll (0,17 ms) | Persistant (audit 4.2, mesuré). |
-| T9 | Lancement d'applications | Lancement par le Shell ; `fork` puis `exec` depuis le serveur ; service systemd transitoire ; processus lanceur créé au démarrage | Processus lanceur, créé avant le filtre seccomp et avant tout fil, qui exécute par `posix_spawn` sans shell. Un enfant du serveur filtré hériterait du filtre et n'aurait pas de réseau (`seccomp(2)`). Un service systemd n'existe pas sur le bus privé des bancs. Quand le gestionnaire systemd de l'utilisateur répond, le processus passe ensuite dans un scope `app-neocompute-<id>-<n>.scope` par `StartTransientUnit` : son identifiant d'application devient lisible dans le cgroup comme sous GNOME (`app-gnome-paneflow-6352.scope`, audit 4.1), ce qu'exige D8. Les drapeaux de Chromium s'ajoutent (D13). |
+| T9 | Lancement d'applications | Lancement par le Shell ; `fork` puis `exec` depuis le serveur ; service systemd transitoire ; processus lanceur créé au démarrage | Processus lanceur, créé avant le filtre seccomp et avant tout fil, qui reçoit un identifiant `.desktop` et des chemins (P10), lit l'entrée et exécute par `posix_spawn` sans shell. Un enfant du serveur filtré hériterait du filtre et n'aurait pas de réseau (`seccomp(2)`). Un service systemd n'existe pas sur le bus privé des bancs. Quand le gestionnaire systemd de l'utilisateur répond, le processus passe ensuite dans un scope `app-neocompute-<id>-<n>.scope` par `StartTransientUnit` : son identifiant d'application devient lisible dans le cgroup comme sous GNOME (`app-gnome-paneflow-6352.scope`, audit 4.1), ce qu'exige D8. Les drapeaux de Chromium s'ajoutent (D13). |
 | T10 | Harnais d'évals Linux | `run.ps1` sous pwsh ; Python ; Zig | Zig dans une session isolée : pwsh est absent (mesuré), le témoin C# de `run.ps1` ne se porte pas (audit 9.1), et les transports du serveur servent au témoin. |
 | T11 | Baseline du bench | Clé `os` dans `bench/baseline.json` ; fichier par OS | `bench/baseline-linux.json` : `bench/baseline.json` reste intact, sans clé `os` (vérifié). |
 | T12 | Format binaire | musl statique ; glibc 2.28 dynamique et `dlopen` ; lien direct par distribution | glibc 2.28 (P7) : musl statique interdit le `dlopen` (mesuré), le lien direct à 2.28 échoue (mesuré). Plancher identique à computer-use-linux (audit 10). |
@@ -253,7 +254,7 @@ Rendre le dépôt constructible et vérifiable sous Linux sans changer Windows :
 **Dependencies:** None
 
 **Acceptance Criteria:**
-- [ ] `docs/decisions/0014-portage-linux.md` reçoit une section « Amendement du PRD Linux » qui tranche P1 à P12 (Overview), chacun avec la réponse d'Arthur citée et datée.
+- [ ] `docs/decisions/0014-portage-linux.md` porte, dans sa section « Amendement du PRD Linux », P2, P4 à P8 et P11 (Overview) tranchés, chacun avec la réponse d'Arthur citée et datée. P1, P3, P9, P10 et P12 y sont déjà, tranchés le 2026-11-20.
 - [ ] Les décisions D1 à D14 restent inchangées dans le fichier.
 - [ ] Étant donné un point sans réponse d'Arthur, quand la story est exécutée, alors elle passe `BLOCKED`, le rapport liste les points en attente, et aucune story listée en face de ce point dans la table de l'Overview ne démarre.
 
@@ -567,7 +568,8 @@ Identifier la famille de compositeur, installer l'extension GNOME par une comman
 - [ ] L'extension classe chaque événement de pointeur et de clavier par son périphérique d'origine : un nœud de périphérique non nul signifie une entrée physique. Le classement est exposé au serveur par un signal.
 - [ ] `neo-compute input-probe --real-session`, lancé par Arthur, injecte pendant 60 s, sur une fenêtre de fixture, 200 mouvements et 100 touches par EI. Arthur fait pendant ce temps au moins 50 gestes physiques (mouvements et touches). La sonde écrit le nombre d'événements classés dans chaque catégorie.
 - [ ] Le verdict de A24 est consigné dans `docs/decisions/0014-portage-linux.md` avec les comptes : il est validé si 100 % des événements injectés sont classés injectés et 100 % des gestes physiques classés physiques.
-- [ ] Dans un banc (P12 : `NC_SESSION` posé et `XDG_RUNTIME_DIR` sous `/run/user/<uid>/nc-`), l'extension accepte une méthode `SimulatePhysical` qui produit un événement classé physique, pour que les selftests du kill switch tournent sur le banc.
+- [ ] `build.zig` déclare l'option `-Dtest-hooks`, vraie par défaut pour `zig build`, les selftests et le bench. Sans elle, ni le serveur ni l'extension embarquée ne contiennent le code des gestes simulés (P12).
+- [ ] Dans un build `-Dtest-hooks=true` et dans un banc (P12 : `NC_SESSION` posé et `XDG_RUNTIME_DIR` sous `/run/user/<uid>/nc-`), l'extension accepte une méthode `SimulatePhysical` qui produit un événement classé physique, pour que les selftests du kill switch tournent sur le banc.
 - [ ] Étant donné un appel à `SimulatePhysical` hors d'un banc, alors l'extension répond `org.freedesktop.DBus.Error.AccessDenied` et ne produit aucun événement (test).
 - [ ] Étant donné A24 infirmée, alors la story s'arrête et rend compte à Arthur. Le rapport propose la détection par soustraction de D4, et US-094 passe `BLOCKED`.
 
@@ -769,6 +771,7 @@ Sous GNOME, piloter la vraie souris et le vrai clavier par le canal EI de Remote
 - [ ] Étant donné un verrouillage pendant `hold_key`, alors les entrées sont relâchées en moins de 50 ms.
 - [ ] Le serveur n'appelle jamais `org.gnome.ScreenSaver.SetActive` : la liste de refus de US-077 le prouve, car l'appel déverrouille sans mot de passe (audit 4.1).
 - [ ] Le contrôle `locked` verrouille la session par `org.gnome.ScreenSaver.Lock` avec le faux GDM du banc, et le verdict de A30 pour le verrou est consigné dans 0014.
+- [ ] Étant donné l'extension qui disparaît pendant la session (le nom `org.neocompute.Shell1` perd son propriétaire : extension désactivée, Shell redémarré), alors le serveur relâche les entrées tenues en moins de 50 ms et se met en pause. Tant qu'elle n'est pas revenue, une action d'entrée répond avec le message de P1 (contrôle `extension-lost` : `DisableExtension` pendant un `hold_key`).
 - [ ] Arthur lance `neo-compute selftest --real-session` sur sa session Fedora 45. Les résultats des contrôles `mouse`, `keyboard`, `release-*` et `kill-*` sont consignés dans 0014 (preuve demandée par D14).
 
 ---
@@ -853,8 +856,10 @@ Donner à GNOME `screenshot`, `zoom`, `ui_tree marks`, `clipboard` et `app_launc
 
 **Acceptance Criteria:**
 - [ ] `appCatalog` lit les entrées `.desktop` de `$XDG_DATA_HOME/applications` et des `$XDG_DATA_DIRS`, en respectant `NoDisplay`, `Hidden`, `OnlyShowIn`, `NotShowIn` et `TryExec`.
-- [ ] `launchApp` découpe `Exec` selon la Desktop Entry Specification (guillemets, codes `%f %F %u %U %i %c %k`) en un vecteur d'arguments, sans shell.
-- [ ] Au démarrage, avant le filtre seccomp et avant tout fil, le serveur crée un processus lanceur (`common/launch.zig`), qui meurt avec lui (`PR_SET_PDEATHSIG`). `launchApp` lui passe le vecteur et l'environnement par un tube, et le lanceur exécute par `posix_spawn` (T9, P10).
+- [ ] Au démarrage, avant le filtre seccomp et avant tout fil, le serveur crée un processus lanceur (`common/launch.zig`), qui meurt avec lui (`PR_SET_PDEATHSIG`).
+- [ ] `launchApp` ne passe au lanceur, par un tube, qu'un identifiant `.desktop`, des chemins absolus ou des URI, et le drapeau d'accessibilité Chromium de US-113 (P10).
+- [ ] Le lanceur lit lui-même l'entrée `.desktop`, découpe `Exec` selon la Desktop Entry Specification (guillemets, codes `%f %F %u %U %i %c %k`) en un vecteur d'arguments, et l'exécute par `posix_spawn`, sans shell (T9).
+- [ ] Étant donné un message au lanceur qui nomme un identifiant `.desktop` absent du catalogue, un chemin relatif ou un champ inconnu, alors le lanceur le rejette sans rien exécuter (test du protocole).
 - [ ] Le contrôle `app-launch` lance la fixture par `app_launch`, et sa fenêtre apparaît dans `window_list` ; le processus lancé a pour parent le processus lanceur.
 - [ ] Quand le gestionnaire systemd de l'utilisateur répond, le processus lancé passe dans un scope transitoire `app-neocompute-<id>-<n>.scope` par `StartTransientUnit`. Son identifiant d'application est ensuite lisible par US-070.
 - [ ] Étant donné aucun gestionnaire systemd joignable, comme sur le bus privé des bancs, alors le processus est lancé sans scope, et son identité vient de `/proc/<pid>/exe`.
@@ -1067,7 +1072,7 @@ Porter les modes `a11y` et `vision` sous les compositeurs wlroots par leurs prot
 - [ ] Le clavier passe par `zwp_virtual_keyboard_v1`, avec une keymap compilée par libxkbcommon. Le contrôle `keyboard` sous sway tape `a`, `;`, `ctrl+a` et `shift+Tab`, et la fixture rapporte les keysyms et les modificateurs attendus.
 - [ ] Les keysyms d'un texte hors disposition sont ajoutés à la keymap sur des keycodes libres, avec une attente de 200 ms après chaque nouvelle keymap, car la première touche est perdue (audit 4.3). Le contrôle `type-unicode` sous sway vérifie « é ü 😀 中文 » dans la fixture.
 - [ ] `--physical-input simulated` n'est accepté que dans un banc (P12) : le selftest y envoie des gestes physiques simulés par un descripteur, pour que les contrôles d'entrée tournent sur le banc sans `/dev/input` (US-121).
-- [ ] Étant donné ni `--physical-input evdev` ni `--physical-input simulated`, alors les outils d'entrée répondent « Entrée réelle indisponible sous <compositeur> : aucun kill switch sans --physical-input evdev (lecture de /dev/input). Relance neo-compute avec cette option si tu l'acceptes. » et rien n'est envoyé.
+- [ ] Étant donné ni `--physical-input evdev` ni `--physical-input simulated`, alors les outils d'entrée répondent « Entrée réelle indisponible sous <compositeur> : aucun kill switch sans --physical-input evdev (lecture des seules souris dans /dev/input). Relance neo-compute avec cette option si tu l'acceptes. » et rien n'est envoyé.
 - [ ] Étant donné `--physical-input simulated` hors d'un banc (`NC_SESSION` absent, ou `XDG_RUNTIME_DIR` hors de `/run/user/<uid>/nc-`), alors le serveur refuse de démarrer avec « --physical-input simulated est réservé aux bancs de test. »
 
 #### US-121: Gardien de relâche et entrée physique sous wlroots
@@ -1075,7 +1080,7 @@ Porter les modes `a11y` et `vision` sous les compositeurs wlroots par leurs prot
 
 **Priority:** P2
 **Size:** M (3 pts)
-**Dependencies:** Blocked by US-110, US-072
+**Dependencies:** Blocked by US-110, US-072, US-067 (P3)
 
 **Acceptance Criteria:**
 - [ ] Au démarrage, avant le filtre seccomp et avant tout fil, le serveur crée par `fork`, sans `exec`, un processus gardien (`wlroots/guardian.zig`) qui ouvre sa propre connexion Wayland et reçoit par un tube le journal des touches et des boutons tenus.
@@ -1083,10 +1088,25 @@ Porter les modes `a11y` et `vision` sous les compositeurs wlroots par leurs prot
 - [ ] Le contrôle `release-sigkill` sous sway voit Maj relâchée moins de 50 ms après le SIGKILL du serveur. Le verdict de A37 est consigné dans 0014.
 - [ ] Les contrôles `release-eof`, `release-sigint` et `release-sigterm` passent sous sway en moins de 50 ms.
 - [ ] Le contrôle `virtual-no-evdev` liste `/dev/input` avant et après la création du pointeur et du clavier virtuels sous sway sans écran, et n'y trouve aucun nœud nouveau. Le verdict de A42 est consigné dans 0014.
-- [ ] Avec `--physical-input evdev`, le serveur lit les `input_event` de `/dev/input/event*` ; tout événement lu est physique (A42). Un test lit des événements enregistrés dans `tests/linux/golden/evdev/` et rend les mouvements et les touches attendus.
-- [ ] Les contrôles `kill-mouse` (9 px) et `kill-escape` passent sous sway par `--physical-input simulated` : l'action est annulée et le serveur passe en pause en moins de 100 ms.
-- [ ] Arthur lance `neo-compute selftest --real-session --physical-input evdev` dans une vraie session sway, avec une lecture de `/dev/input/event*` qu'il s'accorde lui-même pour cette passe. `kill-mouse` et `kill-escape` y passent sur ses gestes physiques, et le verdict de A42 sur la session réelle est consigné dans 0014.
-- [ ] Étant donné `--physical-input evdev` sans droit de lecture sur `/dev/input/event*`, alors le serveur l'écrit au démarrage et refuse les outils d'entrée avec « Lecture de /dev/input refusée : ajoute une règle d'accès ou le groupe input, en sachant qu'il donne la lecture de tous les claviers. »
+- [ ] Avec `--physical-input evdev`, le serveur n'ouvre que les nœuds de `/dev/input/event*` que udev marque `ID_INPUT_MOUSE` ou `ID_INPUT_TOUCHPAD` (lus dans `/run/udev/data/`), et tout événement lu est physique (A42).
+- [ ] Étant donné un nœud lisible qui annonce des touches de clavier (bits `KEY_A` à `KEY_Z` de `EVIOCGBIT`), alors le serveur ne lit pas ses événements, même marqué pointeur. Un test le vérifie sur des descriptions de périphériques enregistrées dans `tests/linux/golden/evdev/`.
+- [ ] Un test lit des événements de pointeur enregistrés dans `tests/linux/golden/evdev/` et rend les mouvements et les boutons attendus.
+- [ ] Le contrôle `kill-mouse` (9 px) passe sous sway par `--physical-input simulated` : l'action est annulée et le serveur passe en pause en moins de 100 ms. Un Échap, même physique, ne met pas en pause sous wlroots (P3).
+- [ ] Arthur lance `neo-compute selftest --real-session --physical-input evdev` dans une vraie session sway, avec la règle udev du `README` (US-120) qui ne lui donne que la lecture de ses souris et pavés tactiles. `kill-mouse` y passe sur ses gestes physiques, et le verdict de A42 sur la session réelle est consigné dans 0014.
+- [ ] Étant donné `--physical-input evdev` sans aucun périphérique de pointeur lisible, alors le serveur l'écrit au démarrage et refuse les outils d'entrée avec « Lecture des souris refusée : ajoute la règle udev du README de neo-compute, qui ne donne que la lecture des souris et des pavés tactiles. »
+
+#### US-125: Pause et réarmement sous wlroots
+**Description:** En tant qu'Arthur, je veux reprendre la main sous sway par un geste physique et relancer l'agent par un clic sur son libellé, sans qu'aucun programme puisse le relancer à ma place, afin que la pause reste sous mon contrôle.
+
+**Priority:** P2
+**Size:** S (2 pts)
+**Dependencies:** Blocked by US-121, US-112, US-067 (P3)
+
+**Acceptance Criteria:**
+- [ ] En pause, le libellé affiche « En pause : clique ici pour reprendre » et reçoit les clics : sa région d'entrée couvre sa surface. Hors pause, elle reste vide.
+- [ ] Un clic sur le libellé en pause ne lève la pause que si evdev rapporte un appui physique de bouton à moins de 50 ms du clic (tolérance fixée par ce PRD). Le contrôle `kill-pause` sous sway le vérifie par `--physical-input simulated`.
+- [ ] Étant donné un clic sur le libellé envoyé par un pointeur virtuel (second pointeur du banc), sans appui evdev, alors la pause reste, et l'audit enregistre un réarmement refusé.
+- [ ] Étant donné un serveur lancé sans `--physical-input evdev` ni `--physical-input simulated`, alors le libellé ne reçoit jamais de clics, car l'entrée réelle est refusée (US-110).
 
 #### US-111: Fenêtres sous wlroots
 **Description:** En tant que Claude Code, je veux lister, activer et ranger les fenêtres sous sway et labwc afin d'utiliser `window_list`, `window_focus` et `window_set` sous wlroots.
@@ -1126,7 +1146,7 @@ Porter les modes `a11y` et `vision` sous les compositeurs wlroots par leurs prot
 
 **Acceptance Criteria:**
 - [ ] `clipboard` passe par `ext-data-control`, sinon par `zwlr_data_control`, sans focus (20 fois sur 20, audit 4.3).
-- [ ] Le libellé est une surface layer-shell avec une région d'entrée vide.
+- [ ] Le libellé est une surface layer-shell avec une région d'entrée vide, sauf pendant une pause (US-125).
 - [ ] Étant donné `cursor_position` sous wlroots, alors l'outil répond « Position du pointeur inconnue sous <compositeur> : aucun protocole ne la donne. » (audit 4.3).
 - [ ] Étant donné `--mode background` sous wlroots, alors le serveur refuse de démarrer le mode avec « Mode arrière-plan indisponible sous <compositeur> : aucun protocole ne donne l'empilement des fenêtres. Relance en mode a11y. »
 - [ ] Le contrôle `locked` lance swaylock sur le banc sway : aucune fenêtre de `ext-foreign-toplevel` n'est alors active, et les outils d'entrée et de capture répondent avec le message existant de session inactive. Le verdict de A47 est consigné dans 0014.
@@ -1149,7 +1169,7 @@ Rendre lisible l'arbre web de Chromium sous Linux, et régler les heuristiques d
 **Dependencies:** Blocked by US-099, US-086
 
 **Acceptance Criteria:**
-- [ ] `app_launch` ajoute `--force-renderer-accessibility` à la ligne de commande et `ACCESSIBILITY_ENABLED=1` à l'environnement d'une application Chromium ou Electron. Une application est reconnue comme telle quand `resources.pak` ou `chrome_100_percent.pak` se trouve à côté de son exécutable (mesuré pour Chrome, Helium, Cursor, Proton Pass et ChatGPT, Research Findings).
+- [ ] Sur le drapeau d'accessibilité de `app_launch`, le lanceur ajoute `--force-renderer-accessibility` à la ligne de commande et `ACCESSIBILITY_ENABLED=1` à l'environnement d'une application Chromium ou Electron. Une application est reconnue comme telle quand `resources.pak` ou `chrome_100_percent.pak` se trouve à côté de son exécutable (mesuré pour Chrome, Helium, Cursor, Proton Pass et ChatGPT, Research Findings).
 - [ ] Le contrôle `electron-a11y` lance Cursor par `app_launch` dans la session `gnome` et trouve son éditeur dans `ui_tree`. Le verdict de A46 est consigné dans 0014. Étant donné Cursor absent, alors le contrôle est noté `skipped` avec sa raison.
 - [ ] Un Chrome lancé ainsi expose le document de la page de fixture et ses contrôles dans `ui_tree`.
 - [ ] Étant donné une fenêtre Chromium dont le cadre n'a qu'un enfant nul (`/org/a11y/atspi/null`, audit 5.2), alors `ui_tree` répond « Chrome lancé sans accessibilité : ferme-le et relance-le par app_launch. »
@@ -1294,7 +1314,10 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 **Acceptance Criteria:**
 - [ ] Le contrôle `app-launch` lit `Seccomp:` à 2 (filtre) dans `/proc/<pid>/status` du serveur, et à 0 pour la fixture lancée par `app_launch`.
 - [ ] Au démarrage, après la création du processus lanceur (US-099) et, sous wlroots, du gardien (US-121), et avant tout fil, le serveur pose un filtre seccomp qui fait échouer `socket` avec `EPERM` pour les familles `AF_INET`, `AF_INET6` et `AF_PACKET`. Les sockets `AF_UNIX` restent permis (FR-10).
+- [ ] Le même filtre fait échouer avec `EPERM` `execve`, `execveat`, `ptrace`, `process_vm_readv` et `process_vm_writev` (P9, P10).
+- [ ] Sous wlroots, le gardien pose sur lui-même le même filtre dès sa création (US-121).
 - [ ] Un test de `tests/process_test.zig` lance le serveur avec une sous-commande de test qui tente un `connect` TCP vers 127.0.0.1. Le test lit `EPERM` sur stderr.
+- [ ] Un test de `tests/process_test.zig` lance le serveur avec une sous-commande de test qui tente `execve` de `/bin/true`. Le test lit `EPERM` sur stderr.
 - [ ] Étant donné la pose du filtre qui échoue, simulée par un point d'injection des tests de `tests/process_test.zig`, alors le serveur refuse de démarrer avec « Filtre réseau impossible (seccomp indisponible) : neo-compute ne démarre pas sans lui. »
 - [ ] Un test du backend Linux, avec un lecteur de `/proc` simulé qui rend un autre uid pour le pid d'une fenêtre, prouve que toute action et toute capture de cette fenêtre sont refusées avec « <application> appartient à un autre utilisateur : refusé. »
 - [ ] Étant donné un dialogue modal du Shell ouvert, comme l'agent polkit (`Main.modalCount` > 0), alors les outils d'entrée sont refusés avec « Un dialogue système est ouvert (<nom>) : réponds-y toi-même. Aucune action exécutée. » Le contrôle `system-dialog` ouvre ce dialogue par une méthode de test de l'extension, acceptée en `NC_SESSION` seulement.
@@ -1305,17 +1328,20 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 
 **Priority:** P1
 **Size:** M (3 pts)
-**Dependencies:** Blocked by US-082, US-091, US-097, US-067 (P7)
+**Dependencies:** Blocked by US-082, US-091, US-097, US-067 (P7, P12)
 
 **Acceptance Criteria:**
 - [ ] `zig build release` produit `neo-compute-<version>-x86_64-linux.tar.gz` et `neo-compute-<version>-aarch64-linux.tar.gz`. Chacune contient le binaire ReleaseFast strippé pour `*-linux-gnu.2.28`, son `.sha256` et un `README`.
 - [ ] Le binaire ne déclare dans `NEEDED` que des bibliothèques de la glibc. libpipewire et libxkbcommon sont chargées par `dlopen`.
+- [ ] `zig build release` construit avec `-Dtest-hooks=false` : ni le binaire ni l'extension qu'il embarque ne contiennent `SimulatePhysical` ou `--physical-input simulated` (recherche dans les octets des archives, P12).
+- [ ] Étant donné le binaire d'une archive lancé avec `--physical-input simulated`, alors il refuse de démarrer avec le message existant d'option inconnue.
+- [ ] Le `README` donne la règle udev qui accorde à l'utilisateur la lecture des seuls souris et pavés tactiles, pour `--physical-input evdev` sous wlroots (P3).
 - [ ] Le binaire x86_64 répond à `initialize` dans des conteneurs (podman) Fedora 45, Ubuntu 22.04 et Ubuntu 26.04.
 - [ ] Le binaire aarch64 répond à `initialize` dans un conteneur Ubuntu 26.04 `--arch arm64` sous `qemu-aarch64-static` (paquet `qemu-user-static`, absent de la machine, à installer par Arthur). Le verdict de A45 est consigné dans 0014.
 - [ ] Étant donné aucun émulateur aarch64 installé, alors `zig build release` construit l'archive aarch64 avec `-UNVERIFIED` dans son nom, et le rapport le signale en tête.
 - [ ] Le binaire strippé fait moins de 3 MB (A39). Sinon, le rapport donne sa taille par module et le signale en tête.
 - [ ] Le `README` donne `neo-compute setup`, la reconnexion, puis `claude mcp add -s user neo-compute -- <chemin>`, avec la vérification par `claude mcp list` d'AGENTS.md.
-- [ ] Arthur installe l'archive sur sa session Fedora 45 et sur une machine virtuelle Ubuntu 26.04 (GNOME 50, A36), puis lance `selftest --real-session`. Les résultats sont consignés dans 0014.
+- [ ] Arthur installe l'archive sur sa session Fedora 45 et sur une machine virtuelle Ubuntu 26.04 (GNOME 50, A36), puis lance `selftest --real-session`, dont les contrôles du kill switch attendent ses propres gestes. Les résultats sont consignés dans 0014.
 - [ ] Étant donné une glibc antérieure à 2.28, alors le chargeur refuse le binaire. Le `README` nomme ce plancher et les distributions qui le respectent.
 
 ---
@@ -1327,11 +1353,11 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 - FR-50: Sous GNOME, les outils d'entrée envoient de vrais événements de pointeur et de clavier par le canal EI de la session `org.gnome.Mutter.RemoteDesktop` (D14).
 - FR-51: Aucun caractère passé à `type` n'est perdu sans erreur : un caractère qui ne peut pas être tapé fait échouer l'appel avant tout envoi.
 - FR-52: Sur SIGINT, SIGTERM et SIGHUP, le serveur relâche toute entrée tenue et sort en moins de 50 ms. À sa mort, le compositeur ou un gardien relâche en moins de 50 ms (étend FR-07).
-- FR-53: Une entrée réelle n'est envoyée que si un kill switch par entrée physique est actif sur la famille courante. Seule exception, dans un banc (P12) : des gestes physiques simulés remplacent la source physique.
+- FR-53: Une entrée réelle n'est envoyée que si un kill switch par entrée physique est actif sur la famille courante. Seule exception, dans un build de test et dans un banc (P12) : des gestes physiques simulés remplacent la source physique.
 - FR-54: Le serveur ne modifie aucun réglage du système de l'utilisateur, sauf par `neo-compute setup`. Seule exception : l'écriture de `toolkit-accessibility` que fait at-spi2-core quand le serveur s'abonne aux événements (D13).
 - FR-55: L'extension GNOME et le script KWin n'acceptent que les appels du serveur. Le serveur vérifie que leur nom appartient au Shell ou à KWin.
-- FR-56: En mode serveur, neo-compute n'exécute aucun programme lui-même. Seul `app_launch` fait exécuter une application, sans shell, par le processus lanceur créé au démarrage ; le gardien wlroots est une copie du serveur, sans `exec`. Les sous-commandes de test (`selftest`, sondes) lancent leurs fixtures.
-- FR-57: Un filtre seccomp posé au démarrage, après la création du lanceur et du gardien, interdit au serveur toute socket réseau (fait respecter FR-10). Les applications lancées n'en héritent pas.
+- FR-56: En mode serveur, neo-compute n'exécute aucun programme lui-même, ce que le filtre de FR-57 garantit. Seul `app_launch` fait exécuter une application, sans shell, par le processus lanceur créé au démarrage, qui ne reçoit qu'un identifiant `.desktop` et des chemins ; le gardien wlroots est une copie du serveur, sans `exec`. Les sous-commandes de test (`selftest`, sondes) lancent leurs fixtures.
+- FR-57: Un filtre seccomp posé au démarrage, après la création du lanceur et du gardien, interdit au serveur toute socket réseau, `execve`, `execveat`, `ptrace`, `process_vm_readv` et `process_vm_writev` (fait respecter FR-10 et FR-11). Les applications lancées n'en héritent pas.
 - FR-58: Les selftests, le bench et les évals Linux tournent dans une session isolée. Un témoin vérifie que la session réelle n'a pas changé.
 - FR-59: Sur chaque famille, le serveur refuse d'agir sur un écran verrouillé, pendant un dialogue système modal, et sur une fenêtre d'un autre uid. Signaux : `ScreenSaver.GetActive` et `Main.modalCount` sous GNOME ; `org.freedesktop.ScreenSaver.GetActive` et la fenêtre active de l'agent polkit sous KDE ; aucune fenêtre active, `LockedHint` et la liste des agents polkit sous wlroots (A47).
 - FR-60: L'action `Peek` n'est jamais appelée, et ni le texte ni la longueur d'un mot de passe ne sortent (étend FR-09).
@@ -1347,7 +1373,7 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
   - `bg-act` < 20 ms p95 ; `bg-settle` < 150 ms p95 (étape `settle`) ; `bg-capture` < 60 ms p95 ;
   - relâche < 50 ms (FR-07) ; pause < 100 ms (FR-36) ; restauration du premier plan < 200 ms ; réaction de `ui_find` `wait_ms` < 100 ms (PRD background).
 - **Footprint :** binaire ReleaseFast strippé ≤ 3 MB (A39) ; 0 allocation du GPA par requête en régime établi (AGENTS.md) ; attente de `ui_find` < 5 % d'un cœur.
-- **Security :** 0 socket réseau (test seccomp) ; 0 appel des membres interdits de FR-61 (test du générateur) ; 0 création de processus hors des sites admis par FR-56 (`launch.zig`, `guardian.zig`, fichiers de selftest et de sonde ; test du build) ; 0 fuite sur les tâches canari.
+- **Security :** 0 socket réseau et 0 `execve` du serveur (tests seccomp) ; 0 appel des membres interdits de FR-61 (test du générateur) ; 0 création de processus hors des sites admis par FR-56 (`launch.zig`, `guardian.zig`, fichiers de selftest et de sonde ; test du build) ; 0 fuite sur les tâches canari.
 - **Reliability :** 0 différence du témoin des bancs sur 20 cycles par famille ; 0 violation sur 1 000 actions `bg-loop` sous GNOME et KDE.
 - **Compatibility :** glibc ≥ 2.28, x86_64 et aarch64 ; GNOME 50 et 51, Plasma 6.8, sway 1.12, labwc 0.20 (P6).
 
@@ -1375,7 +1401,7 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 | 18 | Entrée de terminal | `.desktop` avec `Terminal=true` | Refus | « <application> s'ouvre dans un terminal : refusé, aucun outil de commande (FR-11). » |
 | 19 | Partage arrêté par l'utilisateur | Clic sur l'indicateur de partage de GNOME (repli ScreenCast) | Pause | « Partage d'écran arrêté par l'utilisateur : en pause. Attends qu'Arthur réarme. » |
 | 20 | libpipewire ou libxkbcommon absente | Système minimal | Capacité absente | « libpipewire introuvable : … » / « libxkbcommon introuvable : installe-la pour taper du texte. » |
-| 21 | Entrée sous wlroots sans evdev | Pas de `--physical-input evdev` | Entrée refusée | « Entrée réelle indisponible sous <compositeur> : aucun kill switch sans --physical-input evdev (lecture de /dev/input). Relance neo-compute avec cette option si tu l'acceptes. » |
+| 21 | Entrée sous wlroots sans evdev | Pas de `--physical-input evdev` | Entrée refusée | « Entrée réelle indisponible sous <compositeur> : aucun kill switch sans --physical-input evdev (lecture des seules souris dans /dev/input). Relance neo-compute avec cette option si tu l'acceptes. » |
 | 22 | Arrière-plan sous wlroots | `--mode background` sous sway | Mode refusé | « Mode arrière-plan indisponible sous <compositeur> : aucun protocole ne donne l'empilement des fenêtres. Relance en mode a11y. » |
 | 23 | Serveur figé | SIGSTOP pendant `hold_key` | Les touches restent tenues (limite documentée) | (aucun) |
 | 24 | Selftest sur la session réelle | `neo-compute selftest` hors banc | Refus | « selftest injecte des entrées : lance-le par zig build session, ou ajoute --real-session sur ta propre session. » |
@@ -1385,7 +1411,9 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 | 28 | Fenêtre minimisée capturée | `screenshot` avec `window` sur une fenêtre minimisée (GNOME) | Pas d'image | « Fenêtre minimisée : restaure-la avec window_set (state normal). » |
 | 29 | Raccourci de pause injecté | `key` avec la combinaison du raccourci de pause (KDE) | Refus, rien n'est envoyé | « Combinaison réservée au raccourci de pause de neo-compute : refusée. » |
 | 30 | Capture d'écran sous labwc avec mot de passe | Fenêtre active avec un champ mot de passe, géométrie inconnue | Capture refusée | « Capture de l'écran refusée sous labwc : la fenêtre active contient un champ mot de passe dont la position est inconnue. Capture la fenêtre avec window. » |
-| 31 | Option de test hors banc | `--physical-input simulated` hors d'un banc (P12) | Démarrage refusé | « --physical-input simulated est réservé aux bancs de test. » |
+| 31 | Option de test hors banc | `--physical-input simulated` hors d'un banc (P12), dans un build de test | Démarrage refusé | « --physical-input simulated est réservé aux bancs de test. » |
+| 33 | Extension perdue en cours de session | Extension désactivée ou Shell redémarré pendant une action (GNOME) | Entrées relâchées, pause | Message de P1 à l'action d'entrée suivante |
+| 34 | Réarmement par un programme | Clic sur le libellé « en pause » sans appui physique confirmé par evdev (wlroots) | La pause reste, l'audit l'enregistre | (aucun) |
 | 32 | Document sans application | `app_launch` d'un fichier dont le type n'a pas d'application par défaut | Rien n'est lancé | « Aucune application pour <type> : ouvre le fichier avec une application nommée. » |
 
 ## Risks & Mitigations
@@ -1404,7 +1432,7 @@ Faire respecter par le noyau les invariants de sécurité sous Linux, et livrer 
 | 10 | Un mot de passe sort par AT-SPI (puces, `Peek`) ou par une capture | Low | High | FR-60 ; image refusée sans balayage complet (FR-42) ; tâche canari Linux |
 | 11 | Chrome recouvert rend un arbre figé sous Linux (A31) | High | Med | Sonde US-114 ; verdict « non vérifiable » comme sous Windows |
 | 12 | Une évolution du cœur casse Windows | Med | High | Gates Windows obligatoires pour toute story qui touche le cœur ou le build ; tests de comparaison d'octets (US-071) |
-| 13 | 58 stories dépassent une livraison | High | Low | Trois livraisons ; la livraison 1 rend GNOME utilisable seule |
+| 13 | 59 stories dépassent une livraison | High | Low | Trois livraisons ; la livraison 1 rend GNOME utilisable seule |
 | 14 | Les selftests reposent sur Python (fixture) | Low | Low | `python3 -I` ; contrôles notés `skipped` avec leur raison si PyGObject manque |
 | 15 | Le serveur figé par SIGSTOP garde ses touches | Low | Med | Limite documentée (US-093) ; hors du chemin d'arrêt de Claude Code, qui envoie SIGINT, SIGTERM puis SIGKILL |
 | 16 | Les applications lancées héritent du filtre seccomp et perdent le réseau | High | High | Processus lanceur créé avant le filtre (T9, US-099) ; contrôle `app-launch` de US-119 qui lit `Seccomp:` à 0 pour l'application lancée |
