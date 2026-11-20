@@ -1,0 +1,1020 @@
+{
+  "prd": {
+    "file": "tasks/prd-linux-port.md",
+    "title": "neo-compute, portage Linux",
+    "created_at": "2026-11-20",
+    "status": "READY"
+  },
+  "epics": [
+    {
+      "id": "EP-019",
+      "title": "Fondations : build honnête, modules par OS, cœur neutre",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 7,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-020",
+      "title": "Bancs de test Linux isolés",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 3,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-021",
+      "title": "Transports natifs générés",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 4,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-022",
+      "title": "Détection et GNOME Shell : extension, fenêtres, écrans",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 5,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-023",
+      "title": "Accessibilité AT-SPI",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 4,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-024",
+      "title": "GNOME : souris et clavier réels (D14)",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 5,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-025",
+      "title": "GNOME : capture, presse-papiers et lancement",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 6,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-026",
+      "title": "GNOME : mode arrière-plan",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 5,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-027",
+      "title": "KDE Plasma",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 5,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-028",
+      "title": "wlroots (sway, labwc)",
+      "status": "TODO",
+      "priority": "P2",
+      "stories_total": 5,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-029",
+      "title": "Chromium et Electron sous Linux",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 2,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-030",
+      "title": "Bench Linux",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 1,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-031",
+      "title": "Évals Linux",
+      "status": "TODO",
+      "priority": "P1",
+      "stories_total": 4,
+      "stories_done": 0
+    },
+    {
+      "id": "EP-032",
+      "title": "Sécurité et distribution",
+      "status": "TODO",
+      "priority": "P0",
+      "stories_total": 2,
+      "stories_done": 0
+    }
+  ],
+  "stories": [
+    {
+      "id": "US-067",
+      "title": "Amendement de la décision 0014 pour les points de contrat du PRD",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "XS",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-068",
+      "title": "Build honnête sur une copie fraîche",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-069",
+      "title": "Modules par OS et squelette du backend Linux",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-068"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-070",
+      "title": "Politique et audit aux emplacements XDG, identité d'application",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-069"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-071",
+      "title": "Contrat par OS : textes, outils optionnels, identifiants de fenêtre",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-069"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-072",
+      "title": "Arrêt par signal et instance unique sous Linux",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-069"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-073",
+      "title": "Bench par système d'exploitation",
+      "epic": "EP-019",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-068"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-074",
+      "title": "Lanceur de session isolée et témoin de la session réelle (GNOME)",
+      "epic": "EP-020",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [
+        "US-068"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-075",
+      "title": "KDE, sway et labwc dans le lanceur",
+      "epic": "EP-020",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-074"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-076",
+      "title": "Fixtures Linux",
+      "epic": "EP-020",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-074"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-077",
+      "title": "Générateur protogen et descriptions épinglées",
+      "epic": "EP-021",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-069"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-078",
+      "title": "Fil D-Bus natif",
+      "epic": "EP-021",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-074",
+        "US-077"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-079",
+      "title": "Fil Wayland natif",
+      "epic": "EP-021",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-074",
+        "US-075",
+        "US-077"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-080",
+      "title": "Fil EI natif et dispositions xkb",
+      "epic": "EP-021",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-074",
+        "US-076",
+        "US-078"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-081",
+      "title": "Détection de la famille et table de capacités",
+      "epic": "EP-022",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-067",
+        "US-074",
+        "US-078",
+        "US-079"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-082",
+      "title": "Extension GNOME Shell embarquée et `neo-compute setup`",
+      "epic": "EP-022",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-081"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-083",
+      "title": "Sonde A24 : distinguer l'entrée physique de l'entrée injectée",
+      "epic": "EP-022",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-067",
+        "US-076",
+        "US-080",
+        "US-082"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-084",
+      "title": "Fenêtres GNOME : liste, empilement, gestion, pointeur",
+      "epic": "EP-022",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [
+        "US-082"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-085",
+      "title": "Écrans et échelles",
+      "epic": "EP-022",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-081"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-086",
+      "title": "Lecture de l'arbre AT-SPI",
+      "epic": "EP-023",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [
+        "US-076",
+        "US-084"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-087",
+      "title": "Actions AT-SPI et verdicts",
+      "epic": "EP-023",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [
+        "US-086"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-088",
+      "title": "Événements, compteur de changements et réactivité",
+      "epic": "EP-023",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-086"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-089",
+      "title": "Mots de passe et coordonnées des éléments",
+      "epic": "EP-023",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-085",
+        "US-086"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-090",
+      "title": "Pointeur réel par EI",
+      "epic": "EP-024",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-076",
+        "US-080",
+        "US-082",
+        "US-084",
+        "US-085"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-091",
+      "title": "Clavier réel : touches, combinaisons et texte de la disposition",
+      "epic": "EP-024",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-090"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-092",
+      "title": "Sonde A26 et saisie hors disposition",
+      "epic": "EP-024",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-091",
+        "US-098"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-093",
+      "title": "Relâchement des entrées tenues sous GNOME",
+      "epic": "EP-024",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-072",
+        "US-090"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-094",
+      "title": "Kill switch, pause, indicateur et verrouillage sous GNOME",
+      "epic": "EP-024",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-083",
+        "US-093"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-095",
+      "title": "Sonde A25 : capture par l'extension",
+      "epic": "EP-025",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "S",
+      "blocked_by": [
+        "US-082"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-096",
+      "title": "Capture d'écran et de fenêtre par l'extension",
+      "epic": "EP-025",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "L",
+      "blocked_by": [
+        "US-085",
+        "US-089",
+        "US-095"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-097",
+      "title": "Repli ScreenCast par libpipewire chargée à l'exécution",
+      "epic": "EP-025",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "L",
+      "blocked_by": [
+        "US-067",
+        "US-078",
+        "US-095"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-098",
+      "title": "Presse-papiers sous GNOME",
+      "epic": "EP-025",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-090"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-099",
+      "title": "Catalogue et lancement d'applications",
+      "epic": "EP-025",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-070",
+        "US-081"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-124",
+      "title": "Ouverture de documents par leur application par défaut",
+      "epic": "EP-025",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-099"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-100",
+      "title": "Leurre, témoin et selftest d'arrière-plan Linux",
+      "epic": "EP-026",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-076",
+        "US-084",
+        "US-094",
+        "US-098"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-101",
+      "title": "Garde du premier plan, lancement et restauration sans focus",
+      "epic": "EP-026",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-099",
+        "US-100"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-102",
+      "title": "Cible de session, recouvrement et stabilisation sur événements",
+      "epic": "EP-026",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-088",
+        "US-100"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-103",
+      "title": "Capture d'une fenêtre recouverte en arrière-plan",
+      "epic": "EP-026",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [
+        "US-096",
+        "US-102"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-104",
+      "title": "Pause par raccourci et libellé seul en arrière-plan",
+      "epic": "EP-026",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [
+        "US-094",
+        "US-100"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-105",
+      "title": "Sonde A27, A28 et A41 sur une vraie session Plasma",
+      "epic": "EP-027",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-080"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-106",
+      "title": "Script KWin persistant : fenêtres, empilement, garde, pointeur",
+      "epic": "EP-027",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "L",
+      "blocked_by": [
+        "US-075",
+        "US-081",
+        "US-105"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-107",
+      "title": "Entrée par EIS, relâchement et kill switch sous KDE",
+      "epic": "EP-027",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-072",
+        "US-076",
+        "US-106"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-108",
+      "title": "Capture ScreenShot2, presse-papiers et libellé sous KDE",
+      "epic": "EP-027",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-079",
+        "US-106"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-109",
+      "title": "Mode arrière-plan sous KDE",
+      "epic": "EP-027",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-100",
+        "US-107",
+        "US-108",
+        "US-114"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-110",
+      "title": "Pointeur et clavier virtuels sous wlroots",
+      "epic": "EP-028",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-075",
+        "US-076",
+        "US-080",
+        "US-081"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-121",
+      "title": "Gardien de relâche et entrée physique sous wlroots",
+      "epic": "EP-028",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "M",
+      "blocked_by": [
+        "US-072",
+        "US-110"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-111",
+      "title": "Fenêtres sous wlroots",
+      "epic": "EP-028",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "M",
+      "blocked_by": [
+        "US-075",
+        "US-076",
+        "US-079",
+        "US-081"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-122",
+      "title": "Capture sous wlroots",
+      "epic": "EP-028",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "M",
+      "blocked_by": [
+        "US-089",
+        "US-111",
+        "US-114"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-112",
+      "title": "Presse-papiers, libellé, pointeur et limites sous wlroots",
+      "epic": "EP-028",
+      "status": "TODO",
+      "priority": "P2",
+      "size": "S",
+      "blocked_by": [
+        "US-067",
+        "US-111",
+        "US-121"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-113",
+      "title": "Accessibilité de Chromium et Electron au lancement",
+      "epic": "EP-029",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [
+        "US-086",
+        "US-099"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-114",
+      "title": "Sonde A31 : Chromium recouvert sous GNOME",
+      "epic": "EP-029",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-096",
+        "US-113"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-115",
+      "title": "Scénarios Linux et baseline",
+      "epic": "EP-030",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-073",
+        "US-096",
+        "US-099",
+        "US-102",
+        "US-103",
+        "US-113"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-116",
+      "title": "Harnais d'évals Linux",
+      "epic": "EP-031",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "L",
+      "blocked_by": [
+        "US-067",
+        "US-074",
+        "US-090"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-117",
+      "title": "Tâches Linux de la suite existing",
+      "epic": "EP-031",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-096",
+        "US-098",
+        "US-099",
+        "US-113",
+        "US-116",
+        "US-124"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-123",
+      "title": "Tâches Linux des suites parity et background",
+      "epic": "EP-031",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-100",
+        "US-101",
+        "US-103",
+        "US-117"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-118",
+      "title": "Campagne Linux",
+      "epic": "EP-031",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "S",
+      "blocked_by": [
+        "US-104",
+        "US-114",
+        "US-115",
+        "US-117",
+        "US-123"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-119",
+      "title": "Invariants de sécurité Linux",
+      "epic": "EP-032",
+      "status": "TODO",
+      "priority": "P0",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-072",
+        "US-082",
+        "US-084",
+        "US-099"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    },
+    {
+      "id": "US-120",
+      "title": "Archives de distribution et installation",
+      "epic": "EP-032",
+      "status": "TODO",
+      "priority": "P1",
+      "size": "M",
+      "blocked_by": [
+        "US-067",
+        "US-082",
+        "US-091",
+        "US-097"
+      ],
+      "started_at": null,
+      "completed_at": null,
+      "reviewed_at": null
+    }
+  ]
+}
