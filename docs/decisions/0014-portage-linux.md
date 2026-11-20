@@ -1,6 +1,6 @@
 # 0014 : choix structurants du portage Linux
 
-- Statut : décidé, avant le PRD du portage ; amendé le 2026-11-20 (P1, P3, P9, P10, P12)
+- Statut : décidé, avant le PRD du portage ; amendé le 2026-11-20 (P1 à P12)
 - Date : 2026-11-20
 - Source : audit `docs/research/2026-11-20-audit-portage-linux.md`, section 14. Arthur a validé les treize recommandations et ajouté une exigence (D14).
 
@@ -109,12 +109,19 @@ Ce que l'audit a mesuré et ce que l'implémentation doit respecter :
 ## Amendement du PRD Linux
 
 - Date : 2026-11-20
-- Source : points de contrat P1 à P12 du PRD `tasks/prd-linux-port.md` (section « Décisions de contrat proposées »). Arthur a validé le 2026-11-20 les recommandations faites pour P1, P3, P9, P10 et P12 (« Ok vas-y »). P2, P4 à P8 et P11 restent à trancher par US-067.
+- Source : points de contrat P1 à P12 du PRD `tasks/prd-linux-port.md` (section « Décisions de contrat proposées »). Arthur a validé le 2026-11-20 les recommandations faites pour P1, P3, P9, P10 et P12 (« Ok vas-y »). Le même jour, pendant US-067, il a répondu « Valider » à chacun des sept autres points, P2, P4 à P8 et P11, posés un par un avec leur preuve : chacun est décidé tel que le PRD le propose.
 
 ### P1. Entrée réelle sous GNOME
 
 - L'entrée réelle exige l'extension, seule source du kill switch par entrée physique (D4, D14). Sans elle, les outils d'entrée sont refusés et le message renvoie à `neo-compute setup`.
 - Si l'extension disparaît pendant une session (désactivée, Shell redémarré), le serveur le voit à la perte du propriétaire de `org.neocompute.Shell1`, relâche les entrées tenues en moins de 50 ms et se met en pause. Sans cela, le kill switch pourrait tomber en silence pendant une action.
+
+### P2. Kill switch sous KDE
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- Le kill switch se déclenche sur un mouvement physique du pointeur, détecté en retirant de la position du curseur la dernière position absolue que le serveur a injectée (D4), et sur le raccourci de pause pris par kglobalaccel. Le serveur refuse d'injecter la combinaison de ce raccourci.
+- Un Échap physique ne déclenche rien : KWin ne donne les touches qu'au nom d'Orca, que D5 interdit de prendre (audit 4.2).
+- La détection par soustraction (A41) reste à valider sur une vraie session Plasma par US-105, avant US-107.
 
 ### P3. Entrée réelle sous wlroots
 
@@ -123,6 +130,36 @@ Ce que l'audit a mesuré et ce que l'implémentation doit respecter :
 - Le réarmement se fait par un clic physique sur le libellé « en pause » : le libellé ne reçoit les clics que pendant une pause, et le clic ne compte que si evdev rapporte un appui physique dans les 50 ms. Un pointeur virtuel ne crée aucun événement evdev (A42), donc aucun programme ne peut réarmer le serveur.
 - Écart avec la recommandation : un raccourci de sway qui lance `neo-compute rearm` était proposé. Il est écarté, car l'agent pourrait lancer cette commande par l'outil Bash de Claude Code, et un raccourci de sway se déclenche aussi sur un clavier virtuel.
 - Le mode arrière-plan reste refusé sous wlroots (D1).
+
+### P4. `neo-compute setup`
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- `neo-compute setup` installe l'extension embarquée dans son dossier (`~/.local/share/gnome-shell/extensions/<uuid>/`) et l'ajoute à la clé `org.gnome.shell enabled-extensions`. `neo-compute setup --uninstall` retire ce dossier et cette entrée de la clé.
+- Elles ne modifient rien d'autre (FR-54), et le serveur ne les appelle jamais au démarrage (D2).
+
+### P5. Selftest hors de la session réelle
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- Sous Linux, `selftest` refuse la session réelle sans `--real-session`, réservé à Arthur. Huit des neuf incidents de l'audit viennent de sondes qui ont touché la session réelle (audit 12).
+
+### P6. Versions prises en charge
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- GNOME 50 et 51, Plasma 6.8, sway 1.12, labwc 0.20 : les versions installées et mesurées (audit 1.2). GNOME 50 est celui d'Ubuntu 26.04 LTS (audit 1.1).
+- Une session X11 est refusée avec un message (D1).
+
+### P7. Format de distribution
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- glibc 2.28 en lien dynamique, pour x86_64 et aarch64. libpipewire et libxkbcommon sont chargées à l'exécution par `dlopen`.
+- musl statique interdit le `dlopen`, et le lien direct de bibliothèques système en ciblant 2.28 échoue sur `stat64@GLIBC_2.33` (audit 10, mesuré).
+
+### P8. Listes de politique Linux par défaut
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- Niveau `deny` : les gestionnaires de mots de passe KeePassXC, Bitwarden, 1Password et Proton Pass.
+- Niveau `click` : les terminaux GNOME Terminal, Ptyxis, Konsole, kitty, Alacritty, foot, WezTerm, Ghostty, xterm et Paneflow, et les éditeurs de code VS Code, Cursor, Windsurf et Zed, comme la liste `shells` de Windows.
+- Une entrée correspond par identifiant d'application ou par nom d'exécutable, sans tenir compte de la casse (D8).
 
 ### P9. Filtre seccomp et refus de sécurité
 
@@ -134,6 +171,11 @@ Ce que l'audit a mesuré et ce que l'implémentation doit respecter :
 - En mode serveur, neo-compute n'exécute aucun programme lui-même. Le filtre de P9 le garantit dans le noyau, et le test du build qui borne les sites de création de processus reste une seconde défense.
 - Seul `app_launch` fait exécuter une application, sans shell, par un processus lanceur créé au démarrage, sans filtre : une application lancée par le serveur filtré hériterait du filtre et n'aurait pas de réseau (`seccomp(2)`).
 - Le serveur ne passe au lanceur qu'un identifiant `.desktop`, des chemins absolus ou des URI, et un drapeau d'accessibilité Chromium. Le lanceur lit lui-même l'entrée et construit la commande, et il rejette tout autre message.
+
+### P11. Évals Linux
+
+- Réponse d'Arthur, 2026-11-20 : « Valider ».
+- Les évals Linux tournent dans une session GNOME isolée, jamais sur le bureau réel (P5), avec un harnais en Zig (`tools/evals-linux`) : pwsh est absent de la machine et le témoin C# de `run.ps1` ne se porte pas (audit 9.1, T10).
 
 ### P12. Gestes physiques simulés
 
