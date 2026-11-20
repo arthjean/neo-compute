@@ -511,6 +511,180 @@ test "an entry a drop-down drops when it collapses is selected again once it is 
     try expectContains(text(try f.h.call("ui_tree", "{}")), "combobox \"Pays\" {collapsed}");
 }
 
+// ---------------------------------------------------------------- US-064
+
+const countries = [_][]const u8{ "France", "Belgique", "Suisse" };
+
+test "select with a name on a Win32 drop-down goes by its messages: no expand, entry set, owner told, verdict read back" {
+    var f: Form = .{};
+    try f.init(&form);
+    defer f.deinit();
+    const b = &f.h.backend;
+    b.ui_native = .{ .key = 5, .entries = &countries, .current = 0 };
+    const combo = f.id("Pays");
+    const res = try f.actOn(combo, "\"action\":\"select\",\"value\":\" BELGÏQUE \"");
+    try testing.expect(!isError(res));
+    try expect(res, "select {s} : vérifié (sélectionné) ; par messages natifs ; entrée « Belgique »", .{combo});
+    // No pattern call: the list never opened.
+    try testing.expectEqual(@as(usize, 0), b.ui_op_len);
+    try testing.expectEqual(@as(?usize, 1), b.ui_native.?.current);
+    try testing.expectEqual(@as(u32, 1), b.ui_native_sets);
+    try testing.expectEqual(@as(u32, 1), b.ui_native_notices);
+
+    // A list box takes the same path.
+    b.ui_native = .{ .key = 9, .kind = .list_box, .entries = &.{ "Article 1", "Article 40" } };
+    const list = f.id("Articles");
+    try expect(try f.actOn(list, "\"action\":\"select\",\"value\":\"article 40\""), "select {s} : vérifié (sélectionné) ; par messages natifs ; entrée « Article 40 »", .{list});
+    try testing.expectEqual(@as(usize, 0), b.ui_op_len);
+    try testing.expectEqual(@as(u32, 2), b.ui_native_notices);
+
+    // An application that puts its former entry back contradicts it.
+    b.ui_native = .{ .key = 5, .entries = &countries, .current = 0, .rejects = true };
+    const back = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Suisse\"");
+    try testing.expect(isError(back));
+    try expect(back, "select {s} : contredit, état lu non sélectionné ; par messages natifs ; entrée « Suisse ». " ++ not_replayable, .{combo});
+}
+
+test "a list the native path does not drive keeps the UI Automation path of US-053 unchanged" {
+    var f: Form = .{};
+    try f.init(&form);
+    defer f.deinit();
+    const b = &f.h.backend;
+    // Drawn by its owner, ComboBoxEx32, multiple selection or another class.
+    b.ui_native = .{ .key = 5, .entries = &countries, .unsupported = true };
+    const combo = f.id("Pays");
+    const entry = f.id("Belgique");
+    try expect(try f.actOn(combo, "\"action\":\"select\",\"value\":\"belgique\""), "select {s} : vérifié (sélectionné) ; entrée {s}", .{ combo, entry });
+    try testing.expectEqualSlices(Tag, &.{ .expand, .select, .collapse }, f.ops(0));
+    try testing.expectEqual(@as(u32, 0), b.ui_native_sets + b.ui_native_notices);
+}
+
+test "a name no entry bears, or two bear, sends nothing to the list and gives the messages of US-053" {
+    var f: Form = .{};
+    var twins = form;
+    twins[10].name = "Article 1";
+    try f.init(&twins);
+    defer f.deinit();
+    const b = &f.h.backend;
+    b.ui_native = .{ .key = 5, .entries = &countries, .current = 0 };
+    const combo = f.id("Pays");
+    const none = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Italie\"");
+    try testing.expect(isError(none));
+    try expect(none, "Aucune entrée « Italie » dans {s}. Entrées : « France », « Belgique », « Suisse ». Aucune action exécutée.", .{combo});
+
+    // A closed drop-down shows no entry in the tree: their positions.
+    b.ui_native = .{ .key = 5, .entries = &.{ "France", "Belgique", "belgique" }, .current = 0 };
+    const two = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Belgique\"");
+    try testing.expect(isError(two));
+    try expect(two, "2 entrées nommées « Belgique » dans {s} : positions 2, 3. Une liste déroulante ne les distingue que par leur position : aucune n'est choisie. Aucune action exécutée.", .{combo});
+
+    // A list box shows them: their ids.
+    b.ui_native = .{ .key = 9, .kind = .list_box, .entries = &.{ "Article 1", "Article 1" } };
+    const list = f.id("Articles");
+    const dup = try f.actOn(list, "\"action\":\"select\",\"value\":\"article 1\"");
+    try testing.expect(isError(dup));
+    const head = try std.fmt.allocPrint(f.h.arena.allocator(), "2 entrées nommées « article 1 » dans {s} : ", .{list});
+    const tail = ". Choisis-en une par son id avec select sans value. Aucune action exécutée.";
+    try testing.expect(std.mem.startsWith(u8, text(dup), head) and std.mem.endsWith(u8, text(dup), tail));
+    var it = std.mem.splitSequence(u8, text(dup)[head.len .. text(dup).len - tail.len], ", ");
+    var n: usize = 0;
+    while (it.next()) |one| : (n += 1) try testing.expect(uitree.parseId(one) != null);
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expectEqual(@as(usize, 0), b.ui_op_len);
+    try testing.expectEqual(@as(u32, 0), b.ui_native_sets + b.ui_native_notices);
+}
+
+test "a list that does not answer sends nothing, and a selection its owner was not told of is never a success" {
+    var f: Form = .{};
+    try f.init(&form);
+    defer f.deinit();
+    const b = &f.h.backend;
+    const combo = f.id("Pays");
+    b.ui_native = .{ .key = 5, .entries = &countries, .current = 0, .hung = true };
+    const hung = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Suisse\"");
+    try testing.expect(isError(hung));
+    try testing.expectEqualStrings("L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot.", text(hung));
+    try testing.expectEqual(@as(u32, 0), b.ui_native_sets);
+    try testing.expectEqual(@as(usize, 0), b.ui_op_len);
+
+    b.ui_native = .{ .key = 5, .entries = &countries, .current = 0, .owner_hung = true };
+    const silent = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Suisse\"");
+    try testing.expect(isError(silent));
+    try expect(silent, "select {s} : sélection posée, mais l'application n'a pas pris l'avis du changement en 200 ms (fenêtre figée ou occupée) : elle peut l'ignorer. Relis l'arbre avant de rejouer.", .{combo});
+    try testing.expectEqual(@as(u32, 1), b.ui_native_sets);
+    try testing.expectEqual(@as(u32, 0), b.ui_native_notices);
+}
+
+test "an elevated list is refused by UIPI before any message, and the policy of the list's application applies" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const p = policy.parse(arena.allocator(), "{\"apps\": {\"SystemSettings.exe\": \"observe\"}}", "policy.json");
+    var f: Form = .{};
+    f.h.initWith(testing.allocator, .{ .policy = &p });
+    defer f.deinit();
+    const b = &f.h.backend;
+    b.ui_elements = &form;
+    f.tree = text(try f.h.call("ui_tree", "{}"));
+    const combo = f.id("Pays");
+    b.ui_native = .{ .key = 5, .entries = &countries, .elevated = true };
+    const up = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Suisse\"");
+    try testing.expect(isError(up));
+    try testing.expectEqualStrings("Fenêtre élevée : injection bloquée par UIPI. Relance l'app sans élévation ou agis toi-même.", text(up));
+
+    // The list's own window belongs to an observe application.
+    b.ui_native = .{ .key = 5, .entries = &countries, .handle = 0x5e6f };
+    const refused = try f.actOn(combo, "\"action\":\"select\",\"value\":\"Suisse\"");
+    try testing.expect(isError(refused));
+    try expectContains(text(refused), "Politique : SystemSettings.exe est en mode observe");
+    try testing.expectEqual(@as(u32, 0), b.ui_native_sets + b.ui_native_notices);
+    try testing.expectEqual(@as(usize, 0), b.ui_op_len);
+}
+
+test "select without a value on an entry of a Win32 list box keeps Select, then tells the owner when the list notifies" {
+    var f: Form = .{};
+    try f.init(&form);
+    defer f.deinit();
+    const b = &f.h.backend;
+    b.ui_native = .{ .key = 9, .entry_keys = &.{ 10, 11 }, .kind = .list_box };
+    const entry = f.id("Article 1");
+    try expect(try f.actOn(entry, "\"action\":\"select\""), "select {s} : vérifié (sélectionné) ; application prévenue par message natif", .{entry});
+    try testing.expectEqualSlices(Tag, &.{.select}, f.ops(0));
+    try testing.expectEqual(@as(u32, 0), b.ui_native_sets);
+    try testing.expectEqual(@as(u32, 1), b.ui_native_notices);
+
+    // Without LBS_NOTIFY its owner hears nothing, as from a user's click.
+    b.ui_native = .{ .key = 9, .entry_keys = &.{ 10, 11 }, .kind = .list_box, .notifies = false };
+    try expect(try f.actOn(entry, "\"action\":\"select\""), "select {s} : vérifié (sélectionné)", .{entry});
+    try testing.expectEqual(@as(u32, 1), b.ui_native_notices);
+
+    // An owner that does not take the notification.
+    b.ui_native = .{ .key = 9, .entry_keys = &.{ 10, 11 }, .kind = .list_box, .owner_hung = true };
+    const silent = try f.actOn(entry, "\"action\":\"select\"");
+    try testing.expect(isError(silent));
+    try expectContains(text(silent), "sélection posée, mais l'application n'a pas pris l'avis");
+
+    // An elevated list: refused before Select.
+    b.ui_native = .{ .key = 9, .entry_keys = &.{ 10, 11 }, .kind = .list_box, .elevated = true };
+    const from = b.ui_op_len;
+    try testing.expect(isError(try f.actOn(entry, "\"action\":\"select\"")));
+    try testing.expectEqual(from, b.ui_op_len);
+}
+
+test "the native selection works the same in the background mode" {
+    var f: Form = .{};
+    f.h.initWith(testing.allocator, .{ .mode = .background });
+    defer f.deinit();
+    const b = &f.h.backend;
+    b.ui_elements = &form;
+    f.h.server.session.verify_ms = 100;
+    f.tree = text(try f.h.call("ui_tree", "{\"window\":\"0x1a2b\"}"));
+    b.ui_native = .{ .key = 5, .entries = &countries, .current = 0 };
+    const combo = f.id("Pays");
+    try expect(try f.actOn(combo, "\"action\":\"select\",\"value\":\"suisse\""), "select {s} : vérifié (sélectionné) ; par messages natifs ; entrée « Suisse »", .{combo});
+    try testing.expectEqual(@as(usize, 0), b.ui_op_len);
+    try testing.expectEqual(@as(usize, 0), b.mouse_len);
+}
+
 // ---------------------------------------------------------------- US-054
 
 test "a disabled element is read again every 100 ms and the action leaves as soon as it is enabled" {

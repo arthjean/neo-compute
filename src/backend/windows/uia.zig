@@ -76,7 +76,7 @@ const max_positioned = 64;
 
 /// Name and value lengths read from providers, in UTF-16 units: a document
 /// can expose its whole text as a name.
-const max_name_units = 256;
+pub const max_name_units = 256;
 /// Name length of a web page's text nodes (US-024): a paragraph.
 const max_text_units = 1024;
 const max_value_units = 256;
@@ -97,7 +97,7 @@ const no_auto_focus_message = "Mode arrière-plan : UI Automation ne peut pas ag
 
 pub const closed_message = "Fenêtre fermée : rappelle window_list";
 const msaa_set_value_message = "Action set_value indisponible sur cet élément Firefox : clique puis utilise type";
-const hung_message = "L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot.";
+pub const hung_message = "L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot.";
 
 /// Whether the window's thread answers within the provider timeout. UI
 /// Automation does not apply TransactionTimeout to every provider (a Win32
@@ -133,6 +133,7 @@ const Job = union(enum) {
     op: struct { arena: std.mem.Allocator, window: u64, key: u64, op: uitree.Op, out: uitree.OpResult = undefined },
     scroll_host: struct { arena: std.mem.Allocator, window: u64, key: u64, out: ?u64 = null },
     entries: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.EntriesResult = undefined },
+    native: struct { arena: std.mem.Allocator, window: u64, key: u64, of: uitree.NativeOf, out: u64 = 0 },
     subtree: struct { arena: std.mem.Allocator, window: u64, key: u64, request: uitree.Request, out: uitree.SubtreeResult = undefined },
     element: struct { arena: std.mem.Allocator, window: u64, key: u64, out: uitree.ElementResult = undefined },
     /// Rectangles of the visible password fields of a window (null: the
@@ -221,6 +222,14 @@ pub const Worker = struct {
         self.job = .{ .entries = .{ .arena = arena, .window = window, .key = key } };
         self.run();
         return self.job.entries.out;
+    }
+
+    /// The native window of `key`'s list (US-064): see `Session.nativeHandle`.
+    pub fn native(self: *Worker, arena: std.mem.Allocator, window: u64, key: u64, of: uitree.NativeOf) u64 {
+        if (self.start() != null) return 0;
+        self.job = .{ .native = .{ .arena = arena, .window = window, .key = key, .of = of } };
+        self.run();
+        return self.job.native.out;
     }
 
     /// The subtree below element `key`: see `Session.readSubtree`.
@@ -347,6 +356,7 @@ pub const Worker = struct {
                 .op => |*j| j.out = session.?.runOp(j.arena, j.window, j.key, j.op),
                 .scroll_host => |*j| j.out = session.?.scrollHost(j.arena, j.window, j.key),
                 .entries => |*j| j.out = session.?.listEntries(j.arena, j.window, j.key),
+                .native => |*j| j.out = session.?.nativeHandle(j.arena, j.window, j.key, j.of),
                 .subtree => |*j| {
                     session.?.extras_ns = 0;
                     j.out = session.?.readSubtree(j.arena, j.window, j.key, j.request);
@@ -429,6 +439,8 @@ const Session = struct {
     /// RuntimeId and Scroll pattern of an ancestor, and the walker that
     /// climbs to it (US-052).
     host_cache: ?*w.IUIAutomationCacheRequest = null,
+    /// The native window of an entry's parent (US-064).
+    native_cache: ?*w.IUIAutomationCacheRequest = null,
     walker: ?*w.IUIAutomationTreeWalker = null,
     /// The selectable descendants of a container (US-053).
     entry_condition: ?*w.IUIAutomationCondition = null,
@@ -547,6 +559,7 @@ const Session = struct {
         if (self.live_cache) |c| release(c);
         if (self.read_copy) |c| release(c.el);
         if (self.host_cache) |c| release(c);
+        if (self.native_cache) |c| release(c);
         if (self.walker) |c| release(c);
         if (self.entry_condition) |c| release(c);
         if (self.entry_cache) |c| release(c);
@@ -1511,7 +1524,7 @@ const Session = struct {
             w.UIA_IsEnabledPropertyId,                   w.UIA_IsOffscreenPropertyId,                       w.UIA_IsPasswordPropertyId,              w.UIA_BoundingRectanglePropertyId,
             w.UIA_ToggleToggleStatePropertyId,           w.UIA_ExpandCollapseExpandCollapseStatePropertyId, w.UIA_SelectionItemIsSelectedPropertyId, w.UIA_ValueIsReadOnlyPropertyId,
             w.UIA_RangeValueValuePropertyId,             w.UIA_RangeValueMinimumPropertyId,                 w.UIA_RangeValueMaximumPropertyId,       w.UIA_RangeValueIsReadOnlyPropertyId,
-            w.UIA_ScrollVerticalScrollPercentPropertyId, w.UIA_ScrollHorizontalScrollPercentPropertyId,
+            w.UIA_ScrollVerticalScrollPercentPropertyId, w.UIA_ScrollHorizontalScrollPercentPropertyId,     w.UIA_NativeWindowHandlePropertyId,
         }) |p| try check(cache.?.vtable.AddProperty(cache.?, p));
         for (patterns) |p| try check(cache.?.vtable.AddPattern(cache.?, p.id));
         for ([_]w.UIA_PATTERN_ID{ w.UIA_RangeValuePatternId, w.UIA_ScrollPatternId }) |id| try check(cache.?.vtable.AddPattern(cache.?, id));
@@ -1591,6 +1604,39 @@ const Session = struct {
             return k;
         }
         return null;
+    }
+
+    /// The window of `key`'s Win32 list (US-064), 0 for none: the element's
+    /// own for a container, read with it by the live read just before (no
+    /// round trip), or its parent's for an entry (one cached round trip).
+    fn nativeHandle(self: *Session, arena: std.mem.Allocator, window: u64, key: u64, of: uitree.NativeOf) u64 {
+        if (of == .container) if (self.read_copy) |c| if (c.window == window and c.key == key) {
+            var h: w.HWND = null;
+            if (c.el.vtable.get_CachedNativeWindowHandle(c.el, &h) >= 0) return @intFromPtr(h);
+        };
+        const el = switch (self.resolve(arena, window, key)) {
+            .el => |e| e,
+            else => return 0,
+        };
+        var h: w.HWND = null;
+        if (of == .container) return if (el.vtable.get_CurrentNativeWindowHandle(el, &h) >= 0) @intFromPtr(h) else 0;
+        const walker = self.controlWalker() catch return 0;
+        const cache = self.nativeCache() catch return 0;
+        var parent: ?*w.IUIAutomationElement = null;
+        if (walker.vtable.GetParentElementBuildCache(walker, el, cache, &parent) < 0) return 0;
+        const p = parent orelse return 0;
+        defer release(p);
+        return if (p.vtable.get_CachedNativeWindowHandle(p, &h) >= 0) @intFromPtr(h) else 0;
+    }
+
+    fn nativeCache(self: *Session) com.Error!*w.IUIAutomationCacheRequest {
+        if (self.native_cache) |c| return c;
+        var cache: ?*w.IUIAutomationCacheRequest = null;
+        try check(self.automation.vtable.CreateCacheRequest(self.automation, &cache));
+        errdefer release(cache.?);
+        try check(cache.?.vtable.AddProperty(cache.?, w.UIA_NativeWindowHandlePropertyId));
+        self.native_cache = cache;
+        return cache.?;
     }
 
     fn controlWalker(self: *Session) com.Error!*w.IUIAutomationTreeWalker {
@@ -1833,7 +1879,7 @@ fn fail(arena: std.mem.Allocator, what: []const u8) []const u8 {
 }
 
 /// UTF-8 of at most `max` UTF-16 units of `wide`, lone surrogates replaced.
-fn utf8(arena: std.mem.Allocator, wide: []const u16, max: usize) ![]const u8 {
+pub fn utf8(arena: std.mem.Allocator, wide: []const u16, max: usize) ![]const u8 {
     const src = wide[0..@min(wide.len, max)];
     var out: std.ArrayList(u8) = try .initCapacity(arena, src.len * 3);
     var it = std.unicode.Utf16LeIterator.init(src);

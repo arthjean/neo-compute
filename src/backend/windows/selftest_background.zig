@@ -40,6 +40,7 @@ const cohabitation = @import("selftest_cohabitation.zig");
 const actions = @import("selftest_actions.zig");
 const perception = @import("selftest_perception.zig");
 const capture = @import("selftest_capture.zig");
+const native = @import("selftest_native.zig");
 const uia_events = @import("uia_events.zig");
 const core_a11y = @import("../../core/a11y.zig");
 
@@ -319,6 +320,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
     // slider values, selection by name, waited preconditions, verdict.
     if (try actions.run(&b, arena)) return lost(&report);
 
+    // EP-017: the drop-down list and the list box by their own messages,
+    // their owner told.
+    if (try native.run(&b)) return lost(&report);
+
     // EP-014: one element's subtree, one element read again, the occluded
     // flag and what its calculation costs.
     if (try perception.run(&b, &backend, arena)) return lost(&report);
@@ -495,6 +500,14 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.M
 
     // bg-launch: Calculator opens without taking the foreground.
     launchCheck(&b, &backend, arena) catch |err| report.fail("bg-launch", "{t}", .{err});
+
+    // bg-select-winforms: the native path on a WinForms combo box of
+    // another process, then the session's target again.
+    native.winforms(&b, io, env, arena, area) catch |err| switch (err) {
+        error.DecoyLost => return lost(&report),
+        else => report.fail("bg-select-winforms", "{t}", .{err}),
+    };
+    _ = try caller.call("ui_tree", "{{\"window\":\"0x{x}\"}}", .{hwnd});
 
     // bg-must-catch: the detector sees a real click of the a11y mode. Last:
     // it moves the cursor.

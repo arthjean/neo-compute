@@ -300,6 +300,60 @@ pub const EntriesResult = union(enum) { ok: []const Entry, gone, failed: []const
 /// Entries read from one container at most.
 pub const max_entries = 500;
 
+/// A classic Win32 list driven by its own messages (US-064, FR-46): it
+/// lists its entries and takes a selection closed, and its owner is told of
+/// the change as of a user's choice. Optional backend primitives
+/// `uiNativeList` and `uiNativeSelect` give it.
+pub const NativeKind = enum { combo_box, list_box };
+
+/// Which window `uiNativeList` reads for element `key`: the element's own
+/// (`select` with a name on a container), or its parent's (an entry of a
+/// list box selected by its id, whose owner is then told).
+pub const NativeOf = enum { container, entry };
+
+pub const NativeList = struct {
+    /// The list's own window: what `uiNativeSelect` takes.
+    handle: u64,
+    kind: NativeKind,
+    /// Entry texts in index order; empty for `NativeOf.entry`.
+    entries: []const []const u8 = &.{},
+    /// The selected index, null for none.
+    current: ?usize = null,
+    /// Its owner hears of a selection change: always for a combo box, with
+    /// `LBS_NOTIFY` for a list box.
+    notifies: bool = true,
+};
+
+pub const NativeListResult = union(enum) {
+    ok: NativeList,
+    /// Not a list the native path drives (another class, `ComboBoxEx32`;
+    /// for `NativeOf.container`, also drawn by its owner without strings,
+    /// multiple selection, more entries than `max_entries`): UI
+    /// Automation's path applies unchanged.
+    none,
+    /// A window of higher integrity: UIPI refuses its messages.
+    elevated,
+    /// Gone or not answering; nothing was sent.
+    failed: []const u8,
+};
+
+/// What became of the owner's notification of a selection change.
+pub const NativeNotice = enum {
+    sent,
+    /// The list does not notify (a list box without `LBS_NOTIFY`).
+    none,
+    /// The owner did not answer within the bound: the selection is set and
+    /// the application may not know it.
+    timeout,
+};
+
+pub const NativeSelectResult = union(enum) {
+    /// `current`: the selected index read back after the notification.
+    ok: struct { current: ?usize, notice: NativeNotice },
+    /// The list did not take the selection (gone, or not answering).
+    failed: []const u8,
+};
+
 /// Levels above an element searched for a scrollable container (US-052).
 pub const max_scroll_levels = 8;
 

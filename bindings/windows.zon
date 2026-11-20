@@ -215,5 +215,15 @@
         // a window renders at, and a decoy larger than its display.
                               "PrintWindow",
         "PW_RENDERFULLCONTENT",                       "GetDpiForWindow",                           "WM_GETMINMAXINFO",                           "MINMAXINFO",
+
+        // Native selection of Win32 lists (EP-017): the real class and
+        // styles of a list, its entries and selection, and the notification
+        // its owner receives.
+                                       "RealGetWindowClassW",
+        "GetDlgCtrlID",                               "GA_PARENT",                                 "UIA_NativeWindowHandlePropertyId",           "CB_GETCOUNT",                               "CB_GETLBTEXT",
+        "CB_GETLBTEXTLEN",                            "LB_GETCOUNT",                               "LB_GETTEXT",                                 "LB_GETTEXTLEN",                             "LB_SETCURSEL",
+        "CBN_SELCHANGE",                              "LBN_SELCHANGE",                             "CBN_DROPDOWN",                               "CBS_OWNERDRAWFIXED",                        "CBS_OWNERDRAWVARIABLE",
+        "CBS_HASSTRINGS",                             "LBS_OWNERDRAWFIXED",                        "LBS_OWNERDRAWVARIABLE",                      "LBS_HASSTRINGS",                            "LBS_MULTIPLESEL",
+        "LBS_EXTENDEDSEL",                            "LBS_NODATA",                                "LBS_NOSEL",
     },
 }

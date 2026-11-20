@@ -1315,7 +1315,25 @@ fn doExpand(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, action: uit
 
 fn doSelect(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, fallback_click: bool) ?Result {
     if (!live.actions.select) return unsupported(ctx, t, live, .select, fallback_click);
+    // An entry of a Win32 list box: its owner hears of the selection that
+    // UI Automation makes silently (US-064). Found before the call, so an
+    // elevated or policy-refused list stops everything.
+    const owner: ?uitree.NativeList = switch (nativeOf(ctx, t, .entry)) {
+        .ok => |l| if (l.kind == .list_box and l.notifies) l else null,
+        .none => null,
+        .elevated => return Result.err(actions.uipi_message),
+        .failed => |m| return Result.err(m),
+    };
+    if (owner) |l| if (policy.requireWindow(ctx, l.handle, .click)) |r| return r;
     if (sent(ctx, t, live, out, .select, opOn(ctx, t.window, t.key, .select), fallback_click)) |r| return r;
+    if (owner) |l| switch (nativeSelect(ctx, l.handle, null)) {
+        .ok => |s| switch (s.notice) {
+            .sent => out.note(native_notice_note),
+            .none => {},
+            .timeout => return unnotified(ctx, t),
+        },
+        .failed => return unnotified(ctx, t),
+    };
     const back = readBack(ctx, t, .selected, Selected{}) orelse return null;
     if (back.live.selected == null) return null;
     out.set(if (back.met) .verified else .contradicted, if (back.met) "sélectionné" else "non sélectionné");
@@ -1336,6 +1354,12 @@ const max_entry_names = 10;
 /// container is expanded for the search and collapsed again whatever comes
 /// of it. No entry, or several of that name: nothing is selected.
 fn selectByName(ctx: anytype, t: Elem, live: uitree.Live, out: *Outcome, wanted: []const u8) ?Result {
+    switch (nativeOf(ctx, t, .container)) {
+        .ok => |l| return selectNative(ctx, t, out, l, wanted),
+        .none => {},
+        .elevated => return Result.err(actions.uipi_message),
+        .failed => |m| return Result.err(m),
+    }
     const a = ctx.arena;
     const ms = std.time.ns_per_ms;
     var opened = false;
@@ -1430,6 +1454,101 @@ fn keptAfterCollapse(ctx: anytype, t: Elem, entry: Elem, out: *Outcome) ?ReadBac
     }
     out.note("sélection refaite conteneur replié");
     return readBack(ctx, entry, .selected, Selected{});
+}
+
+const native_note = "par messages natifs";
+const native_notice_note = "application prévenue par message natif";
+
+/// Whether the backend drives Win32 lists by their own messages (US-064).
+fn hasNative(comptime Backend: type) bool {
+    return @hasDecl(Backend, "uiNativeList") and @hasDecl(Backend, "uiNativeSelect");
+}
+
+fn nativeOf(ctx: anytype, t: Elem, of: uitree.NativeOf) uitree.NativeListResult {
+    if (comptime !hasNative(@typeInfo(@TypeOf(ctx.backend)).pointer.child)) return .none;
+    ctx.timings.start(ctx.io, .accessibility);
+    defer ctx.timings.stop(ctx.io, .accessibility);
+    return ctx.backend.uiNativeList(ctx.arena, t.window, t.key, of);
+}
+
+fn nativeSelect(ctx: anytype, handle: u64, index: ?usize) uitree.NativeSelectResult {
+    if (comptime !hasNative(@typeInfo(@TypeOf(ctx.backend)).pointer.child)) unreachable;
+    ctx.timings.start(ctx.io, .accessibility);
+    defer ctx.timings.stop(ctx.io, .accessibility);
+    return ctx.backend.uiNativeSelect(handle, index);
+}
+
+/// A selection set while the owner did not take its notification: never
+/// reported as a success (US-064).
+fn unnotified(ctx: anytype, t: Elem) Result {
+    ctx.audit_detail.verdict = @tagName(Verdict.unverifiable);
+    return Result.err(fmt(ctx.arena, "select {s} : sélection posée, mais l'application n'a pas pris l'avis du changement en 200 ms (fenêtre figée ou occupée) : elle peut l'ignorer. Relis l'arbre avant de rejouer.", .{t.name}));
+}
+
+/// `select` with a name on a Win32 `ComboBox` or `ListBox` (US-064): the
+/// entries read and the selection set by the list's own messages, list
+/// closed, then its owner told as of a user's choice. Names match as in
+/// US-053; no entry or several of that name send nothing.
+fn selectNative(ctx: anytype, t: Elem, out: *Outcome, list: uitree.NativeList, wanted: []const u8) ?Result {
+    const a = ctx.arena;
+    // The policy of the application that owns the list's window.
+    if (policy.requireWindow(ctx, list.handle, .click)) |r| return r;
+    const want = uitree.fold(a, std.mem.trim(u8, wanted, " ")) catch return Result.err(oom);
+    var index: usize = 0;
+    var matches: usize = 0;
+    var at: std.Io.Writer.Allocating = .init(a);
+    for (list.entries, 0..) |name, i| {
+        const folded = uitree.fold(a, std.mem.trim(u8, name, " ")) catch return Result.err(oom);
+        if (!std.mem.eql(u8, folded, want)) continue;
+        matches += 1;
+        if (matches > 1) at.writer.writeAll(", ") catch return Result.err(oom);
+        at.writer.print("{d}", .{i + 1}) catch return Result.err(oom);
+        index = i;
+    }
+    const none = "Aucune action exécutée.";
+    if (matches > 1) {
+        // A list box shows its entries in the tree: their ids, as US-053
+        // gives them. A closed drop-down shows none.
+        if (list.kind == .list_box) if (entryIds(ctx, t, list, want)) |ids|
+            return Result.err(fmt(a, "{d} entrées nommées « {s} » dans {s} : {s}. Choisis-en une par son id avec select sans value. {s}", .{ matches, wanted, t.name, ids, none }));
+        return Result.err(fmt(a, "{d} entrées nommées « {s} » dans {s} : positions {s}. Une liste déroulante ne les distingue que par leur position : aucune n'est choisie. {s}", .{ matches, wanted, t.name, at.written(), none }));
+    }
+    if (matches == 0) {
+        if (list.entries.len == 0) return Result.err(fmt(a, "{s} n'a aucune entrée sélectionnable : select avec value vise une liste, une liste déroulante, des onglets ou un arbre. {s}", .{ t.name, none }));
+        var names: std.Io.Writer.Allocating = .init(a);
+        for (list.entries[0..@min(list.entries.len, max_entry_names)], 0..) |e, i| names.writer.print("{s}« {s} »", .{ if (i > 0) ", " else "", e }) catch return Result.err(oom);
+        if (list.entries.len > max_entry_names) names.writer.print(", … {d} autres", .{list.entries.len - max_entry_names}) catch {};
+        return Result.err(fmt(a, "Aucune entrée « {s} » dans {s}. Entrées : {s}. {s}", .{ wanted, t.name, names.written(), none }));
+    }
+    const s = switch (nativeSelect(ctx, list.handle, index)) {
+        .ok => |s| s,
+        .failed => |m| return Result.err(m),
+    };
+    if (s.notice == .timeout) return unnotified(ctx, t);
+    out.note(native_note);
+    out.note(fmt(a, "entrée « {s} »", .{list.entries[index]}));
+    const met = s.current != null and s.current.? == index;
+    out.set(if (met) .verified else .contradicted, if (met) "sélectionné" else "non sélectionné");
+    return null;
+}
+
+/// The ids of the entries of list box `t` whose name folds to `want`, from
+/// UI Automation; null when its entries do not line up with the list's.
+fn entryIds(ctx: anytype, t: Elem, list: uitree.NativeList, want: []const u8) ?[]const u8 {
+    const entries = switch (entriesOf(ctx, t)) {
+        .ok => |es| es,
+        else => return null,
+    };
+    if (entries.len != list.entries.len) return null;
+    var out: std.Io.Writer.Allocating = .init(ctx.arena);
+    var n: usize = 0;
+    for (entries) |e| {
+        const folded = uitree.fold(ctx.arena, std.mem.trim(u8, e.name, " ")) catch return null;
+        if (!std.mem.eql(u8, folded, want)) continue;
+        out.writer.print("{s}{s}", .{ if (n > 0) ", " else "", idText(ctx, t, e.key) }) catch return null;
+        n += 1;
+    }
+    return if (n > 1) out.written() else null;
 }
 
 /// A number as the model writes it: a decimal point or comma.

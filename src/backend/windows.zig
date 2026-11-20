@@ -14,6 +14,7 @@ const input = @import("windows/input.zig");
 const window = @import("windows/window.zig");
 const com = @import("windows/com.zig");
 const uia = @import("windows/uia.zig");
+const native_list = @import("windows/native_list.zig");
 const hooks = @import("windows/hooks.zig");
 const indicator_mod = @import("windows/indicator.zig");
 const winevents = @import("windows/winevents.zig");
@@ -569,6 +570,20 @@ pub const Windows = struct {
     /// The selectable descendants of `key` (US-053).
     pub fn uiEntries(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64) uitree.EntriesResult {
         return self.ui.entries(arena, hwnd, key);
+    }
+
+    /// The Win32 list of element `key` (US-064): its own window for a
+    /// container, its parent's for an entry; `none` for any element the
+    /// native path does not drive.
+    pub fn uiNativeList(self: *Windows, arena: std.mem.Allocator, hwnd: u64, key: u64, of: uitree.NativeOf) uitree.NativeListResult {
+        return native_list.read(arena, self.ui.native(arena, hwnd, key, of), of == .container);
+    }
+
+    /// Sets the selection of a Win32 list by its own message and tells its
+    /// owner (US-064).
+    pub fn uiNativeSelect(self: *Windows, handle: u64, index: ?usize) uitree.NativeSelectResult {
+        _ = self;
+        return native_list.select(handle, index);
     }
 
     /// The subtree below one element (US-056), read from that element.

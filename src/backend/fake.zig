@@ -59,6 +59,28 @@ pub const ui_fixture = [_]uitree.Element{
 /// it.
 pub const Changed = struct { el: uitree.Element, value_hash: ?u64 = null };
 
+/// A Win32 list the native path drives (US-064), as `Fake.ui_native`.
+pub const NativeFake = struct {
+    /// The container element whose own window the list is.
+    key: u64,
+    /// Entry elements whose parent window the list is.
+    entry_keys: []const u64 = &.{},
+    handle: u64 = 0x5150,
+    kind: uitree.NativeKind = .combo_box,
+    entries: []const []const u8 = &.{},
+    current: ?usize = null,
+    notifies: bool = true,
+    /// Not a list the native path drives: `uiNativeList` answers `none`.
+    unsupported: bool = false,
+    elevated: bool = false,
+    /// The list does not answer: nothing is sent.
+    hung: bool = false,
+    /// The owner does not take its notification in time.
+    owner_hung: bool = false,
+    /// The application puts the former entry back on its notification.
+    rejects: bool = false,
+};
+
 pub const KeyCall = struct { combo: keys.Combo, action: input.KeyAction };
 
 /// A root served with the foreground tree: its window and its elements
@@ -258,6 +280,12 @@ pub const Fake = struct {
     /// A collapse drops the selection made while the container was open,
     /// as a Win32 drop-down list does.
     ui_collapse_cancels: bool = false,
+    /// A Win32 list driven by its own messages (US-064): the container
+    /// element `key` and the entry elements of `entry_keys` reach it.
+    ui_native: ?NativeFake = null,
+    /// Messages sent to it: selections set and notifications to its owner.
+    ui_native_sets: u32 = 0,
+    ui_native_notices: u32 = 0,
 
     /// Top-level windows, top of the z-order first; tests replace them.
     windows: []const display.WindowInfo = &windows_fixture,
@@ -1053,6 +1081,50 @@ pub const Fake = struct {
             if (e.actions.select) out.append(arena, .{ .key = e.key, .name = e.name }) catch return .{ .failed = "Mémoire insuffisante : réessaie." };
         }
         return .{ .ok = out.items };
+    }
+
+    /// The Win32 list of element `key` (US-064), from `ui_native`.
+    pub fn uiNativeList(self: *Fake, arena: std.mem.Allocator, window: u64, key: u64, of: uitree.NativeOf) uitree.NativeListResult {
+        _ = arena;
+        _ = window;
+        const n = self.ui_native orelse return .none;
+        const reaches = switch (of) {
+            .container => n.key == key,
+            .entry => std.mem.indexOfScalar(u64, n.entry_keys, key) != null,
+        };
+        if (!reaches or n.unsupported) return .none;
+        if (n.elevated) return .elevated;
+        if (n.hung) return .{ .failed = "L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot." };
+        return .{ .ok = .{
+            .handle = n.handle,
+            .kind = n.kind,
+            .entries = if (of == .container) n.entries else &.{},
+            .current = n.current,
+            .notifies = n.notifies,
+        } };
+    }
+
+    /// Sets the selection of the `ui_native` list (none for a null index),
+    /// then tells its owner when the list notifies.
+    pub fn uiNativeSelect(self: *Fake, handle: u64, index: ?usize) uitree.NativeSelectResult {
+        if (self.ui_native == null) return .{ .failed = "Fenêtre fermée : rappelle window_list" };
+        const n = &self.ui_native.?;
+        if (n.handle != handle) return .{ .failed = "Fenêtre fermée : rappelle window_list" };
+        if (n.hung) return .{ .failed = "L'application ne répond plus à UI Automation : réessaie, ou utilise screenshot." };
+        const before = n.current;
+        if (index) |i| {
+            self.ui_native_sets += 1;
+            if (i < n.entries.len) n.current = i;
+        }
+        var notice: uitree.NativeNotice = .none;
+        if (n.notifies) {
+            notice = if (n.owner_hung) .timeout else .sent;
+            if (!n.owner_hung) {
+                self.ui_native_notices += 1;
+                if (n.rejects) n.current = before;
+            }
+        }
+        return .{ .ok = .{ .current = n.current, .notice = notice } };
     }
 
     fn findElement(self: *Fake, key: u64) ?uitree.Element {

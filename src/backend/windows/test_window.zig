@@ -70,6 +70,10 @@ pub const tristate_label = "neo-compute tristate";
 pub const wait_label = "neo-compute wait button";
 /// The control without InvokePattern (US-051).
 pub const legacy_label = legacy_control.label;
+/// Control identifiers of the list box and the drop-down list of a window
+/// with `actions`: their owner's notifications carry them (US-064).
+pub const list_id = 0x4c31;
+pub const combo_id = 0x4331;
 
 var last_click: std.atomic.Value(u32) = .init(0xFFFF_FFFF);
 var clicks: std.atomic.Value(u32) = .init(0);
@@ -105,6 +109,14 @@ var tristate_hwnd: w.HWND = null;
 var wait_hwnd: w.HWND = null;
 /// BN_CLICKED notifications of the wait button.
 var wait_commands: std.atomic.Value(u32) = .init(0);
+var combo_hwnd: w.HWND = null;
+var list_hwnd: w.HWND = null;
+/// Notifications the owner received from the drop-down list and the list
+/// box (US-064), and the control identifier of the last one.
+var combo_changes: std.atomic.Value(u32) = .init(0);
+var combo_dropdowns: std.atomic.Value(u32) = .init(0);
+var list_changes: std.atomic.Value(u32) = .init(0);
+var last_notify_id: std.atomic.Value(u32) = .init(0);
 /// Menu bar commands received.
 var bar_commands: std.atomic.Value(u32) = .init(0);
 var frame_parity: bool = false;
@@ -236,6 +248,18 @@ pub const TestWindow = struct {
 
     pub fn waitEnabled(self: *const TestWindow) bool {
         return w.IsWindowEnabled(@ptrFromInt(self.wait_button.load(.acquire))) != 0;
+    }
+
+    /// CBN_SELCHANGE, CBN_DROPDOWN and LBN_SELCHANGE received by the owner
+    /// so far, and the control identifier of the last of them.
+    pub fn notices(_: *const TestWindow) struct { combo_changes: u32, dropdowns: u32, list_changes: u32, id: u32 } {
+        return .{ .combo_changes = combo_changes.load(.acquire), .dropdowns = combo_dropdowns.load(.acquire), .list_changes = list_changes.load(.acquire), .id = last_notify_id.load(.acquire) };
+    }
+
+    /// Sets the selected entry of the drop-down list, as its own thread
+    /// would, without notifying anyone.
+    pub fn setCombo(self: *const TestWindow, index: usize) void {
+        _ = w.SendMessageW(@ptrFromInt(self.combo.load(.acquire)), w.CB_SETCURSEL, index, 0);
     }
 
     /// BN_CLICKED notifications from the wait button.
@@ -414,6 +438,16 @@ pub const TestWindow = struct {
                     _ = bar_commands.fetchAdd(1, .acq_rel);
                 } else if ((wparam >> 16) & 0xFFFF != w.BN_CLICKED) {
                     // A list or combo notification.
+                    const code = (wparam >> 16) & 0xFFFF;
+                    const hwnd_from: w.HWND = @ptrFromInt(from);
+                    if (hwnd_from == combo_hwnd and code == w.CBN_SELCHANGE) {
+                        _ = combo_changes.fetchAdd(1, .acq_rel);
+                    } else if (hwnd_from == combo_hwnd and code == w.CBN_DROPDOWN) {
+                        _ = combo_dropdowns.fetchAdd(1, .acq_rel);
+                    } else if (hwnd_from == list_hwnd and code == w.LBN_SELCHANGE) {
+                        _ = list_changes.fetchAdd(1, .acq_rel);
+                    }
+                    last_notify_id.store(@truncate(wparam & 0xFFFF), .release);
                 } else if (from == @intFromPtr(wait_hwnd)) {
                     _ = wait_commands.fetchAdd(1, .acq_rel);
                 } else if (from != @intFromPtr(checkbox_hwnd) and from != @intFromPtr(tristate_hwnd)) {
@@ -539,10 +573,14 @@ pub const TestWindow = struct {
         _ = w.AppendMenuW(popup, w.MF_STRING, bar_first_id, utf16(bar_item));
         _ = w.AppendMenuW(bar, w.MF_POPUP, @intFromPtr(popup), utf16(bar_label));
         _ = w.SetMenu(hwnd, bar);
-        const list = w.CreateWindowExW(0, utf16("LISTBOX"), null, w.WS_CHILD | w.WS_VISIBLE | w.WS_BORDER | w.WS_VSCROLL | @as(u32, @intCast(w.LBS_NOTIFY)), 260, 100, 180, 80, hwnd, null, instance, null);
+        // Identifiers only on the selftest's window: the bench and the
+        // probes measure the tree their references were taken on.
+        const list_menu: w.HMENU = if (self.actions) @ptrFromInt(list_id) else null;
+        const combo_menu: w.HMENU = if (self.actions) @ptrFromInt(combo_id) else null;
+        const list = w.CreateWindowExW(0, utf16("LISTBOX"), null, w.WS_CHILD | w.WS_VISIBLE | w.WS_BORDER | w.WS_VSCROLL | @as(u32, @intCast(w.LBS_NOTIFY)), 260, 100, 180, 80, hwnd, list_menu, instance, null);
         const checkbox = w.CreateWindowExW(0, utf16("BUTTON"), utf16(checkbox_label), w.WS_CHILD | w.WS_VISIBLE | @as(u32, @intCast(w.BS_AUTOCHECKBOX)), 20, 170, 220, 24, hwnd, null, instance, null);
         const field = w.CreateWindowExW(0, utf16("EDIT"), utf16(field_text), w.WS_CHILD | w.WS_VISIBLE | w.WS_BORDER, 20, 200, 220, 26, hwnd, null, instance, null);
-        const combo = w.CreateWindowExW(0, utf16("COMBOBOX"), null, w.WS_CHILD | w.WS_VISIBLE | w.WS_VSCROLL | @as(u32, @intCast(w.CBS_DROPDOWNLIST)), 20, 236, 220, 160, hwnd, null, instance, null);
+        const combo = w.CreateWindowExW(0, utf16("COMBOBOX"), null, w.WS_CHILD | w.WS_VISIBLE | w.WS_VSCROLL | @as(u32, @intCast(w.CBS_DROPDOWNLIST)), 20, 236, 220, 160, hwnd, combo_menu, instance, null);
         churn_label = w.CreateWindowExW(0, utf16("STATIC"), utf16(churn_prefix ++ "0"), w.WS_CHILD | w.WS_VISIBLE, 260, 190, 180, 20, hwnd, null, instance, null);
         if (list == null or checkbox == null or field == null or combo == null or churn_label == null) return false;
         if (self.actions) {
@@ -562,6 +600,8 @@ pub const TestWindow = struct {
         inline for (combo_items) |item| _ = w.SendMessageW(combo, w.CB_ADDSTRING, 0, @bitCast(@intFromPtr(utf16(item))));
         _ = w.SendMessageW(combo, w.CB_SETCURSEL, 0, 0);
         checkbox_hwnd = checkbox;
+        combo_hwnd = combo;
+        list_hwnd = list;
         self.list.store(@intFromPtr(list), .release);
         self.checkbox.store(@intFromPtr(checkbox), .release);
         self.field.store(@intFromPtr(field), .release);
