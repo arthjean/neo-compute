@@ -1,6 +1,6 @@
 # 0014 : choix structurants du portage Linux
 
-- Statut : décidé, avant le PRD du portage
+- Statut : décidé, avant le PRD du portage ; amendé le 2026-11-20 (P1, P3, P9, P10, P12)
 - Date : 2026-11-20
 - Source : audit `docs/research/2026-11-20-audit-portage-linux.md`, section 14. Arthur a validé les treize recommandations et ajouté une exigence (D14).
 
@@ -105,3 +105,37 @@ Ce que l'audit a mesuré et ce que l'implémentation doit respecter :
   - les équivalents des checks `mouse`, `keyboard`, `release` et `kill-*` de `selftest` sur un gnome-shell sans écran, avec une fixture GTK 4 et une page Chrome qui enregistrent survol, glisser-déposer et frappes ;
   - une passe contrôlée sur une vraie session, lancée par Arthur.
 - Non mesuré : les unités de la région absolue EI à une échelle fractionnaire.
+
+## Amendement du PRD Linux
+
+- Date : 2026-11-20
+- Source : points de contrat P1 à P12 du PRD `tasks/prd-linux-port.md` (section « Décisions de contrat proposées »). Arthur a validé le 2026-11-20 les recommandations faites pour P1, P3, P9, P10 et P12 (« Ok vas-y »). P2, P4 à P8 et P11 restent à trancher par US-067.
+
+### P1. Entrée réelle sous GNOME
+
+- L'entrée réelle exige l'extension, seule source du kill switch par entrée physique (D4, D14). Sans elle, les outils d'entrée sont refusés et le message renvoie à `neo-compute setup`.
+- Si l'extension disparaît pendant une session (désactivée, Shell redémarré), le serveur le voit à la perte du propriétaire de `org.neocompute.Shell1`, relâche les entrées tenues en moins de 50 ms et se met en pause. Sans cela, le kill switch pourrait tomber en silence pendant une action.
+
+### P3. Entrée réelle sous wlroots
+
+- L'entrée réelle n'est possible qu'avec `--physical-input evdev`. Cette lecture ne porte que sur les souris et les pavés tactiles, jamais sur un clavier : lire les claviers donnerait toutes les frappes de l'utilisateur. Un nœud qui annonce des touches de clavier n'est pas lu, même marqué pointeur.
+- Un mouvement physique de plus de 8 px met en pause, comme sous Windows. Un Échap ne déclenche rien, comme sous KDE.
+- Le réarmement se fait par un clic physique sur le libellé « en pause » : le libellé ne reçoit les clics que pendant une pause, et le clic ne compte que si evdev rapporte un appui physique dans les 50 ms. Un pointeur virtuel ne crée aucun événement evdev (A42), donc aucun programme ne peut réarmer le serveur.
+- Écart avec la recommandation : un raccourci de sway qui lance `neo-compute rearm` était proposé. Il est écarté, car l'agent pourrait lancer cette commande par l'outil Bash de Claude Code, et un raccourci de sway se déclenche aussi sur un clavier virtuel.
+- Le mode arrière-plan reste refusé sous wlroots (D1).
+
+### P9. Filtre seccomp et refus de sécurité
+
+- Le filtre seccomp du serveur interdit les sockets `AF_INET`, `AF_INET6` et `AF_PACKET`, ainsi que `execve`, `execveat`, `ptrace`, `process_vm_readv` et `process_vm_writev`. Il est posé au démarrage, après la création du lanceur et du gardien, et avant tout fil. Sous wlroots, le gardien pose le même filtre sur lui-même.
+- Sur chaque famille, le serveur refuse d'agir sur une fenêtre d'un autre uid, pendant un dialogue système modal (polkit) et sur un écran verrouillé.
+
+### P10. Aucune exécution par le serveur
+
+- En mode serveur, neo-compute n'exécute aucun programme lui-même. Le filtre de P9 le garantit dans le noyau, et le test du build qui borne les sites de création de processus reste une seconde défense.
+- Seul `app_launch` fait exécuter une application, sans shell, par un processus lanceur créé au démarrage, sans filtre : une application lancée par le serveur filtré hériterait du filtre et n'aurait pas de réseau (`seccomp(2)`).
+- Le serveur ne passe au lanceur qu'un identifiant `.desktop`, des chemins absolus ou des URI, et un drapeau d'accessibilité Chromium. Le lanceur lit lui-même l'entrée et construit la commande, et il rejette tout autre message.
+
+### P12. Gestes physiques simulés
+
+- `SimulatePhysical` (extension) et `--physical-input simulated` (serveur) n'existent que dans un build `-Dtest-hooks=true` : vrai pour `zig build`, les selftests et le bench, faux pour `zig build release`. Les archives livrées ne contiennent pas ce code, ce que vérifie une recherche dans leurs octets.
+- Dans un build de test, ils ne sont acceptés que dans un banc : `NC_SESSION` posé et `XDG_RUNTIME_DIR` sous `/run/user/<uid>/nc-`. Ils remplacent alors la source physique du kill switch, que les bancs sans écran n'ont pas.
