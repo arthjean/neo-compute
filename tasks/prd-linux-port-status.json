@@ -17,10 +17,10 @@
     {
       "id": "EP-020",
       "title": "Bancs de test Linux isolés",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 3,
-      "stories_done": 0
+      "stories_done": 3
     },
     {
       "id": "EP-021",
@@ -228,43 +228,43 @@
       "id": "US-074",
       "title": "Lanceur de session isolée et témoin de la session réelle (GNOME)",
       "epic": "EP-020",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "L",
       "blocked_by": [
         "US-068"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-075",
       "title": "KDE, sway et labwc dans le lanceur",
       "epic": "EP-020",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "S",
       "blocked_by": [
         "US-074"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-076",
       "title": "Fixtures Linux",
       "epic": "EP-020",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-074"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-077",

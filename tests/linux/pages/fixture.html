@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Fixture neo-compute (Chrome)</title>
+<!--
+  The Chrome fixture of the Linux selftests (US-076): the controls of
+  tests/linux/fixture/gtk_fixture.py in a page. Each event goes to the
+  console as "NCFIX <json>"; tests/linux/fixture/chrome_fixture.py reads
+  Chrome's log and writes it to NC_FIXTURE_LOG. The counters are also
+  shown in an ARIA live region (#counters) that AT-SPI reads.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+  .row > label:first-child { width: 140px; }
+  .zone { width: 160px; height: 48px; border: 1px solid #888; display: flex; align-items: center; justify-content: center; }
+  #hover { width: 400px; }
+  #list { width: 300px; height: 120px; overflow-y: auto; border: 1px solid #888; }
+  #list [role=option][aria-selected=true] { background: #cde; }
+  canvas { border: 1px solid #888; background: #eef; }
+</style>
+</head>
+<body>
+<div class="row"><label for="button">Bouton</label><button id="button">Bouton</button></div>
+<div class="row"><label for="checkbox">Case</label><input id="checkbox" type="checkbox"><span>Case à cocher</span></div>
+<div class="row"><label for="entry">Texte</label><input id="entry" type="text" placeholder="Champ de texte"></div>
+<div class="row"><label for="password">Mot de passe</label><input id="password" type="password"></div>
+<div class="row"><label for="slider">Curseur</label><input id="slider" type="range" min="0" max="100" value="0"></div>
+<div class="row"><label id="list-label">Liste</label><div id="list" role="listbox" aria-labelledby="list-label" tabindex="0"></div></div>
+<div class="row"><label for="dropdown">Liste déroulante</label>
+  <select id="dropdown"><option>Un</option><option>Deux</option><option>Trois</option><option>Quatre</option></select></div>
+<div class="row"><label for="textview">Zone de texte</label><textarea id="textview" rows="3" cols="40"></textarea></div>
+<div class="row"><label>Glisser-déposer</label>
+  <div id="drag-source" class="zone" draggable="true">Glisse-moi</div>
+  <div id="drop-target" class="zone">Dépose ici</div></div>
+<div class="row"><label>Survol</label><div id="hover" class="zone">Survole-moi</div></div>
+<div class="row"><label for="canvas">Canevas</label><canvas id="canvas" width="400" height="160"></canvas></div>
+<div id="counters" role="status" aria-live="polite">clics 0, touches 0, texte 0, défilements 0, valeurs 0, dépôts 0</div>
+<script>
+"use strict";
+const counts = { clics: 0, touches: 0, texte: 0, "défilements": 0, valeurs: 0, "dépôts": 0 };
+const live = document.getElementById("counters");
+function bump(name) {
+  counts[name] += 1;
+  live.textContent = Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(", ");
+}
+function log(event, fields) {
+  const line = Object.assign({ t: Date.now() / 1000, perf_ms: performance.now(), event }, fields || {});
+  console.log("NCFIX " + JSON.stringify(line));
+}
+function controlOf(el) {
+  for (; el && el !== document.body; el = el.parentElement) if (el.id) return el.id;
+  return null;
+}
+const list = document.getElementById("list");
+for (let i = 1; i <= 30; i++) {
+  const item = document.createElement("div");
+  item.setAttribute("role", "option");
+  item.setAttribute("aria-selected", "false");
+  item.id = "list-" + i;
+  item.textContent = "Entrée " + i;
+  list.appendChild(item);
+}
+list.addEventListener("click", (e) => {
+  const item = e.target.closest("[role=option]");
+  if (!item) return;
+  for (const o of list.children) o.setAttribute("aria-selected", String(o === item));
+  log("value", { control: "list", value: Array.prototype.indexOf.call(list.children, item) });
+  bump("valeurs");
+});
+list.addEventListener("scroll", () => { log("scroll", { control: "list", value: list.scrollTop }); bump("défilements"); });
+document.addEventListener("mousedown", (e) => {
+  log("click", { button: e.button, n_press: e.detail, x: e.clientX, y: e.clientY, control: controlOf(e.target) });
+  bump("clics");
+}, true);
+document.getElementById("button").addEventListener("click", () => log("activate", { control: "button" }));
+document.getElementById("checkbox").addEventListener("change", (e) => { log("value", { control: "checkbox", value: e.target.checked }); bump("valeurs"); });
+document.getElementById("entry").addEventListener("input", (e) => { log("text", { control: "entry", value: e.target.value }); bump("texte"); });
+// A password field's value never reaches the log: only its length.
+document.getElementById("password").addEventListener("input", (e) => { log("text", { control: "password", length: e.target.value.length }); bump("texte"); });
+document.getElementById("slider").addEventListener("input", (e) => { log("value", { control: "slider", value: Number(e.target.value) }); bump("valeurs"); });
+document.getElementById("dropdown").addEventListener("change", (e) => { log("value", { control: "dropdown", value: e.target.selectedIndex }); bump("valeurs"); });
+document.getElementById("textview").addEventListener("beforeinput", (e) => { if (e.data) { log("text", { control: "textview", inserted: e.data }); bump("texte"); } });
+const src = document.getElementById("drag-source");
+src.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", "nc-drag"));
+const dst = document.getElementById("drop-target");
+dst.addEventListener("dragover", (e) => e.preventDefault());
+dst.addEventListener("drop", (e) => {
+  e.preventDefault();
+  log("drop", { control: "drop-target", value: e.dataTransfer.getData("text/plain"), x: e.offsetX, y: e.offsetY });
+  bump("dépôts");
+});
+const hover = document.getElementById("hover");
+hover.addEventListener("mouseenter", (e) => log("enter", { control: "hover", x: e.offsetX, y: e.offsetY }));
+hover.addEventListener("mouseleave", () => log("leave", { control: "hover" }));
+document.getElementById("canvas").addEventListener("mousemove", (e) => log("pointer", { control: "canvas", x: e.offsetX, y: e.offsetY }));
+function mods(e) {
+  return ["shift", "control", "alt", "meta"].filter((m) => e[m + "Key"]);
+}
+// The keys typed in the password field would spell its value.
+function keyFields(e, pressed) {
+  if (e.target && e.target.id === "password") return { pressed, control: "password", modifiers: mods(e) };
+  return { pressed, key: e.key, code: e.code, modifiers: mods(e) };
+}
+document.addEventListener("keydown", (e) => { log("key", keyFields(e, true)); bump("touches"); }, true);
+document.addEventListener("keyup", (e) => log("key", keyFields(e, false)), true);
+document.addEventListener("wheel", (e) => { log("wheel", { dx: e.deltaX, dy: e.deltaY }); bump("défilements"); }, { capture: true, passive: true });
+window.addEventListener("focus", () => log("active", { value: true }));
+window.addEventListener("blur", () => log("active", { value: false }));
+window.addEventListener("load", () => {
+  // Viewport coordinates in CSS pixels, with the ratio to device pixels.
+  const controls = {};
+  for (const id of ["button", "checkbox", "entry", "password", "slider", "list", "dropdown", "textview", "drag-source", "drop-target", "hover", "canvas", "counters"]) {
+    const r = document.getElementById(id).getBoundingClientRect();
+    controls[id] = [r.x, r.y, r.width, r.height].map((v) => Math.round(v * 10) / 10);
+  }
+  log("layout", { title: document.title, active: document.hasFocus(), viewport: [innerWidth, innerHeight], device_pixel_ratio: devicePixelRatio, controls });
+});
+</script>
+</body>
+</html>

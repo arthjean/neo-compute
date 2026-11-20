@@ -47,8 +47,9 @@ Every change keeps these product invariants (PRD FR-07 to FR-18):
 |---|---|
 | `zig fmt --check .` | Formatting (`zig fmt <path>` fixes it) |
 | `zig build` | The server of the host OS (Windows: Windows backend and the probes; Linux: Linux backend). It fetches libjpeg-turbo (`build.zig.zon`) into `zig-pkg/`; a Windows build also downloads the pinned win32metadata nupkg from nuget.org with `curl` on first use. A target with no backend fails (`-Dfake-backend=true` builds the fake one for any target) |
-| `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, the Linux and Windows texts and their compile-time budgets, compile-time budget errors, module boundaries and OS names out of `src/core/` (`tests/imports_test.zig`), generator failure message, process lifecycle; on Windows also generated bindings, struct layouts and the PE import tables, on Linux the Linux backend's tests and the signal, lock and XDG checks. Omit the filter for the full gate |
+| `zig build test -Dtest-filter=<name>` | Core tests on the fake backend, the Linux and Windows texts and their compile-time budgets, compile-time budget errors, module boundaries and OS names out of `src/core/` (`tests/imports_test.zig`), generator failure message, process lifecycle; on Windows also generated bindings, struct layouts and the PE import tables, on Linux the Linux backend's tests and the signal, lock and XDG checks, and the launcher's tests (`tools/linux-session/session_test.zig`), which start headless `gnome` and `sway` sessions, the fixtures and Chrome in them, and create then remove `/tmp/dbus-nc-witness-test` to prove the witness; a family that is not installed is skipped. Omit the filter for the full gate |
 | `zig build cross` | The server of the other OS compiles: from Linux `neo-compute.exe`, `probe.exe` and `probe_c.exe` for x86_64-windows-gnu; from Windows the Linux server for x86_64 and aarch64 at glibc 2.28. Installed under `zig-out/cross/` |
+| `zig build session -- <famille> exec -- <commande>` | Linux: runs a command in a headless session isolated from the real one (`gnome`, `kde`, `sway`, `labwc`; `zig build session -- gnome <arguments de neo-compute>` runs the server there), then stops it. `zig-out/bin/linux-session` gives the exact code (`zig build` turns any failure into 1): the command's own, 2 when the session cannot start, 3 when the witness found a difference in the real session, 77 when a binary of the family is missing. `linux-session start <famille>` prints an id and keeps the session, `exec <id> -- <commande>` runs in it on the caller's standard streams, `stop <id>` ends it; `cycles <famille> <n>` runs n sessions in a row |
 | `zig build bench -- --check bench/baseline-linux.json` | Linux: `transport` and `diff` against their Linux references. A baseline of another OS (`os` key; none means Windows) is refused before any scenario runs, and a scenario of the baseline that does not run fails the gate |
 | `zig build bench -- --check bench/baseline.json` | ReleaseFast p95 and p50 within 110 % of the baseline and under the absolute budgets in `src/core/bench.zig`. A p95 above 110 % still passes under the limit of its own noise (`fence`: Q3 + 1.5 IQR of the p95 of the five baseline passes, `passes_p95_us`), printed when it applies. The taskbar scenarios (`snapshot`, `ui_tree`) are provider-relative: a UIA stage above its reference passes within 110 % of `probe_c ... full` run around the series (decision 0010). `bg-act` and `bg-settle` run the background mode behind the decoy; `bg-settle` is budgeted on its `settle` stage, which every other scenario only reports; `bg-capture` is `screenshot` of a 2560x1440 test window entirely under a decoy larger than the display (US-061, < 60 ms p95) |
 | `zig build run -- selftest` | Capture, mouse, keyboard, UIA and DPI against a window the test creates. `-- selftest --capture gdi` runs it with every capture through the GDI fallback (US-032) and skips the DXGI-only checks |
@@ -119,6 +120,31 @@ cursor by 6 px once. Run them one at a time.
   comptime, optional backend capabilities are probed with `@hasDecl`, and
   `src/backend/fake.zig` implements every method the core calls
   unconditionally.
+- Linux test sessions (`tools/linux-session`, US-074 to US-076). Never run
+  a selftest, the bench or an eval on the real session: they inject input,
+  capture the screen and change settings. They run in a session of the
+  launcher, and only Arthur runs one on his own session, with
+  `--real-session`. A session starts from `env -i`, with its `HOME` and XDG
+  folders under `/run/user/<uid>/nc-<id>`, a session bus that activates only
+  dconf, the permission store and the portals, a fake system bus (fake GDM
+  for `gnome`, fake logind for `sway` and `labwc`, whose `SetLockedHint` a
+  selftest calls), PipeWire and WirePlumber without hardware, the AT-SPI
+  bus, and `NC_SESSION=<famille>` with `NC_SESSION_ID=<id>`. The `gnome`
+  session is ready once GNOME Shell has left its startup overview. The
+  witness compares logind, `/run/user/<uid>` and the `/tmp` D-Bus and X11
+  files before and after, and each second the environment of every
+  process and the logind inhibitors the session's processes hold; an entry
+  of `/run/user/<uid>` that changes is judged by who holds it, read through
+  inotify the moment it appears and again after the session
+  (`witness.zig`). A launcher that dies by SIGKILL leaves its session:
+  the next launcher removes it. labwc binds a lazy X socket in
+  `/tmp/.X11-unix` for the session's life. Logs go to
+  `.zig-cache/linux-session/<id>/` through `zig build`. Fixtures:
+  `tests/linux/fixture/gtk_fixture.py` (GTK 4, `python3 -I`, `--role decoy`,
+  `--fullscreen`, `--app-id`) and `tests/linux/pages/fixture.html` through
+  `chrome_fixture.py` write each event to `NC_FIXTURE_LOG`;
+  `tests/linux/fixture/smoke.py` drives both with real input through a
+  RemoteDesktop session of its own.
 - Linux backend (EP-019 on, `tasks/prd-linux-port.md`). A method not
   implemented yet records a gap and returns its type's failure value; the
   gap stops the tool's waits (`ctx.cancelled`) and the dispatcher answers
@@ -332,10 +358,13 @@ cursor by 6 px once. Run them one at a time.
   refuses `--global-cache-dir`: `ZIG_GLOBAL_CACHE_DIR` and
   `ZIG_LOCAL_CACHE_DIR` redirect the caches, to check a fresh copy.
 - Zig 0.17's std (`std.Io`, `std.process.Init`, `std.lang.Optimize`) differs
-  from older releases. Verify APIs against the installed std (`std_dir` in
-  `zig env`) or against Ghostty, which pins the same version (`C:/dev/ghostty`
-  on the reference machine, read-only). There is no `@cImport`: C headers go
-  through `b.addTranslateC`, as in Ghostty's `pkg/translate-c/build.zig`.
+  from older releases. `std.Io.Dir.readFileAlloc` reads nothing of a file
+  that reports a size of 0, as every `/proc` file does: read those with
+  `readAll` in `tools/linux-session/proc.zig` or a loop to the end. Verify
+  APIs against the installed std (`std_dir` in `zig env`) or against
+  Ghostty, which pins the same version (`C:/dev/ghostty` on the reference
+  machine, read-only). There is no `@cImport`: C headers go through
+  `b.addTranslateC`, as in Ghostty's `pkg/translate-c/build.zig`.
 - The server builds Debug by default. A module's own `optimize` does not
   change how the Zig code of one compilation is optimized: a per-frame pixel
   loop that must stay fast in Debug goes in a separate ReleaseFast library,

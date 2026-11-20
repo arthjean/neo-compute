@@ -107,6 +107,11 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(linux_tests).step);
     }
 
+    // Headless test sessions isolated from the real one (US-074 to US-076):
+    // `zig build session -- <famille> exec -- <commande>`, or
+    // `zig build session -- <famille> <arguments de neo-compute>`.
+    if (os == .linux and b.graph.host.result.os.tag == .linux) addLinuxSession(b, exe, test_step, filters);
+
     if (os == .windows) {
         // The generated bindings compile and link in full.
         const bindings_tests = b.addTest(.{
@@ -513,3 +518,35 @@ const Win32 = struct {
         return self.b.createModule(.{ .root_source_file = self.gen().out, .target = target, .optimize = optimize });
     }
 };
+
+/// tools/linux-session, built for the host and installed as
+/// zig-out/bin/linux-session (`start`, `exec <id>`, `stop <id>` for the
+/// evals), its `session` step, and its tests in `zig build test`.
+fn addLinuxSession(b: *std.Build, server: *std.Build.Step.Compile, test_step: *std.Build.Step, filters: []const []const u8) void {
+    const mod = b.createModule(.{ .root_source_file = b.path("tools/linux-session/main.zig"), .target = b.graph.host, .optimize = .Debug });
+    const tool = b.addExecutable(.{ .name = "linux-session", .root_module = mod });
+    b.installArtifact(tool);
+    const run = b.addRunArtifact(tool);
+    run.setCwd(b.path("."));
+    run.addArgs(&.{ "--log-dir", ".zig-cache/linux-session", "--server" });
+    run.addArtifactArg(server);
+    run.addPassthruArgs();
+    run.has_side_effects = true;
+    run.stdio = .inherit;
+    b.step("session", "Run a command or neo-compute in a headless session isolated from the real one").dependOn(&run.step);
+
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod, .filters = filters })).step);
+    // The launcher against real sessions: witness, start timeout, socket
+    // path, missing compositor, start/exec/stop.
+    const opts = b.addOptions();
+    opts.addOptionPath("linux_session_exe", tool.getEmittedBin());
+    const session_tests = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/linux-session/session_test.zig"), .target = b.graph.host, .optimize = .Debug }),
+        .filters = filters,
+    });
+    session_tests.root_module.addOptions("test_options", opts);
+    const session_run = b.addRunArtifact(session_tests);
+    session_run.setCwd(b.path("."));
+    session_run.has_side_effects = true;
+    test_step.dependOn(&session_run.step);
+}
