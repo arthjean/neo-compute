@@ -25,10 +25,10 @@
     {
       "id": "EP-021",
       "title": "Transports natifs générés",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "stories_total": 4,
-      "stories_done": 0
+      "stories_done": 4
     },
     {
       "id": "EP-022",
@@ -270,36 +270,36 @@
       "id": "US-077",
       "title": "Générateur protogen et descriptions épinglées",
       "epic": "EP-021",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-069"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-078",
       "title": "Fil D-Bus natif",
       "epic": "EP-021",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
         "US-074",
         "US-077"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-079",
       "title": "Fil Wayland natif",
       "epic": "EP-021",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
@@ -307,15 +307,15 @@
         "US-075",
         "US-077"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-080",
       "title": "Fil EI natif et dispositions xkb",
       "epic": "EP-021",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P0",
       "size": "M",
       "blocked_by": [
@@ -324,9 +324,9 @@
         "US-076",
         "US-078"
       ],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-081",

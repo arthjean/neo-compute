@@ -1,0 +1,6 @@
+// A list naming an interface absent from its source: generation must fail
+// and name the closest existing interface. Same pinned source as
+// bindings/linux.zon.
+.{
+    .ei = .{.{ .source = "libei", .file = "proto/protocol.xml", .interfaces = .{"ei_pointer_absolut"} }},
+}

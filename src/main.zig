@@ -360,10 +360,12 @@ fn selftestCommand(init: std.process.Init, background: bool) !u8 {
         try stderr.interface.print("selftest: platform FAILED: this build has no background selftest\n", .{});
         return 1;
     }
-    const failed = if (background)
+    const failed = if (!background)
+        try Backend.selftest(init.gpa, init.io, init.environ_map, &stderr.interface)
+    else if (comptime @hasDecl(Backend, "selftestBackground"))
         try Backend.selftestBackground(init.gpa, init.io, init.environ_map, &stderr.interface)
     else
-        try Backend.selftest(init.gpa, init.io, init.environ_map, &stderr.interface);
+        unreachable; // refused above
     if (failed) |name| {
         try stderr.interface.print("selftest: FAILED ({s})\n", .{name});
         return 1;

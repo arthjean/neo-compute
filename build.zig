@@ -14,6 +14,8 @@ pub fn build(b: *std.Build) void {
 
     var win32: Win32 = .{ .b = b };
     b.step("bindings", "Generate the Win32/COM bindings").dependOn(win32.gen().step);
+    var protocols: Protocols = .{ .b = b };
+    linux_protocols = &protocols;
 
     const exe = addServer(b, &win32, target, optimize, fake_backend);
     b.installArtifact(exe);
@@ -81,6 +83,35 @@ pub fn build(b: *std.Build) void {
     missing.expectStdErrMatch("`CoInitializeExx` not found in Windows.Win32.winmd; closest existing name: `CoInitializeEx`");
     test_step.dependOn(&missing.step);
 
+    // The protocol generator (US-077): its own tests, and against the
+    // pinned sources a missing name, the denied names and two generations
+    // giving the same bytes.
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/protogen/main.zig"), .target = b.graph.host, .optimize = .Debug }),
+        .filters = filters,
+    })).step);
+    if (os == .linux) protocols.addTests(test_step);
+    // A denied D-Bus member written by hand fails the build (FR-61).
+    if (os == .linux) if (protocols.module(target, optimize)) |proto_mod| {
+        const wire_dbus = b.createModule(.{
+            .root_source_file = b.path("src/backend/linux/wire/dbus.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "protocols", .module = proto_mod }},
+        });
+        const bad = b.addObject(.{
+            .name = "denied_dbus_member",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/compile_errors/denied_dbus_member.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "dbus", .module = wire_dbus }},
+            }),
+        });
+        bad.expect_errors = .{ .contains = "`org.gnome.ScreenSaver.SetActive` is denied (FR-61)" };
+        test_step.dependOn(&bad.step);
+    };
+
     // Lifecycle checks against the real binary (startup and EOF exit times).
     const test_options = b.addOptions();
     test_options.addOptionPath("server_exe", exe.getEmittedBin());
@@ -104,7 +135,10 @@ pub fn build(b: *std.Build) void {
     if (os == .linux and !fake_backend) {
         // The Linux backend's own tests (window handles, US-071).
         const linux_tests = b.addTest(.{ .root_module = serverModule(b, &win32, target, optimize, false).import_table.get("backend_linux").?, .filters = filters });
-        test_step.dependOn(&b.addRunArtifact(linux_tests).step);
+        // From the repository root: the byte tests read tests/linux/golden/.
+        const linux_run = b.addRunArtifact(linux_tests);
+        linux_run.setCwd(b.path("."));
+        test_step.dependOn(&linux_run.step);
     }
 
     // Headless test sessions isolated from the real one (US-074 to US-076):
@@ -153,6 +187,18 @@ pub fn build(b: *std.Build) void {
         const pe_run = b.addRunArtifact(pe_tests);
         pe_run.has_side_effects = true;
         test_step.dependOn(&pe_run.step);
+    }
+
+    if (os == .linux and !fake_backend) {
+        // The dynamic section of the shipped ELF image (P7).
+        const elf_tests = b.addTest(.{
+            .root_module = b.createModule(.{ .root_source_file = b.path("tests/elf_test.zig"), .target = target, .optimize = optimize }),
+            .filters = filters,
+        });
+        elf_tests.root_module.addOptions("test_options", test_options);
+        const elf_run = b.addRunArtifact(elf_tests);
+        elf_run.has_side_effects = true;
+        test_step.dependOn(&elf_run.step);
     }
 
     // The server of the other OS compiles (US-069): from Linux the Windows
@@ -324,16 +370,34 @@ fn serverModule(b: *std.Build, win32: *Win32, target: std.Build.ResolvedTarget, 
                 .{ .name = "win32", .module = win32.module(target, optimize) },
             },
         })),
-        .linux => mod.addImport("backend_linux", b.createModule(.{
-            .root_source_file = b.path("src/backend/linux.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{
-                .{ .name = "core", .module = core },
-                .{ .name = "texts_linux", .module = texts.linux },
-            },
-        })),
+        .linux => {
+            const linux = b.createModule(.{
+                .root_source_file = b.path("src/backend/linux.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{
+                    .{ .name = "core", .module = core },
+                    .{ .name = "texts_linux", .module = texts.linux },
+                },
+            });
+            // The generated protocol tables (US-077) and the xkbcommon
+            // header (US-080), once their lazy sources are fetched: the
+            // first pass of a fresh build only asks for them.
+            if (linux_protocols.?.module(target, optimize)) |m| linux.addImport("protocols", m);
+            if (b.lazyDependency("libxkbcommon", .{})) |dep| {
+                const header = b.addTranslateC(.{ .root_source_file = dep.path("include/xkbcommon/xkbcommon.h"), .target = target, .optimize = optimize });
+                header.addIncludePath(dep.path("include"));
+                // Loaded with dlopen: its functions become types, so the
+                // binary references none of its symbols.
+                const types = b.addRunArtifact(linux_protocols.?.tool());
+                types.addArg("dlopen-types");
+                types.addFileArg(header.getOutput());
+                const out = types.addOutputFileArg("xkbcommon.zig");
+                linux.addImport("xkbcommon_h", b.createModule(.{ .root_source_file = out, .target = target, .optimize = optimize }));
+            }
+            mod.addImport("backend_linux", linux);
+        },
         else => unreachable,
     };
     return mod;
@@ -516,6 +580,88 @@ const Win32 = struct {
 
     fn module(self: *Win32, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
         return self.b.createModule(.{ .root_source_file = self.gen().out, .target = target, .optimize = optimize });
+    }
+};
+
+/// The Protocols of the Linux backend, set by `build` for serverModule.
+var linux_protocols: ?*Protocols = null;
+
+/// The packages of build.zig.zon that hold the protocol descriptions,
+/// each passed to protogen as `<name>=<root>`.
+const protocol_sources = [_][]const u8{
+    "wayland",            "wayland_protocols", "wlr_protocols", "plasma_wayland_protocols", "libei",           "mutter",         "gnome_shell",
+    "xdg_desktop_portal", "at_spi2_core",      "kwin_main",     "kwin_properties",          "kwin_screenshot", "kwin_scripting", "glib",
+};
+
+/// protocols.zig, generated by tools/protogen from bindings/linux.zon and
+/// the pinned sources (US-077). The sources are lazy: a build without the
+/// Linux backend fetches none, and the first pass of one that needs them
+/// gets null here while Zig fetches them.
+const Protocols = struct {
+    b: *std.Build,
+    generator: ?*std.Build.Step.Compile = null,
+    out: ?std.Build.LazyPath = null,
+
+    fn tool(self: *Protocols) *std.Build.Step.Compile {
+        if (self.generator) |g| return g;
+        self.generator = self.b.addExecutable(.{
+            .name = "protogen",
+            .root_module = self.b.createModule(.{
+                .root_source_file = self.b.path("tools/protogen/main.zig"),
+                .target = self.b.graph.host,
+                .optimize = .ReleaseFast,
+            }),
+        });
+        return self.generator.?;
+    }
+
+    /// A run of protogen on `list` into `out_name`; null while a source
+    /// is not fetched yet.
+    fn run(self: *Protocols, list: []const u8, out_name: []const u8) ?struct { *std.Build.Step.Run, std.Build.LazyPath } {
+        const b = self.b;
+        var deps: [protocol_sources.len]*std.Build.Dependency = undefined;
+        var missing = false;
+        for (protocol_sources, &deps) |name, *d| {
+            if (b.lazyDependency(name, .{})) |dep| d.* = dep else missing = true;
+        }
+        if (missing) return null;
+        const r = b.addRunArtifact(self.tool());
+        r.addFileArg(b.path(list));
+        const out = r.addOutputFileArg(out_name);
+        for (protocol_sources, deps) |name, d| r.addPrefixedDirectoryArg(b.fmt("{s}=", .{name}), d.path(""));
+        r.addPrefixedDirectoryArg("introspected=", b.path("bindings/linux/introspected"));
+        return .{ r, out };
+    }
+
+    fn module(self: *Protocols, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) ?*std.Build.Module {
+        if (self.out == null) self.out = (self.run("bindings/linux.zon", "protocols.zig") orelse return null)[1];
+        return self.b.createModule(.{ .root_source_file = self.out.?, .target = target, .optimize = optimize });
+    }
+
+    fn addTests(self: *Protocols, test_step: *std.Build.Step) void {
+        const b = self.b;
+        if (self.run("tests/fixtures/missing_linux_protocol.zon", "unused.zig")) |r| {
+            r[0].expectExitCode(1);
+            r[0].expectStdErrMatch("`ei_pointer_absolut` not found in libei/proto/protocol.xml; closest existing name: `ei_pointer_absolute`");
+            test_step.dependOn(&r[0].step);
+        }
+        if (self.run("tests/fixtures/denied_linux_protocol.zon", "unused.zig")) |r| {
+            r[0].expectExitCode(1);
+            r[0].expectStdErrMatch("`org_kde_kwin_fake_input` is denied");
+            r[0].expectStdErrMatch("`org.gnome.Mutter.RemoteDesktop.Session.SetKeymap` is denied");
+            r[0].expectStdErrMatch("`org.gnome.ScreenSaver.SetActive` is denied");
+            test_step.dependOn(&r[0].step);
+        }
+        // A second generation, under another output name so the build
+        // cache cannot hand back the first, must give the same bytes.
+        const one = self.run("bindings/linux.zon", "protocols.zig") orelse return;
+        const two = self.run("bindings/linux.zon", "protocols-again.zig") orelse return;
+        const opts = b.addOptions();
+        opts.addOptionPath("first", one[1]);
+        opts.addOptionPath("second", two[1]);
+        const same = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tools/protogen/same_test.zig"), .target = b.graph.host, .optimize = .Debug }) });
+        same.root_module.addOptions("generated", opts);
+        test_step.dependOn(&b.addRunArtifact(same).step);
     }
 };
 

@@ -10,6 +10,87 @@
             .url = "https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.1.4.1.tar.gz",
             .hash = "N-V-__8AAGEjlwDyirWNxFwRIKPfk-1_fvF02GlhH9fhhz0J",
         },
+        // Protocol descriptions of the Linux transports (US-077), read by
+        // tools/protogen through bindings/linux.zon. GitLab serves the one
+        // folder or file a `?path=` names; the hash pins its content.
+        // Fetched only for a build that compiles the Linux backend.
+        .wayland = .{
+            .url = "https://gitlab.freedesktop.org/wayland/wayland/-/archive/1.26.0/wayland-1.26.0.tar.gz?path=protocol/wayland.xml",
+            .hash = "N-V-__8AANCSAgD0oUde5irm21nLKoSZoaixqKwV5P303Gma",
+            .lazy = true,
+        },
+        .libei = .{
+            .url = "https://gitlab.freedesktop.org/libinput/libei/-/archive/1.6.0/libei-1.6.0.tar.gz?path=proto/protocol.xml",
+            .hash = "N-V-__8AALhAAQBxCEU9hbuFz1JDha6ZoCba1H53dZ2iKFQW",
+            .lazy = true,
+        },
+        .wayland_protocols = .{
+            .url = "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/1.50/wayland-protocols-1.50.tar.gz",
+            .hash = "N-V-__8AAOM9EQA8SyN285exZO9Ib8FLAhn4cDW7q55sCWMl",
+            .lazy = true,
+        },
+        .wlr_protocols = .{
+            .url = "https://gitlab.freedesktop.org/wlroots/wlr-protocols/-/archive/1106a4a1c57562ddd438c547da4c0d6dc150d624/wlr-protocols-1106a4a1c57562ddd438c547da4c0d6dc150d624.tar.gz?path=unstable",
+            .hash = "N-V-__8AAOeuAQCuMAtMuIICxcGnh9ebctbJF-XoPHf3YPri",
+            .lazy = true,
+        },
+        .plasma_wayland_protocols = .{
+            .url = "https://invent.kde.org/libraries/plasma-wayland-protocols/-/archive/v1.23.0/plasma-wayland-protocols-v1.23.0.tar.gz?path=src/protocols",
+            .hash = "N-V-__8AADFWAwCpEL_PGVjg-bwmp20NejyolHMZ9-YhcGQE",
+            .lazy = true,
+        },
+        .mutter = .{
+            .url = "https://gitlab.gnome.org/GNOME/mutter/-/archive/51.1/mutter-51.1.tar.gz?path=data/dbus-interfaces",
+            .hash = "N-V-__8AAJBpAQAntC5B3OG0brsnQMNi3aogBvXFE-rizXkp",
+            .lazy = true,
+        },
+        .gnome_shell = .{
+            .url = "https://gitlab.gnome.org/GNOME/gnome-shell/-/archive/51.1/gnome-shell-51.1.tar.gz?path=data/dbus-interfaces",
+            .hash = "N-V-__8AAIJMAQAODG9W5b2ClUJYOTjqBZBwAp-8gkEkvzY3",
+            .lazy = true,
+        },
+        .xdg_desktop_portal = .{
+            .url = "https://github.com/flatpak/xdg-desktop-portal/archive/refs/tags/1.22.1.tar.gz",
+            .hash = "N-V-__8AAPJlOQAdVE90HzhiwMRD97ql0tkyjs5LfbyENk4Z",
+            .lazy = true,
+        },
+        .at_spi2_core = .{
+            .url = "https://gitlab.gnome.org/GNOME/at-spi2-core/-/archive/2.62.1/at-spi2-core-2.62.1.tar.gz?path=xml",
+            .hash = "N-V-__8AAJ7XAgAYRc07m7RyOTAbqLJL-4YGCSMM_IM3AarI",
+            .lazy = true,
+        },
+        .kwin_main = .{
+            .url = "https://invent.kde.org/plasma/kwin/-/archive/v6.8.3/kwin-v6.8.3.tar.gz?path=src/org.kde.KWin.xml",
+            .hash = "N-V-__8AAPYGAAAC8svUy1F209XjWa_wpgU1mAz83KdTh00c",
+            .lazy = true,
+        },
+        .kwin_properties = .{
+            .url = "https://invent.kde.org/plasma/kwin/-/archive/v6.8.3/kwin-v6.8.3.tar.gz?path=src/org.freedesktop.DBus.Properties.xml",
+            .hash = "N-V-__8AAFIEAACMXx9OJE-ypQ6pI9wxBnDf168gLRUmtjrz",
+            .lazy = true,
+        },
+        .kwin_screenshot = .{
+            .url = "https://invent.kde.org/plasma/kwin/-/archive/v6.8.3/kwin-v6.8.3.tar.gz?path=src/plugins/screenshot/org.kde.KWin.ScreenShot2.xml",
+            .hash = "N-V-__8AAHNHAAC0vGBuPooWp38H08svlRy80QUtD33OXKw6",
+            .lazy = true,
+        },
+        .kwin_scripting = .{
+            .url = "https://invent.kde.org/plasma/kwin/-/archive/v6.8.3/kwin-v6.8.3.tar.gz?path=src/scripting",
+            .hash = "N-V-__8AAFpqAwCRIUVcQwfcvrbq3apm3hjLHG-_nmMEYa36",
+            .lazy = true,
+        },
+        .glib = .{
+            .url = "https://gitlab.gnome.org/GNOME/glib/-/archive/2.90.1/glib-2.90.1.tar.gz?path=gio/dbus-daemon.xml",
+            .hash = "N-V-__8AAGYKAABlJ1buZTVE2lKHAiiWOFsAkq3C9GEjfqwD",
+            .lazy = true,
+        },
+        // The header of the xkbcommon library loaded with dlopen (US-080),
+        // translated by translate-c; the library itself is the system's.
+        .libxkbcommon = .{
+            .url = "https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-1.13.1.tar.gz",
+            .hash = "N-V-__8AALGdawC4U4VZt8pBwXK8gBVv2OTdm2naBwU9xHcb",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

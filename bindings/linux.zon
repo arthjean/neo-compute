@@ -1,0 +1,56 @@
+// Protocol interfaces and D-Bus members used by the Linux backend.
+// tools/protogen generates exactly these, and the interfaces they name, into
+// the `protocols` module at build time (US-077). Each `source` is a package
+// pinned by hash in build.zig.zon, except `introspected`
+// (bindings/linux/introspected/), the recorded introspection of an
+// interface its project ships no XML of. A Wayland or EI interface comes
+// whole; a D-Bus interface brings only its listed members. Denied names
+// (tools/protogen/main.zig, `denied`) fail generation (FR-61).
+.{
+    .wayland = .{
+        .{
+            .source = "wayland",
+            .file = "protocol/wayland.xml",
+            .interfaces = .{ "wl_display", "wl_registry", "wl_callback", "wl_compositor", "wl_surface", "wl_shm", "wl_shm_pool", "wl_buffer" },
+        },
+    },
+    .ei = .{
+        .{
+            .source = "libei",
+            .file = "proto/protocol.xml",
+            .interfaces = .{ "ei_handshake", "ei_connection", "ei_callback", "ei_pingpong", "ei_seat", "ei_device", "ei_pointer", "ei_pointer_absolute", "ei_scroll", "ei_button", "ei_keyboard", "ei_touchscreen", "ei_text" },
+        },
+    },
+    .dbus = .{
+        .{
+            .source = "glib",
+            .file = "gio/dbus-daemon.xml",
+            .interface = "org.freedesktop.DBus",
+            .members = .{ "Hello", "AddMatch", "RemoveMatch", "RequestName", "ReleaseName", "GetNameOwner", "NameHasOwner", "GetConnectionUnixProcessID", "NameOwnerChanged", "NameAcquired", "NameLost" },
+        },
+        .{
+            .source = "kwin_properties",
+            .file = "src/org.freedesktop.DBus.Properties.xml",
+            .interface = "org.freedesktop.DBus.Properties",
+            .members = .{ "Get", "GetAll", "PropertiesChanged" },
+        },
+        .{
+            .source = "mutter",
+            .file = "data/dbus-interfaces/org.gnome.Mutter.RemoteDesktop.xml",
+            .interface = "org.gnome.Mutter.RemoteDesktop",
+            .members = .{ "CreateSession", "SupportedDeviceTypes", "Version" },
+        },
+        .{
+            .source = "mutter",
+            .file = "data/dbus-interfaces/org.gnome.Mutter.RemoteDesktop.xml",
+            .interface = "org.gnome.Mutter.RemoteDesktop.Session",
+            .members = .{ "Start", "Stop", "Closed", "SessionId", "ConnectToEIS" },
+        },
+        .{
+            .source = "introspected",
+            .file = "org.kde.KWin.EIS.RemoteDesktop.xml",
+            .interface = "org.kde.KWin.EIS.RemoteDesktop",
+            .members = .{ "connectToEIS", "disconnect" },
+        },
+    },
+}

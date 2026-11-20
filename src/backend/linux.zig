@@ -21,6 +21,8 @@ const handles = @import("linux/handles.zig");
 const proc = @import("linux/common/proc.zig");
 const xdg = @import("linux/common/xdg.zig");
 const instance = @import("linux/common/instance.zig");
+const capabilities = @import("linux/capabilities.zig");
+const xkb = @import("linux/wire/xkb.zig");
 
 pub const Linux = struct {
     /// Instructions and added tool descriptions of the Linux server (D7).
@@ -29,15 +31,37 @@ pub const Linux = struct {
     /// The first method not implemented yet that the running tool called,
     /// cleared by the dispatcher before each tool.
     missing: ?[]const u8 = null,
+    /// The refusal of the running tool when it needs a capability this
+    /// system lacks (FR-06), cleared with the gap.
+    refused: ?[]const u8 = null,
+    /// What this system offers (T1).
+    caps: capabilities.Table = .{},
+    /// libxkbcommon, loaded at start (P7): without it, no keyboard.
+    xkb: ?xkb.Lib = null,
     /// Window handles of the session, by compositor id (D7). No compositor
     /// lists windows yet, so every handle is unknown: a window tool answers
     /// that the window is closed, before any gap.
     windows: handles.Table,
     io: std.Io,
 
+    pub const Options = struct {
+        /// The library dlopen loads for keyboard layouts.
+        xkb_library: [:0]const u8 = xkb.library_name,
+    };
+
     pub fn init(gpa: std.mem.Allocator, io: std.Io) Linux {
-        return .{ .windows = .init(gpa), .io = io };
+        return initWith(gpa, io, .{});
     }
+
+    pub fn initWith(gpa: std.mem.Allocator, io: std.Io, options: Options) Linux {
+        var self: Linux = .{ .windows = .init(gpa), .io = io };
+        self.xkb = xkb.Lib.load(options.xkb_library);
+        self.caps.keyboard = self.xkb != null;
+        return self;
+    }
+
+    /// `neo-compute selftest` in a test session (EP-021).
+    pub const selftest = @import("linux/selftest.zig").run;
 
     /// The policy file and the audit folder (US-070): XDG base
     /// directories, the audit folder created with mode 0700.
@@ -51,6 +75,7 @@ pub const Linux = struct {
     pub const policy_rules: []const core.policy.Rule = &@import("linux/policy_rules.zig").rules;
 
     pub fn deinit(self: *Linux) void {
+        if (self.xkb) |lib| _ = std.c.dlclose(lib.handle);
         self.windows.deinit();
     }
 
@@ -68,18 +93,26 @@ pub const Linux = struct {
     /// Clears the gap before a tool runs.
     pub fn clearGap(self: *Linux) void {
         self.missing = null;
+        self.refused = null;
     }
 
     /// Whether the running tool reached a method not implemented yet: its
     /// waits and polls stop there, since nothing it waits for can happen.
     pub fn gapped(self: *const Linux) bool {
-        return self.missing != null;
+        return self.missing != null or self.refused != null;
     }
 
     /// The tool error for a tool that reached a method not implemented yet
     /// (US-069, FR-06), or null.
     pub fn unavailable(self: *const Linux, arena: std.mem.Allocator, tool: []const u8) ?[]const u8 {
-        if (self.missing == null) return null;
+        // A tool the dispatcher refused before it ran (pause, second
+        // instance, background mode) reached no backend method: its own
+        // refusal stands.
+        if (self.missing == null and self.refused == null) return null;
+        // A tool that needs an absent capability is refused as such,
+        // wherever it stopped (FR-06).
+        if (self.caps.refusal(tool)) |msg| return msg;
+        if (self.refused) |msg| return msg;
         return std.fmt.allocPrint(arena, "Linux : {s} n'est pas encore disponible dans ce build. Aucune action exécutée.", .{tool}) catch
             "Linux : cet outil n'est pas encore disponible dans ce build. Aucune action exécutée.";
     }
@@ -102,14 +135,24 @@ pub const Linux = struct {
         return .{ 0, 0 };
     }
 
+    /// Refuses a key or text before any event when no keyboard layout
+    /// can be read (US-080).
+    fn needKeyboard(self: *Linux) input.InputError!void {
+        if (self.caps.keyboard) return;
+        self.refused = xkb.missing_text;
+        return error.InputBlocked;
+    }
+
     pub fn keyCombo(self: *Linux, combo: keys.Combo, action: input.KeyAction) input.InputError!void {
         _ = .{ combo, action };
+        try self.needKeyboard();
         self.gap("keyCombo");
         return error.InputBlocked;
     }
 
     pub fn typeText(self: *Linux, units: []const u16) input.InputError!void {
         _ = units;
+        try self.needKeyboard();
         self.gap("typeText");
         return error.InputBlocked;
     }
@@ -450,6 +493,57 @@ test {
     _ = xdg;
     _ = instance;
     _ = @import("linux/policy_rules.zig");
+    _ = @import("linux/wire/sock.zig");
+    _ = @import("linux/wire/dbus.zig");
+    _ = @import("linux/wire/dbus_test.zig");
+    _ = @import("linux/wire/wayland.zig");
+    _ = @import("linux/wire/wayland_test.zig");
+    _ = @import("linux/wire/ei.zig");
+    _ = @import("linux/wire/ei_test.zig");
+    _ = @import("linux/wire/xkb.zig");
+    _ = capabilities;
+    _ = @import("linux/selftest.zig");
+}
+
+test "without libxkbcommon, type and key answer its absence through the dispatcher and send nothing" {
+    const testing = std.testing;
+    var backend: Linux = .initWith(testing.allocator, testing.io, .{ .xkb_library = "libxkbcommon-absent.so.0" });
+    defer backend.deinit();
+    try testing.expect(!backend.caps.keyboard);
+    const Server = core.mcp.Server(Linux, core.tools.all);
+    var server: Server = .init(testing.allocator, testing.io, &backend, .{});
+    defer server.deinit();
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    const calls = [_][]const u8{
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"type\",\"arguments\":{\"text\":\"bonjour\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"key\",\"arguments\":{\"text\":\"ctrl+a\"}}}",
+    };
+    for (calls) |line| {
+        out.clearRetainingCapacity();
+        try server.handleMessage(line, &out.writer);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "libxkbcommon introuvable : installe-la pour taper du texte.") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
+    }
+    // A modifier of a click needs the keyboard too: refused before any
+    // key event.
+    try testing.expectError(error.InputBlocked, backend.keyCombo(.{ .key = .{ .key = .shift } }, .press));
+    try testing.expectEqualStrings("libxkbcommon introuvable : installe-la pour taper du texte.", backend.refused.?);
+}
+
+test "without libxkbcommon, a keyboard tool the dispatcher refuses before it runs keeps that refusal" {
+    const testing = std.testing;
+    var backend: Linux = .initWith(testing.allocator, testing.io, .{ .xkb_library = "libxkbcommon-absent.so.0" });
+    defer backend.deinit();
+    const Server = core.mcp.Server(Linux, core.tools.all);
+    // A second instance: its actions are refused before any backend call.
+    var server: Server = .init(testing.allocator, testing.io, &backend, .{ .exclusive = false, .instance_refusal = "second instance refusal" });
+    defer server.deinit();
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try server.handleMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"type\",\"arguments\":{\"text\":\"bonjour\"}}}", &out.writer);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "second instance refusal") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "libxkbcommon") == null);
 }
 
 test "a keepassxc process started outside any application scope is denied by its executable" {

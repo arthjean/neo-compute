@@ -1,0 +1,9 @@
+// A list asking for each denied name (FR-61): generation must fail and name
+// all three, from their real pinned sources.
+.{
+    .wayland = .{.{ .source = "plasma_wayland_protocols", .file = "src/protocols/fake-input.xml", .interfaces = .{"org_kde_kwin_fake_input"} }},
+    .dbus = .{
+        .{ .source = "mutter", .file = "data/dbus-interfaces/org.gnome.Mutter.RemoteDesktop.xml", .interface = "org.gnome.Mutter.RemoteDesktop.Session", .members = .{"SetKeymap"} },
+        .{ .source = "gnome_shell", .file = "data/dbus-interfaces/org.gnome.ScreenSaver.xml", .interface = "org.gnome.ScreenSaver", .members = .{ "GetActive", "SetActive" } },
+    },
+}
