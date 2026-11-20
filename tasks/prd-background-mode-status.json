@@ -49,10 +49,10 @@
     {
       "id": "EP-017",
       "title": "Sélection native des listes Win32",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "stories_total": 1,
-      "stories_done": 0
+      "stories_done": 1
     },
     {
       "id": "EP-018",
@@ -352,13 +352,13 @@
       "id": "US-064",
       "title": "Sélection par messages natifs",
       "epic": "EP-017",
-      "status": "TODO",
+      "status": "DONE",
       "priority": "P1",
       "size": "M",
       "blocked_by": ["US-053", "US-055"],
-      "started_at": null,
-      "completed_at": null,
-      "reviewed_at": null
+      "started_at": "2026-11-20",
+      "completed_at": "2026-11-20",
+      "reviewed_at": "2026-11-20"
     },
     {
       "id": "US-065",
